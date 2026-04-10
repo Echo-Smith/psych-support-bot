@@ -121,7 +121,7 @@ def get_exercise_by_tag(tag: str) -> dict | None:
     return all_exercises.get(tag)
 
 
-def list_all_exercises() -> dict[str, dict]:
+def list_all_exercises() -> dict[str, list[str]]:
     return {
         "cbt": list(CBT_EXERCISES.keys()),
         "act": list(ACT_EXERCISES.keys()),

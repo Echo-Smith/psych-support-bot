@@ -1,3 +1,4 @@
+from collections.abc import Sequence
 from datetime import date, timedelta
 
 from sqlalchemy.orm import Session
@@ -25,7 +26,7 @@ class TrendResult:
         self.days_analyzed = days_analyzed
 
 
-def _compute_trend(values: list[float]) -> str:
+def _compute_trend(values: Sequence[int | float]) -> str:
     if len(values) < 2:
         return "insufficient_data"
     first_half = values[: len(values) // 2]
