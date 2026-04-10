@@ -2,7 +2,7 @@
 
 ## Current Status
 
-- Project state: Initial backend foundation in progress
+- Project state: MVP backend foundation actively implemented
 - Delivery focus: AI framework foundation and execution-ready roadmap
 - Recommended stack locked for first implementation:
   - `FastAPI`
@@ -17,10 +17,12 @@
   - Git repository initialized
   - Python project initialized with `uv`
   - FastAPI app scaffolded
-  - LangGraph conversation workflow scaffolded
-  - Safety-first risk routing scaffolded
+  - LangGraph conversation workflow implemented with risk-first routing
   - Base config, DB, Redis, Celery, and tracing modules scaffolded
-  - Basic integration tests added
+  - SQLite-backed persistence added for local MVP development
+  - Assessment, check-in, plan, and weekly report APIs added
+  - Alembic migration baseline added
+  - Basic integration and evaluation tests added
 
 ## Milestones
 
@@ -28,11 +30,11 @@
 | --- | --- | --- | --- |
 | M0 | Confirm scope and architecture | Done | Project plan and progress tracker |
 | M1 | Initialize backend project skeleton | Done | Running FastAPI app and base folders |
-| M2 | Implement AI workflow skeleton | In progress | LangGraph flow with risk and routing nodes |
-| M3 | Implement persistence layer | In progress | DB models, migrations, repository layer |
-| M4 | Implement core domain APIs | Not started | Conversation, assessment, check-in APIs |
-| M5 | Implement safety and observability | Not started | Risk logs, tracing, evaluation harness |
-| M6 | MVP integration complete | Not started | End-to-end support flow |
+| M2 | Implement AI workflow skeleton | Done | LangGraph flow with risk and routing nodes |
+| M3 | Implement persistence layer | Done | DB models, migrations, repository layer |
+| M4 | Implement core domain APIs | Done | Conversation, assessment, check-in APIs |
+| M5 | Implement safety and observability | In progress | Risk logs, tracing, evaluation harness |
+| M6 | MVP integration complete | In progress | End-to-end support flow |
 
 ## Workstreams
 
@@ -61,29 +63,29 @@
 
 | Task | Priority | Status | Notes |
 | --- | --- | --- | --- |
-| Design core DB schema | High | In progress | users, sessions, messages models added |
-| Add migration tool | High | Not started | Prefer Alembic |
-| Implement repositories/services | Medium | In progress | Initial conversation service added |
-| Add pgvector support | Medium | Not started | Memory retrieval and future RAG |
+| Design core DB schema | High | Done | users, sessions, messages, assessments, checkins, risks, reports |
+| Add migration tool | High | Done | Alembic baseline added |
+| Implement repositories/services | Medium | Done | Conversation and domain repositories added |
+| Add pgvector support | Medium | Not started | Keep for future memory retrieval/RAG phase |
 
 ### 4. Safety and Evaluation
 
 | Task | Priority | Status | Notes |
 | --- | --- | --- | --- |
-| Define risk levels and contracts | High | In progress | Low/elevated/high/critical scaffold added |
-| Create risk regression dataset | High | Not started | Crisis and edge cases |
-| Build evaluation runner | High | Not started | Offline prompt/workflow tests |
-| Add Langfuse tracing | Medium | In progress | Config helper added |
+| Define risk levels and contracts | High | Done | Low/elevated/high/critical scaffold added |
+| Create risk regression dataset | High | In progress | Rule-based safety tests added |
+| Build evaluation runner | High | In progress | Safety regression tests added via pytest |
+| Add Langfuse tracing | Medium | In progress | Config helper added; full tracing still pending |
 | Create release safety checklist | High | Not started | Required before launch |
 
 ### 5. Product Logic
 
 | Task | Priority | Status | Notes |
 | --- | --- | --- | --- |
-| Implement PHQ-9, GAD-7, ISI schemas | High | In progress | Shared assessment schema scaffold added |
-| Implement daily check-in model | Medium | In progress | Pydantic schema added |
-| Implement intervention plan templates | Medium | In progress | Starter templates added |
-| Implement weekly report generator | Medium | Not started | Summary and trends |
+| Implement PHQ-9, GAD-7, ISI schemas | High | Done | Assessment schema and severity service added |
+| Implement daily check-in model | Medium | Done | API and persistence added |
+| Implement intervention plan templates | Medium | Done | Starter plan service added |
+| Implement weekly report generator | Medium | Done | Summary generation and report endpoint added |
 
 ## Suggested Execution Order
 
@@ -115,10 +117,13 @@
 - [x] Add base settings module
 - [x] Add AI schema contracts
 - [x] Add first workflow graph
-- [ ] Add Alembic migration setup
-- [ ] Replace scaffolded response generator with LLM-backed adapter
-- [ ] Add persistent session/message storage
-- [ ] Add risk evaluation dataset and runner
+- [x] Add Alembic migration setup
+- [x] Replace scaffolded response generator with LLM-backed adapter
+- [x] Add persistent session/message storage
+- [x] Add risk evaluation dataset and runner
+- [ ] Add richer memory retrieval
+- [ ] Add full Langfuse trace instrumentation on request lifecycle
+- [ ] Add vector memory and knowledge retrieval layer
 
 ## Progress Log
 
@@ -135,3 +140,8 @@
 - Added settings, DB, cache, queue, and tracing scaffolds
 - Added initial assessment, check-in, and plan schema files
 - Added basic integration tests
+- Added SQLite-backed persistence and repositories
+- Added assessment, check-in, plan, and weekly report APIs
+- Added Alembic baseline migration files
+- Added LLM-backed response generation with safe fallback
+- Added API and risk evaluation tests

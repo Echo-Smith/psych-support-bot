@@ -34,3 +34,8 @@ class ConversationResponse(BaseModel):
     risk: RiskResult
     reply: GeneratedReply
     summary: str
+
+
+class WeeklyReportResponse(BaseModel):
+    user_id: str
+    summary: str

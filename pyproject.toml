@@ -24,6 +24,12 @@ dependencies = [
     "uvicorn[standard]>=0.44.0",
 ]
 
+[dependency-groups]
+dev = [
+    "httpx>=0.28.1",
+    "pytest>=9.0.3",
+]
+
 [project.scripts]
 psych-support-bot = "psych_support_bot.main:main"
 
@@ -33,3 +39,6 @@ build-backend = "uv_build"
 
 [tool.uv]
 package = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

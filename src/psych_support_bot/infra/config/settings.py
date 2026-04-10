@@ -13,9 +13,7 @@ class Settings(BaseSettings):
     environment: str = "development"
     openai_api_key: str = Field(default="", alias="OPENAI_API_KEY")
     openai_model: str = "gpt-4.1-mini"
-    database_url: str = (
-        "postgresql+psycopg://postgres:postgres@localhost:5432/psych_support_bot"
-    )
+    database_url: str = "sqlite:///./psych_support_bot.db"
     redis_url: str = "redis://localhost:6379/0"
     langfuse_public_key: str = Field(default="", alias="LANGFUSE_PUBLIC_KEY")
     langfuse_secret_key: str = Field(default="", alias="LANGFUSE_SECRET_KEY")
@@ -23,6 +21,7 @@ class Settings(BaseSettings):
         default="https://cloud.langfuse.com", alias="LANGFUSE_HOST"
     )
     default_conversation_mode: str = "support"
+    app_debug: bool = False
 
 
 @lru_cache(maxsize=1)

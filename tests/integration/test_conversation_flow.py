@@ -1,13 +1,20 @@
 from psych_support_bot.ai.schemas.messages import ConversationRequest
+from psych_support_bot.infra.db.init_db import init_db
+from psych_support_bot.infra.db.session import SessionLocal
 from psych_support_bot.services.conversation import conversation_service
 
 
+init_db()
+
+
 def test_support_flow_returns_response() -> None:
-    result = conversation_service.respond(
-        ConversationRequest(
-            user_id="test-user", message="I feel stressed and want support"
+    with SessionLocal() as session:
+        result = conversation_service.respond(
+            ConversationRequest(
+                user_id="test-user", message="I feel stressed and want support"
+            ),
+            session=session,
         )
-    )
 
     assert result.mode in {
         "support",
@@ -21,11 +28,13 @@ def test_support_flow_returns_response() -> None:
 
 
 def test_crisis_flow_triggers_high_risk() -> None:
-    result = conversation_service.respond(
-        ConversationRequest(
-            user_id="test-user", message="I want to die and hurt myself"
+    with SessionLocal() as session:
+        result = conversation_service.respond(
+            ConversationRequest(
+                user_id="test-user", message="I want to die and hurt myself"
+            ),
+            session=session,
         )
-    )
 
     assert result.mode == "crisis"
     assert result.risk.needs_crisis_mode is True
