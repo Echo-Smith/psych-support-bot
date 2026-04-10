@@ -17,6 +17,20 @@ class User(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
 
 
+class UserProfile(Base):
+    __tablename__ = "user_profiles"
+
+    user_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    display_name: Mapped[str] = mapped_column(String(128), default="")
+    primary_concerns: Mapped[str] = mapped_column(Text, default="")
+    goals: Mapped[str] = mapped_column(Text, default="")
+    support_preferences: Mapped[str] = mapped_column(Text, default="")
+    risk_notes: Mapped[str] = mapped_column(Text, default="")
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, default=utcnow, onupdate=utcnow
+    )
+
+
 class ConversationSession(Base):
     __tablename__ = "sessions"
 

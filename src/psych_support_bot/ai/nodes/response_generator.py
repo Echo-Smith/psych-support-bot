@@ -1,15 +1,13 @@
 from psych_support_bot.ai.prompts.templates import build_system_guidance
 from psych_support_bot.ai.schemas.messages import GeneratedReply
 from psych_support_bot.ai.schemas.state import GraphState
+from psych_support_bot.ai.safety.crisis import build_crisis_reply
 from psych_support_bot.infra.llm.generation import generate_clinically_bounded_reply
 
 
 def generate_response(state: GraphState) -> GraphState:
     if state["mode"] == "crisis":
-        reply_text = (
-            "I am concerned about your safety. If there is any immediate danger, contact a trusted person, "
-            "local emergency services, or go to the nearest hospital now. If you can, do not stay alone."
-        )
+        reply_text = build_crisis_reply(state["risk_result"])
     else:
         guidance = build_system_guidance(
             mode=state["mode"], risk_level=state["risk_result"].risk_level

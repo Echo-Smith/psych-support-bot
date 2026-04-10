@@ -15,6 +15,7 @@ from psych_support_bot.infra.db.models import (
     Message,
     RiskEvent,
     User,
+    UserProfile,
     WeeklyReportRecord,
 )
 
@@ -26,6 +27,35 @@ def ensure_user(session: Session, user_id: str) -> User:
         session.add(user)
         session.flush()
     return user
+
+
+def upsert_user_profile(
+    session: Session,
+    user_id: str,
+    display_name: str,
+    primary_concerns: str,
+    goals: str,
+    support_preferences: str,
+    risk_notes: str,
+) -> UserProfile:
+    ensure_user(session, user_id)
+    profile = session.get(UserProfile, user_id)
+    if profile is None:
+        profile = UserProfile(user_id=user_id)
+        session.add(profile)
+
+    profile.display_name = display_name
+    profile.primary_concerns = primary_concerns
+    profile.goals = goals
+    profile.support_preferences = support_preferences
+    profile.risk_notes = risk_notes
+    session.commit()
+    session.refresh(profile)
+    return profile
+
+
+def get_user_profile(session: Session, user_id: str) -> UserProfile | None:
+    return session.get(UserProfile, user_id)
 
 
 def get_latest_summary(session: Session, user_id: str) -> str:
@@ -112,6 +142,7 @@ def build_memory_snapshot(session: Session, user_id: str) -> str:
     recent_messages = get_recent_messages(session, user_id)
     assessment_summary = get_recent_assessment_summary(session, user_id)
     recent_checkins = get_recent_checkins(session, user_id, limit=3)
+    profile = get_user_profile(session, user_id)
 
     checkin_summary = ""
     if recent_checkins:
@@ -128,9 +159,22 @@ def build_memory_snapshot(session: Session, user_id: str) -> str:
     recent_excerpt = (
         " | ".join(reversed(recent_messages[-3:])) if recent_messages else ""
     )
+    profile_summary = ""
+    if profile is not None:
+        profile_summary = " || ".join(
+            piece
+            for piece in [
+                profile.primary_concerns,
+                profile.goals,
+                profile.support_preferences,
+                profile.risk_notes,
+            ]
+            if piece
+        )
     pieces = [
         piece
         for piece in [
+            profile_summary,
             latest_summary,
             assessment_summary,
             checkin_summary,

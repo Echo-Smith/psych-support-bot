@@ -9,6 +9,7 @@ from psych_support_bot.api.routes.health import router as health_router
 from psych_support_bot.api.routes.plans import router as plans_router
 from psych_support_bot.api.routes.reports import router as reports_router
 from psych_support_bot.api.routes.system import router as system_router
+from psych_support_bot.api.routes.users import router as users_router
 from psych_support_bot.infra.db.init_db import init_db
 
 
@@ -33,6 +34,7 @@ def create_app() -> FastAPI:
     app.include_router(checkins_router)
     app.include_router(plans_router)
     app.include_router(reports_router)
+    app.include_router(users_router)
     return app
 
 
