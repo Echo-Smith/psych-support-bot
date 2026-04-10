@@ -2,9 +2,11 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 
+from psych_support_bot.api.routes.analytics import router as analytics_router
 from psych_support_bot.api.routes.assessments import router as assessments_router
 from psych_support_bot.api.routes.checkins import router as checkins_router
 from psych_support_bot.api.routes.conversation import router as conversation_router
+from psych_support_bot.api.routes.exercises import router as exercises_router
 from psych_support_bot.api.routes.health import router as health_router
 from psych_support_bot.api.routes.plans import router as plans_router
 from psych_support_bot.api.routes.reports import router as reports_router
@@ -35,6 +37,8 @@ def create_app() -> FastAPI:
     app.include_router(plans_router)
     app.include_router(reports_router)
     app.include_router(users_router)
+    app.include_router(analytics_router)
+    app.include_router(exercises_router)
     return app
 
 

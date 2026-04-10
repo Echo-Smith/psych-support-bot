@@ -1,6 +1,4 @@
 from psych_support_bot.infra.queue.celery_app import celery_app
+from psych_support_bot.workers.report_tasks import generate_weekly_report, ping
 
-
-@celery_app.task(name="psych_support_bot.ping")
-def ping() -> str:
-    return "pong"
+celery_app.autodiscover_tasks(["psych_support_bot.workers"])

@@ -1,5 +1,5 @@
 from uuid import uuid4
-from typing import Any, cast
+from typing import Any, Literal, cast
 
 from sqlalchemy.orm import Session
 
@@ -48,10 +48,11 @@ class ConversationService:
             ),
             "session_summary": "",
         }
-        result, _trace = timed_call(
+        raw_result, _trace = timed_call(
             "conversation_graph.invoke",
-            lambda: cast(GraphState, conversation_graph.invoke(cast(Any, state))),
+            lambda: cast(Any, conversation_graph.invoke(cast(Any, state))),
         )
+        result: GraphState = cast(GraphState, raw_result)
         response = ConversationResponse(
             session_id=session_id,
             mode=result["mode"],

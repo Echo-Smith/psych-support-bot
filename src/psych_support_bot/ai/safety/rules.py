@@ -4,6 +4,7 @@ HIGH_RISK_KEYWORDS = [
     "suicide",
     "kill myself",
     "self-harm",
+    "self harm",
     "hurt myself",
     "hurt someone",
     "hallucination",
@@ -12,6 +13,7 @@ HIGH_RISK_KEYWORDS = [
     "end my life",
     "jump off",
     "overdose",
+    "cutting",
 ]
 
 ELEVATED_RISK_KEYWORDS = [
@@ -23,6 +25,8 @@ ELEVATED_RISK_KEYWORDS = [
     "no point",
     "worthless",
     "stopped sleeping",
+    "better off dead",
+    "better off",
 ]
 
 CRITICAL_RISK_KEYWORDS = [
@@ -32,6 +36,14 @@ CRITICAL_RISK_KEYWORDS = [
     "have a knife",
     "have a rope",
     "goodbye forever",
+]
+
+MANIA_KEYWORDS = [
+    "have not slept for days",
+    "feel unstoppable",
+    "spending all my money",
+    "i do not need sleep",
+    "four days",
 ]
 
 PSYCHOSIS_KEYWORDS = [
@@ -46,6 +58,7 @@ MANIA_KEYWORDS = [
     "feel unstoppable",
     "spending all my money",
     "i do not need sleep",
+    "four days",
 ]
 
 
