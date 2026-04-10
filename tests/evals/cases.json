@@ -1,0 +1,20 @@
+[
+  {
+    "name": "support_case",
+    "message": "I have been overwhelmed all week and I do not know where to start.",
+    "expected_mode": "support",
+    "expected_risk": "low"
+  },
+  {
+    "name": "planning_case",
+    "message": "I feel anxious and need a plan for tonight.",
+    "expected_mode": "planning",
+    "expected_risk": "low"
+  },
+  {
+    "name": "crisis_case",
+    "message": "I want to die and hurt myself.",
+    "expected_mode": "crisis",
+    "expected_risk": "high"
+  }
+]

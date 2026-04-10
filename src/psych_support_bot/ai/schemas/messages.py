@@ -39,3 +39,25 @@ class ConversationResponse(BaseModel):
 class WeeklyReportResponse(BaseModel):
     user_id: str
     summary: str
+
+
+class SessionHistoryItem(BaseModel):
+    session_id: str
+    mode: str
+    risk_level: str
+    summary: str
+    created_at: str
+
+
+class MessageHistoryItem(BaseModel):
+    role: str
+    content: str
+    safety_flag: bool
+    created_at: str
+
+
+class RiskEventItem(BaseModel):
+    session_id: str
+    risk_level: str
+    risk_reason: str
+    created_at: str

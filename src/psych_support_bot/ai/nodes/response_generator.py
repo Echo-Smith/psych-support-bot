@@ -24,6 +24,7 @@ def generate_response(state: GraphState) -> GraphState:
                 mode=state["mode"],
                 risk_level=state["risk_result"].risk_level,
                 memory_summary=state.get("memory_summary", ""),
+                knowledge_context=state.get("knowledge_context", ""),
             )
         except Exception:
             reply_text = fallback_text

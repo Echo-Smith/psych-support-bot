@@ -12,6 +12,7 @@ class GraphState(TypedDict):
     session_id: str
     user_message: str
     memory_summary: str
+    knowledge_context: str
     mode: ConversationMode
     risk_result: RiskResult
     generated_reply: GeneratedReply

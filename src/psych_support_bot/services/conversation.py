@@ -12,9 +12,10 @@ from psych_support_bot.ai.schemas.messages import (
 )
 from psych_support_bot.ai.schemas.state import GraphState
 from psych_support_bot.infra.db.repositories import (
-    get_latest_summary,
+    build_memory_snapshot,
     save_conversation_result,
 )
+from psych_support_bot.infra.telemetry.tracing import timed_call
 
 
 class ConversationService:
@@ -24,7 +25,7 @@ class ConversationService:
         session: Session,
     ) -> ConversationResponse:
         session_id = payload.session_id or str(uuid4())
-        memory_summary = payload.memory_summary or get_latest_summary(
+        memory_summary = payload.memory_summary or build_memory_snapshot(
             session, payload.user_id
         )
         state: GraphState = {
@@ -32,6 +33,7 @@ class ConversationService:
             "session_id": session_id,
             "user_message": payload.message,
             "memory_summary": memory_summary,
+            "knowledge_context": "",
             "mode": "support",
             "risk_result": RiskResult(
                 risk_level="low",
@@ -46,7 +48,10 @@ class ConversationService:
             ),
             "session_summary": "",
         }
-        result = cast(GraphState, conversation_graph.invoke(cast(Any, state)))
+        result, _trace = timed_call(
+            "conversation_graph.invoke",
+            lambda: cast(GraphState, conversation_graph.invoke(cast(Any, state))),
+        )
         response = ConversationResponse(
             session_id=session_id,
             mode=result["mode"],

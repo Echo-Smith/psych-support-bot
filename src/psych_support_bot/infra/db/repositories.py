@@ -38,6 +38,109 @@ def get_latest_summary(session: Session, user_id: str) -> str:
     return session.execute(stmt).scalar_one_or_none() or ""
 
 
+def get_recent_messages(session: Session, user_id: str, limit: int = 6) -> list[str]:
+    session_ids_stmt = (
+        select(ConversationSession.id)
+        .where(ConversationSession.user_id == user_id)
+        .order_by(desc(ConversationSession.created_at))
+        .limit(3)
+    )
+    session_ids = list(session.execute(session_ids_stmt).scalars())
+    if not session_ids:
+        return []
+
+    stmt = (
+        select(Message.content)
+        .where(Message.session_id.in_(session_ids))
+        .order_by(desc(Message.created_at))
+        .limit(limit)
+    )
+    return list(session.execute(stmt).scalars())
+
+
+def get_user_sessions(
+    session: Session, user_id: str, limit: int = 20
+) -> list[ConversationSession]:
+    stmt = (
+        select(ConversationSession)
+        .where(ConversationSession.user_id == user_id)
+        .order_by(desc(ConversationSession.created_at))
+        .limit(limit)
+    )
+    return list(session.execute(stmt).scalars())
+
+
+def get_session_messages(session: Session, session_id: str) -> list[Message]:
+    stmt = (
+        select(Message)
+        .where(Message.session_id == session_id)
+        .order_by(Message.created_at)
+    )
+    return list(session.execute(stmt).scalars())
+
+
+def get_user_risk_events(
+    session: Session, user_id: str, limit: int = 20
+) -> list[RiskEvent]:
+    stmt = (
+        select(RiskEvent)
+        .where(RiskEvent.user_id == user_id)
+        .order_by(desc(RiskEvent.created_at))
+        .limit(limit)
+    )
+    return list(session.execute(stmt).scalars())
+
+
+def get_recent_assessment_summary(session: Session, user_id: str) -> str:
+    stmt = (
+        select(AssessmentRecord)
+        .where(AssessmentRecord.user_id == user_id)
+        .order_by(desc(AssessmentRecord.created_at))
+        .limit(3)
+    )
+    records = list(session.execute(stmt).scalars())
+    if not records:
+        return ""
+    return "; ".join(
+        f"{record.assessment_type}:{record.score}({record.severity_band})"
+        for record in records
+    )
+
+
+def build_memory_snapshot(session: Session, user_id: str) -> str:
+    latest_summary = get_latest_summary(session, user_id)
+    recent_messages = get_recent_messages(session, user_id)
+    assessment_summary = get_recent_assessment_summary(session, user_id)
+    recent_checkins = get_recent_checkins(session, user_id, limit=3)
+
+    checkin_summary = ""
+    if recent_checkins:
+        avg_mood = sum(item.mood_score for item in recent_checkins) / len(
+            recent_checkins
+        )
+        avg_anxiety = sum(item.anxiety_score for item in recent_checkins) / len(
+            recent_checkins
+        )
+        checkin_summary = (
+            f"recent check-ins mood={avg_mood:.1f}/10 anxiety={avg_anxiety:.1f}/10"
+        )
+
+    recent_excerpt = (
+        " | ".join(reversed(recent_messages[-3:])) if recent_messages else ""
+    )
+    pieces = [
+        piece
+        for piece in [
+            latest_summary,
+            assessment_summary,
+            checkin_summary,
+            recent_excerpt,
+        ]
+        if piece
+    ]
+    return " || ".join(pieces)
+
+
 def save_conversation_result(
     session: Session,
     response: ConversationResponse,
