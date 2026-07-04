@@ -18,6 +18,7 @@
   - Python project initialized with `uv`
   - FastAPI app scaffolded
   - LangGraph conversation workflow implemented with risk-first routing
+  - Multi-school consultation planner added for diagnosis/treatment-style turns
   - Base config, DB, Redis, Celery, and tracing modules scaffolded
   - SQLite-backed persistence added for local MVP development
   - Assessment, check-in, plan, and weekly report APIs added
@@ -54,6 +55,7 @@
 | Define graph state schema | High | Done | Shared LangGraph state object |
 | Build risk classifier node | High | Done | Safety-first gate |
 | Build intent router node | High | Done | support, assessment, intervention, planning, crisis |
+| Build multidisciplinary consultation planner | High | Done | CBT, psychodynamic, humanistic, ACT, DBT orchestration |
 | Build memory retrieval node | Medium | Done | Placeholder memory loading |
 | Build response generator node | High | Done | Initial scaffolded reply generation |
 | Build safety reviewer node | High | Done | Post-generation review hook |

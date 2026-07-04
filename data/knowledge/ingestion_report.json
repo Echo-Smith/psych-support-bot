@@ -1,0 +1,17 @@
+{
+  "fetched_sources": [
+    "medlineplus_insomnia",
+    "nimh_anxiety_disorders",
+    "nimh_depression",
+    "nimh_find_help",
+    "nimh_gad_brochure",
+    "nimh_ocd",
+    "nimh_panic_brochure",
+    "nimh_phobias_brochure",
+    "nimh_ptsd",
+    "nimh_social_anxiety_brochure",
+    "nimh_suicide_prevention"
+  ],
+  "chunk_count": 156,
+  "failures": []
+}

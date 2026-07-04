@@ -1,0 +1,21 @@
+services:
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile.server
+    container_name: psych-bot
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    environment:
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - OPENAI_BASE_URL=${OPENAI_BASE_URL}
+      - OPENAI_MODEL=${OPENAI_MODEL}
+      - DATABASE_URL=sqlite:///./data/psych_support_bot.db
+    volumes:
+      - bot-data:/app/data
+      - bot-logs:/app/logs
+
+volumes:
+  bot-data:
+  bot-logs:

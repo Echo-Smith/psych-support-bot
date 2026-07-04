@@ -14,3 +14,22 @@ dist/
 build/
 *.egg-info/
 *.db
+
+# Logs
+*.log
+logs/
+logsserver.log
+server.log
+server_err.log
+server_out.log
+
+# Archives & extracted copies
+*.tar.gz
+*.zip
+psychobot-ui-optimized-*/
+
+# Windows artifacts
+nul
+
+# Test reports
+test_report/

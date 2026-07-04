@@ -1,0 +1,110 @@
+[
+  {
+    "source_id": "nimh_anxiety_disorders",
+    "title": "Anxiety Disorders",
+    "publisher": "NIMH",
+    "url": "https://www.nimh.nih.gov/health/topics/anxiety-disorders",
+    "topics": ["anxiety"],
+    "modes": ["support", "assessment", "intervention", "planning"],
+    "content_type": "public_web"
+  },
+  {
+    "source_id": "nimh_depression",
+    "title": "Depression",
+    "publisher": "NIMH",
+    "url": "https://www.nimh.nih.gov/health/topics/depression",
+    "topics": ["depression"],
+    "modes": ["support", "assessment", "intervention", "planning"],
+    "content_type": "public_web"
+  },
+  {
+    "source_id": "nimh_ocd",
+    "title": "Obsessive-Compulsive Disorder (OCD)",
+    "publisher": "NIMH",
+    "url": "https://www.nimh.nih.gov/health/topics/obsessive-compulsive-disorder-ocd",
+    "topics": ["ocd"],
+    "modes": ["support", "assessment", "intervention", "planning"],
+    "content_type": "public_web"
+  },
+  {
+    "source_id": "medlineplus_insomnia",
+    "title": "Insomnia",
+    "publisher": "MedlinePlus",
+    "url": "https://medlineplus.gov/insomnia.html",
+    "topics": ["sleep"],
+    "modes": ["support", "assessment", "intervention", "planning"],
+    "content_type": "public_web"
+  },
+  {
+    "source_id": "nimh_suicide_prevention",
+    "title": "Suicide Prevention",
+    "publisher": "NIMH",
+    "url": "https://www.nimh.nih.gov/health/topics/suicide-prevention",
+    "topics": ["crisis"],
+    "modes": ["crisis"],
+    "content_type": "public_web"
+  },
+  {
+    "source_id": "nimh_ptsd",
+    "title": "Traumatic Events and PTSD",
+    "publisher": "NIMH",
+    "url": "https://www.nimh.nih.gov/health/topics/post-traumatic-stress-disorder-ptsd",
+    "topics": ["stress"],
+    "modes": ["support", "assessment"],
+    "content_type": "public_web"
+  },
+  {
+    "source_id": "nimh_gad_brochure",
+    "title": "Generalized Anxiety Disorder: When Worry Gets Out of Control",
+    "publisher": "NIMH",
+    "url": "https://www.nimh.nih.gov/health/publications/generalized-anxiety-disorder-gad",
+    "topics": ["anxiety"],
+    "modes": ["assessment", "intervention"],
+    "content_type": "public_web"
+  },
+  {
+    "source_id": "nimh_panic_brochure",
+    "title": "Panic Disorder: When Fear Overwhelms",
+    "publisher": "NIMH",
+    "url": "https://www.nimh.nih.gov/health/publications/panic-disorder-when-fear-overwhelms",
+    "topics": ["panic"],
+    "modes": ["assessment", "intervention"],
+    "content_type": "public_web"
+  },
+  {
+    "source_id": "nimh_social_anxiety_brochure",
+    "title": "Social Anxiety Disorder: More Than Just Shyness",
+    "publisher": "NIMH",
+    "url": "https://www.nimh.nih.gov/health/publications/social-anxiety-disorder-more-than-just-shyness",
+    "topics": ["social_anxiety"],
+    "modes": ["assessment", "intervention"],
+    "content_type": "public_web"
+  },
+  {
+    "source_id": "nimh_phobias_brochure",
+    "title": "Phobias and Phobia-Related Disorders",
+    "publisher": "NIMH",
+    "url": "https://www.nimh.nih.gov/health/publications/phobias-and-phobia-related-disorders",
+    "topics": ["anxiety"],
+    "modes": ["assessment", "intervention"],
+    "content_type": "public_web"
+  },
+  {
+    "source_id": "nimh_find_help",
+    "title": "Help for Mental Illnesses",
+    "publisher": "NIMH",
+    "url": "https://www.nimh.nih.gov/health/find-help",
+    "topics": ["crisis", "support"],
+    "modes": ["support", "crisis", "planning"],
+    "content_type": "public_web"
+  },
+  {
+    "source_id": "findtreatment_locator",
+    "title": "FindTreatment.gov",
+    "publisher": "SAMHSA",
+    "url": "https://findtreatment.gov/",
+    "topics": ["support"],
+    "modes": ["support", "crisis", "planning"],
+    "content_type": "public_web"
+  }
+]

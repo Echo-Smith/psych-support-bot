@@ -1,5 +1,6 @@
 from langgraph.graph import END, START, StateGraph
 
+from psych_support_bot.ai.nodes.consultation_planner import plan_consultation
 from psych_support_bot.ai.nodes.intent_router import route_intent
 from psych_support_bot.ai.nodes.knowledge import load_knowledge_context
 from psych_support_bot.ai.nodes.memory import load_memory_context
@@ -18,6 +19,7 @@ def build_conversation_graph():
     graph = StateGraph(GraphState)
     graph.add_node("risk_classifier", classify_risk)
     graph.add_node("intent_router", route_intent)
+    graph.add_node("consultation_planner", plan_consultation)
     graph.add_node("memory_loader", load_memory_context)
     graph.add_node("knowledge_loader", load_knowledge_context)
     graph.add_node("response_generator", generate_response)
@@ -28,9 +30,13 @@ def build_conversation_graph():
     graph.add_conditional_edges(
         "risk_classifier",
         _route_after_risk,
-        {"crisis": "response_generator", "normal": "intent_router"},
+        {
+            "crisis": "intent_router",
+            "normal": "intent_router",
+        },
     )
-    graph.add_edge("intent_router", "memory_loader")
+    graph.add_edge("intent_router", "consultation_planner")
+    graph.add_edge("consultation_planner", "memory_loader")
     graph.add_edge("memory_loader", "knowledge_loader")
     graph.add_edge("knowledge_loader", "response_generator")
     graph.add_edge("response_generator", "safety_reviewer")

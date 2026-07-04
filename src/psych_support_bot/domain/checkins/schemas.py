@@ -6,4 +6,4 @@ class DailyCheckin(BaseModel):
     anxiety_score: int = Field(..., ge=0, le=10)
     sleep_hours: float = Field(..., ge=0, le=24)
     energy_score: int = Field(..., ge=0, le=10)
-    note: str | None = None
+    note: str | None = Field(default=None, max_length=500)

@@ -61,7 +61,28 @@ class AssessmentRecord(Base):
     assessment_type: Mapped[str] = mapped_column(String(32), index=True)
     score: Mapped[int] = mapped_column(Integer)
     severity_band: Mapped[str] = mapped_column(String(32))
+    plain_meaning: Mapped[str] = mapped_column(Text, default="")
+    functional_impact: Mapped[str] = mapped_column(Text, default="")
+    care_consideration: Mapped[str] = mapped_column(Text, default="")
+    disclaimer: Mapped[str] = mapped_column(Text, default="")
+    needs_safety_followup: Mapped[bool] = mapped_column(Boolean, default=False)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+
+class QuestionnaireSessionRecord(Base):
+    __tablename__ = "questionnaire_sessions"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    user_id: Mapped[str] = mapped_column(String(64), index=True)
+    assessment_type: Mapped[str] = mapped_column(String(32), index=True)
+    answers_json: Mapped[str] = mapped_column(Text, default="[]")
+    status: Mapped[str] = mapped_column(String(32), default="in_progress")
+    current_index: Mapped[int] = mapped_column(Integer, default=0)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, default=utcnow, onupdate=utcnow
+    )
 
 
 class CheckinRecord(Base):

@@ -1,3 +1,11 @@
+from collections.abc import Mapping
+from dataclasses import asdict, is_dataclass
+from typing import Any
+
+from psych_support_bot.ai.knowledge.act import ACT_EXERCISES as KNOWLEDGE_ACT_EXERCISES
+from psych_support_bot.ai.knowledge.cbt import CBT_EXERCISES as KNOWLEDGE_CBT_EXERCISES
+from psych_support_bot.ai.knowledge.dbt import DBT_EXERCISES as KNOWLEDGE_DBT_EXERCISES
+
 CBT_EXERCISES = {
     "thought_record": {
         "name": "CBT Thought Record",
@@ -110,22 +118,81 @@ PANIC_STABILIZATION = {
 }
 
 
-def get_exercise_by_tag(tag: str) -> dict | None:
+def _normalize_exercise(exercise: Any) -> dict[str, Any]:
+    if is_dataclass(exercise):
+        normalized = asdict(exercise)
+        normalized.setdefault(
+            "output_format",
+            "Guide one step at a time and pause for the user's response before continuing.",
+        )
+        return normalized
+    if isinstance(exercise, Mapping):
+        return dict(exercise)
+    raise TypeError("Unsupported exercise format")
+
+
+def _knowledge_exercises() -> dict[str, dict[str, Any]]:
+    return {
+        **{
+            f"cbt_{key}": _normalize_exercise(value)
+            for key, value in KNOWLEDGE_CBT_EXERCISES.items()
+        },
+        **{
+            f"act_{key}": _normalize_exercise(value)
+            for key, value in KNOWLEDGE_ACT_EXERCISES.items()
+        },
+        **{
+            f"dbt_{key}": _normalize_exercise(value)
+            for key, value in KNOWLEDGE_DBT_EXERCISES.items()
+        },
+    }
+
+
+def get_exercise_by_tag(tag: str) -> dict[str, Any] | None:
     all_exercises = {
         **{f"cbt_{k}": v for k, v in CBT_EXERCISES.items()},
         **{f"act_{k}": v for k, v in ACT_EXERCISES.items()},
         **{f"dbt_{k}": v for k, v in DBT_EXERCISES.items()},
         **{f"sleep_{k}": v for k, v in SLEEP_HYGIENE.items()},
         **{f"panic_{k}": v for k, v in PANIC_STABILIZATION.items()},
+        **_knowledge_exercises(),
     }
     return all_exercises.get(tag)
 
 
 def list_all_exercises() -> dict[str, list[str]]:
+    knowledge = _knowledge_exercises()
     return {
-        "cbt": list(CBT_EXERCISES.keys()),
-        "act": list(ACT_EXERCISES.keys()),
-        "dbt": list(DBT_EXERCISES.keys()),
+        "cbt": sorted(
+            {
+                *(CBT_EXERCISES.keys()),
+                *(
+                    key.removeprefix("cbt_")
+                    for key in knowledge
+                    if key.startswith("cbt_")
+                ),
+            }
+        ),
+        "act": sorted(
+            {
+                *(ACT_EXERCISES.keys()),
+                *(
+                    key.removeprefix("act_")
+                    for key in knowledge
+                    if key.startswith("act_")
+                ),
+            }
+        ),
+        "dbt": sorted(
+            {
+                *(DBT_EXERCISES.keys()),
+                *(
+                    key.removeprefix("dbt_")
+                    for key in knowledge
+                    if key.startswith("dbt_")
+                ),
+            }
+        ),
         "sleep": list(SLEEP_HYGIENE.keys()),
         "panic": list(PANIC_STABILIZATION.keys()),
     }

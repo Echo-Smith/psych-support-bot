@@ -17,3 +17,13 @@ class GraphState(TypedDict):
     risk_result: RiskResult
     generated_reply: GeneratedReply
     session_summary: str
+    topics: list[str]
+    fallback_used: bool
+    consultation_required: bool
+    consultation_agents: list[str]
+    consultation_notes: str
+    consultation_opinions: list[dict[str, str]]
+    interview_stage: str
+    question_strategy: str
+    challenge_allowed: bool
+    loop_hint: str

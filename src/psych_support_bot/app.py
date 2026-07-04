@@ -1,6 +1,10 @@
 from contextlib import asynccontextmanager
+from pathlib import Path
 
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import HTMLResponse
+from fastapi.staticfiles import StaticFiles
 
 from psych_support_bot.api.routes.analytics import router as analytics_router
 from psych_support_bot.api.routes.assessments import router as assessments_router
@@ -21,12 +25,24 @@ async def lifespan(_: FastAPI):
     yield
 
 
+STATIC_DIR = Path(__file__).parent / "static"
+INDEX_FILE = STATIC_DIR / "index.html"
+
+
 def create_app() -> FastAPI:
     app = FastAPI(
         title="AI Psychological Support Bot API",
         version="0.1.0",
         description="Safety-first backend for a workflow-driven psychological support bot.",
         lifespan=lifespan,
+    )
+
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=["*"],
+        allow_credentials=True,
+        allow_methods=["*"],
+        allow_headers=["*"],
     )
 
     app.include_router(health_router)
@@ -39,6 +55,19 @@ def create_app() -> FastAPI:
     app.include_router(users_router)
     app.include_router(analytics_router)
     app.include_router(exercises_router)
+
+    @app.get("/")
+    async def serve_index():
+        return HTMLResponse(
+            INDEX_FILE.read_text(encoding="utf-8"),
+            headers={
+                "Cache-Control": "no-store, no-cache, must-revalidate, max-age=0",
+                "Pragma": "no-cache",
+                "Expires": "0",
+            },
+        )
+
+    app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
     return app
 
 

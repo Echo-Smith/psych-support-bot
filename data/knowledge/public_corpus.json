@@ -1,0 +1,134 @@
+[
+  {
+    "entry_id": "public:nimh_anxiety_disorders:overview",
+    "title": "Anxiety Disorders Overview",
+    "source_id": "nimh_anxiety_disorders",
+    "publisher": "NIMH",
+    "url": "https://www.nimh.nih.gov/health/topics/anxiety-disorders",
+    "topics": ["anxiety"],
+    "modes": ["support", "assessment", "intervention", "planning"],
+    "keywords": ["anxiety", "worry", "fear", "panic", "social anxiety", "phobia"],
+    "content": "NIMH describes anxiety as a normal part of life that becomes disordered when fear or worry do not go away, occur across many situations, and worsen over time. It highlights generalized anxiety disorder, panic disorder, social anxiety disorder, and phobia-related disorders as major types."
+  },
+  {
+    "entry_id": "public:nimh_anxiety_disorders:functional_impact",
+    "title": "Anxiety Functional Impact and Treatment Framing",
+    "source_id": "nimh_anxiety_disorders",
+    "publisher": "NIMH",
+    "url": "https://www.nimh.nih.gov/health/topics/anxiety-disorders",
+    "topics": ["anxiety"],
+    "modes": ["support", "assessment", "planning"],
+    "keywords": ["anxiety", "school", "work", "relationships", "avoidance"],
+    "content": "NIMH emphasizes that anxiety disorders can interfere with school, work, relationships, and basic daily functioning. In severe cases, people may avoid social contact or refuse to leave home. This supports assessing severity by impact, not just by subjective distress."
+  },
+  {
+    "entry_id": "public:nimh_depression:overview",
+    "title": "Depression Is More Than Sadness",
+    "source_id": "nimh_depression",
+    "publisher": "NIMH",
+    "url": "https://www.nimh.nih.gov/health/topics/depression",
+    "topics": ["depression"],
+    "modes": ["support", "assessment", "intervention", "planning"],
+    "keywords": ["depression", "sad", "low", "sleeping", "eating", "working"],
+    "content": "NIMH distinguishes depression from ordinary sadness by noting that it causes severe symptoms affecting feelings, thinking, sleeping, eating, and working. It frames depression as an illness influenced by genetic, biological, environmental, and psychological factors."
+  },
+  {
+    "entry_id": "public:nimh_depression:severity_and_risk",
+    "title": "Depression Severity and Suicide Risk",
+    "source_id": "nimh_depression",
+    "publisher": "NIMH",
+    "url": "https://www.nimh.nih.gov/health/topics/depression",
+    "topics": ["depression", "crisis"],
+    "modes": ["assessment", "crisis", "support"],
+    "keywords": ["depression", "suicidal", "suicide", "risk", "severe"],
+    "content": "NIMH states that depression ranges from mild to severe, can disrupt everyday functioning, and is a risk factor for suicidal thoughts and behaviors. This supports routine suicide-risk checking whenever depressive hopelessness or severe impairment appears."
+  },
+  {
+    "entry_id": "public:nimh_ocd:overview",
+    "title": "OCD Involves Obsessions and Compulsions",
+    "source_id": "nimh_ocd",
+    "publisher": "NIMH",
+    "url": "https://www.nimh.nih.gov/health/topics/obsessive-compulsive-disorder-ocd",
+    "topics": ["ocd"],
+    "modes": ["support", "assessment", "intervention"],
+    "keywords": ["ocd", "obsession", "compulsion", "repetitive", "intrusive thoughts"],
+    "content": "NIMH defines OCD as involving uncontrollable recurring thoughts, repetitive excessive behaviors, or both. Symptoms usually begin between late childhood and young adulthood. The framing is useful for distinguishing intrusive thoughts from ordinary worry."
+  },
+  {
+    "entry_id": "public:nimh_ocd:impairment_and_comorbidity",
+    "title": "OCD Time Burden and Comorbidity",
+    "source_id": "nimh_ocd",
+    "publisher": "NIMH",
+    "url": "https://www.nimh.nih.gov/health/topics/obsessive-compulsive-disorder-ocd",
+    "topics": ["ocd", "anxiety", "depression"],
+    "modes": ["assessment", "planning"],
+    "keywords": ["ocd", "time-consuming", "distress", "anxiety disorder", "mood disorder"],
+    "content": "NIMH notes that OCD symptoms are often time-consuming and can cause significant distress or interfere with daily life. It is common for people with OCD to also have mood or anxiety disorders, which means assessment should look beyond compulsions alone."
+  },
+  {
+    "entry_id": "public:medlineplus_insomnia:definition",
+    "title": "Insomnia Definition and Core Symptoms",
+    "source_id": "medlineplus_insomnia",
+    "publisher": "MedlinePlus",
+    "url": "https://medlineplus.gov/insomnia.html",
+    "topics": ["sleep"],
+    "modes": ["support", "assessment", "intervention", "planning"],
+    "keywords": ["insomnia", "sleep", "fall asleep", "stay asleep", "wake up early"],
+    "content": "MedlinePlus defines insomnia as difficulty falling asleep, staying asleep, or both, leading to too little or poor-quality sleep and not feeling refreshed on waking. This gives a concrete symptom anchor for sleep-related assessment."
+  },
+  {
+    "entry_id": "public:medlineplus_insomnia:acute_vs_chronic",
+    "title": "Acute vs Chronic Insomnia",
+    "source_id": "medlineplus_insomnia",
+    "publisher": "MedlinePlus",
+    "url": "https://medlineplus.gov/insomnia.html",
+    "topics": ["sleep", "stress"],
+    "modes": ["assessment", "planning"],
+    "keywords": ["acute insomnia", "chronic insomnia", "stress", "month", "caffeine"],
+    "content": "MedlinePlus distinguishes acute insomnia, which often follows stress or a traumatic event and lasts days to weeks, from chronic insomnia lasting a month or longer. Chronic insomnia is often secondary to other medical, emotional, medication, or substance-related causes."
+  },
+  {
+    "entry_id": "public:medlineplus_insomnia:treatment",
+    "title": "Insomnia Treatment Basics",
+    "source_id": "medlineplus_insomnia",
+    "publisher": "MedlinePlus",
+    "url": "https://medlineplus.gov/insomnia.html",
+    "topics": ["sleep"],
+    "modes": ["intervention", "planning"],
+    "keywords": ["cbt", "sleep habits", "insomnia treatment", "counseling", "medicines"],
+    "content": "MedlinePlus lists good sleep habits, cognitive-behavioral therapy, and in some cases medication as treatments for insomnia. It also emphasizes treating the underlying problem when insomnia is secondary to another condition."
+  },
+  {
+    "entry_id": "public:nimh_anxiety_disorders:help_resources",
+    "title": "Anxiety Help-Seeking and Crisis Resources",
+    "source_id": "nimh_anxiety_disorders",
+    "publisher": "NIMH",
+    "url": "https://www.nimh.nih.gov/health/topics/anxiety-disorders",
+    "topics": ["anxiety", "crisis"],
+    "modes": ["support", "crisis"],
+    "keywords": ["988", "help", "support", "anxiety", "crisis"],
+    "content": "NIMH directs people to SAMHSA support and treatment locator resources and states that if someone is struggling or having thoughts of suicide they should call or text 988, or call 911 in life-threatening situations."
+  },
+  {
+    "entry_id": "public:nimh_depression:treatment_direction",
+    "title": "Depression Treatment Direction",
+    "source_id": "nimh_depression",
+    "publisher": "NIMH",
+    "url": "https://www.nimh.nih.gov/health/topics/depression",
+    "topics": ["depression"],
+    "modes": ["intervention", "planning"],
+    "keywords": ["depression", "therapy", "medication", "telehealth", "treatment resistant"],
+    "content": "NIMH highlights psychotherapy, medication, telehealth and online options, and brain stimulation approaches as treatment directions for depression, while noting the need to tailor treatment to the individual. This supports a non-one-size-fits-all care recommendation style."
+  },
+  {
+    "entry_id": "public:nimh_ocd:treatment_direction",
+    "title": "OCD Treatment and Quality of Life",
+    "source_id": "nimh_ocd",
+    "publisher": "NIMH",
+    "url": "https://www.nimh.nih.gov/health/topics/obsessive-compulsive-disorder-ocd",
+    "topics": ["ocd"],
+    "modes": ["intervention", "planning"],
+    "keywords": ["ocd", "psychotherapy", "medication", "brain stimulation", "treatment resistant"],
+    "content": "NIMH says there is no cure for OCD but available treatments can help people manage symptoms, function day to day, and improve quality of life. It points to psychotherapy, medication, and brain stimulation as major treatment directions, especially for treatment-resistant cases."
+  }
+]

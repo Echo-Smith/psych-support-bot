@@ -1,23 +1,36 @@
 from __future__ import annotations
 
 from datetime import date
+import json
+from uuid import uuid4
 
 from sqlalchemy import desc, select
 from sqlalchemy.orm import Session
 
 from psych_support_bot.ai.schemas.messages import ConversationResponse
-from psych_support_bot.domain.assessments.schemas import AssessmentScore
+from psych_support_bot.infra.db.base import Base
+from psych_support_bot.domain.assessments.schemas import (
+    AssessmentResult,
+    AssessmentScore,
+    AssessmentType,
+)
 from psych_support_bot.domain.checkins.schemas import DailyCheckin
 from psych_support_bot.infra.db.models import (
     AssessmentRecord,
     CheckinRecord,
     ConversationSession,
     Message,
+    QuestionnaireSessionRecord,
     RiskEvent,
     User,
     UserProfile,
     WeeklyReportRecord,
+    utcnow,
 )
+
+
+def _safe(text: str) -> str:
+    return text.replace(" || ", " ").replace(" | ", " ")
 
 
 def ensure_user(session: Session, user_id: str) -> User:
@@ -122,19 +135,25 @@ def get_user_risk_events(
 
 
 def get_recent_assessment_summary(session: Session, user_id: str) -> str:
-    stmt = (
-        select(AssessmentRecord)
-        .where(AssessmentRecord.user_id == user_id)
-        .order_by(desc(AssessmentRecord.created_at))
-        .limit(3)
-    )
-    records = list(session.execute(stmt).scalars())
+    records = get_user_assessments(session, user_id, limit=3)
     if not records:
         return ""
     return "; ".join(
         f"{record.assessment_type}:{record.score}({record.severity_band})"
         for record in records
     )
+
+
+def get_user_assessments(
+    session: Session, user_id: str, *, limit: int = 50
+) -> list[AssessmentRecord]:
+    stmt = (
+        select(AssessmentRecord)
+        .where(AssessmentRecord.user_id == user_id)
+        .order_by(desc(AssessmentRecord.created_at))
+        .limit(limit)
+    )
+    return list(session.execute(stmt).scalars())
 
 
 def build_memory_snapshot(session: Session, user_id: str) -> str:
@@ -157,12 +176,14 @@ def build_memory_snapshot(session: Session, user_id: str) -> str:
         )
 
     recent_excerpt = (
-        " | ".join(reversed(recent_messages[-3:])) if recent_messages else ""
+        " | ".join(_safe(msg) for msg in reversed(recent_messages[-3:]))
+        if recent_messages
+        else ""
     )
     profile_summary = ""
     if profile is not None:
         profile_summary = " || ".join(
-            piece
+            _safe(piece)
             for piece in [
                 profile.primary_concerns,
                 profile.goals,
@@ -239,10 +260,81 @@ def save_assessment(
         score=assessment.score,
         severity_band=assessment.severity_band,
     )
+    if isinstance(assessment, AssessmentResult) and assessment.interpretation:
+        interp = assessment.interpretation
+        record.plain_meaning = interp.plain_meaning
+        record.functional_impact = interp.functional_impact
+        record.care_consideration = interp.care_consideration
+        record.disclaimer = interp.disclaimer
+        record.needs_safety_followup = interp.needs_safety_followup
     session.add(record)
     session.commit()
     session.refresh(record)
     return record
+
+
+def create_questionnaire_session(
+    session: Session, user_id: str, assessment_type: AssessmentType
+) -> QuestionnaireSessionRecord:
+    existing = get_active_questionnaire_session(session, user_id)
+    if existing is not None and existing.assessment_type == assessment_type:
+        return existing
+    bind = session.get_bind()
+    Base.metadata.create_all(bind=bind)
+    ensure_user(session, user_id)
+    record = QuestionnaireSessionRecord(
+        id=str(uuid4()),
+        user_id=user_id,
+        assessment_type=assessment_type,
+        answers_json="[]",
+        status="in_progress",
+        current_index=0,
+    )
+    session.add(record)
+    session.commit()
+    session.refresh(record)
+    return record
+
+
+def get_questionnaire_session(
+    session: Session, session_id: str
+) -> QuestionnaireSessionRecord | None:
+    return session.get(QuestionnaireSessionRecord, session_id)
+
+
+def get_active_questionnaire_session(
+    session: Session, user_id: str
+) -> QuestionnaireSessionRecord | None:
+    stmt = (
+        select(QuestionnaireSessionRecord)
+        .where(QuestionnaireSessionRecord.user_id == user_id)
+        .where(QuestionnaireSessionRecord.status == "in_progress")
+        .order_by(desc(QuestionnaireSessionRecord.created_at))
+        .limit(1)
+    )
+    return session.execute(stmt).scalar_one_or_none()
+
+
+def append_questionnaire_answer(
+    session: Session, session_record: QuestionnaireSessionRecord, value: int
+) -> QuestionnaireSessionRecord:
+    answers = json.loads(session_record.answers_json or "[]")
+    answers.append(value)
+    session_record.answers_json = json.dumps(answers)
+    session_record.current_index = len(answers)
+    session.commit()
+    session.refresh(session_record)
+    return session_record
+
+
+def complete_questionnaire_session(
+    session: Session, session_record: QuestionnaireSessionRecord
+) -> QuestionnaireSessionRecord:
+    session_record.status = "completed"
+    session_record.completed_at = utcnow()
+    session.commit()
+    session.refresh(session_record)
+    return session_record
 
 
 def save_checkin(

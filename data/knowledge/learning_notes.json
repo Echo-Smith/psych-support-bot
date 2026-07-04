@@ -1,0 +1,231 @@
+[
+  {
+    "note_id": "learning:anxiety",
+    "title": "Active Learning Note: Anxiety",
+    "topics": [
+      "anxiety"
+    ],
+    "modes": [
+      "support",
+      "assessment",
+      "intervention",
+      "planning",
+      "crisis"
+    ],
+    "keywords": [
+      "anxiety"
+    ],
+    "source_ids": [
+      "nimh_anxiety_disorders",
+      "nimh_ocd",
+      "nimh_gad_brochure",
+      "nimh_phobias_brochure"
+    ],
+    "source_count": 4,
+    "treatment_modalities": [],
+    "audience": [],
+    "summary": "Additionally, NIMH supports research on interventions and treatments for different types of anxiety disorders. NIMH emphasizes that anxiety disorders can interfere with school, work, relationships, and basic daily functioning. Cognitive behavioral therapy (CBT) is a well-established and effective treatment for anxiety disorders such as phobias.",
+    "practice_points": [
+      "Additionally, NIMH supports research on interventions and treatments for different types of anxiety disorders.",
+      "Cognitive behavioral therapy (CBT) is a well-established and effective treatment for anxiety disorders such as phobias.",
+      "Cognitive behavioral therapy Cognitive behavioral therapy (CBT) is a well-established and effective treatment for anxiety disorders such as phobias."
+    ]
+  },
+  {
+    "note_id": "learning:crisis",
+    "title": "Active Learning Note: Crisis",
+    "topics": [
+      "crisis"
+    ],
+    "modes": [
+      "assessment",
+      "crisis",
+      "support",
+      "planning"
+    ],
+    "keywords": [
+      "crisis"
+    ],
+    "source_ids": [
+      "nimh_depression",
+      "nimh_anxiety_disorders",
+      "nimh_suicide_prevention",
+      "nimh_find_help"
+    ],
+    "source_count": 4,
+    "treatment_modalities": [],
+    "audience": [],
+    "summary": "This supports routine suicide-risk checking whenever depressive hopelessness or severe impairment appears. NIMH is supporting and conducting research to understand who is at risk of suicide and why.",
+    "practice_points": [
+      "This supports routine suicide-risk checking whenever depressive hopelessness or severe impairment appears.",
+      "NIMH is supporting and conducting research to understand who is at risk of suicide and why."
+    ]
+  },
+  {
+    "note_id": "learning:depression",
+    "title": "Active Learning Note: Depression",
+    "topics": [
+      "depression"
+    ],
+    "modes": [
+      "support",
+      "assessment",
+      "intervention",
+      "planning",
+      "crisis"
+    ],
+    "keywords": [
+      "depression"
+    ],
+    "source_ids": [
+      "nimh_depression",
+      "nimh_ocd"
+    ],
+    "source_count": 2,
+    "treatment_modalities": [],
+    "audience": [],
+    "summary": "NIMH distinguishes depression from ordinary sadness by noting that it causes severe symptoms affecting feelings, thinking, sleeping, eating, and working. We're working to improve existing treatments like medications, talk therapy (including telehealth and online options), and brain stimulation therapy. NIMH highlights psychotherapy, medication, telehealth and online options, and brain stimulation approaches as treatment directions for depression, while noting the need to tailor treatment to t...",
+    "practice_points": [
+      "We're working to improve existing treatments like medications, talk therapy (including telehealth and online options), and brain stimulation therapy.",
+      "NIMH highlights psychotherapy, medication, telehealth and online options, and brain stimulation approaches as treatment directions for depression, while noting the need to tailo...",
+      "This supports routine suicide-risk checking whenever depressive hopelessness or severe impairment appears."
+    ]
+  },
+  {
+    "note_id": "learning:ocd",
+    "title": "Active Learning Note: Ocd",
+    "topics": [
+      "ocd"
+    ],
+    "modes": [
+      "support",
+      "assessment",
+      "intervention",
+      "planning"
+    ],
+    "keywords": [
+      "ocd"
+    ],
+    "source_ids": [
+      "nimh_ocd"
+    ],
+    "source_count": 1,
+    "treatment_modalities": [],
+    "audience": [],
+    "summary": "We’re supporting research to improve existing treatments for OCD, including psychotherapy, medication, and brain stimulation therapy. It points to psychotherapy, medication, and brain stimulation as major treatment directions, especially for treatment-resistant cases. It is common for people with OCD to also have mood or anxiety disorders, which means assessment should look beyond compulsions alone.",
+    "practice_points": [
+      "We’re supporting research to improve existing treatments for OCD, including psychotherapy, medication, and brain stimulation therapy.",
+      "It points to psychotherapy, medication, and brain stimulation as major treatment directions, especially for treatment-resistant cases.",
+      "Explore clinical trials about OCD Find help and support Obsessive-compulsive disorder (OCD) is a disorder marked by uncontrollable and recurring thoughts (obsessions), repetitiv..."
+    ]
+  },
+  {
+    "note_id": "learning:panic",
+    "title": "Active Learning Note: Panic",
+    "topics": [
+      "panic"
+    ],
+    "modes": [
+      "assessment",
+      "intervention"
+    ],
+    "keywords": [
+      "panic"
+    ],
+    "source_ids": [
+      "nimh_panic_brochure"
+    ],
+    "source_count": 1,
+    "treatment_modalities": [],
+    "audience": [],
+    "summary": "Cognitive behavioral therapy (CBT), a research-supported type of psychotherapy, is commonly used to treat panic disorder. Treatment for panic disorder typically involves psychotherapy, medication, or both. With the right treatment and support, people with panic disorder can manage their symptoms and improve their quality of life.",
+    "practice_points": [
+      "Cognitive behavioral therapy (CBT), a research-supported type of psychotherapy, is commonly used to treat panic disorder.",
+      "Treatment for panic disorder typically involves psychotherapy, medication, or both.",
+      "With the right treatment and support, people with panic disorder can manage their symptoms and improve their quality of life."
+    ]
+  },
+  {
+    "note_id": "learning:sleep",
+    "title": "Active Learning Note: Sleep",
+    "topics": [
+      "sleep"
+    ],
+    "modes": [
+      "support",
+      "assessment",
+      "intervention",
+      "planning"
+    ],
+    "keywords": [
+      "sleep"
+    ],
+    "source_ids": [
+      "medlineplus_insomnia"
+    ],
+    "source_count": 1,
+    "treatment_modalities": [],
+    "audience": [],
+    "summary": "A type of counseling called cognitive-behavioral therapy (CBT) can help relieve the anxiety linked to chronic (ongoing) insomnia Several medicines also can help relieve your insomnia and allow you to re-establish a regular sleep schedule If your insomnia is the symptom or side effect of another problem, it's important to treat that problem (if possible). MedlinePlus distinguishes acute insomnia, which often follows stress or a traumatic event and lasts days to weeks, from chronic insomnia las...",
+    "practice_points": [
+      "A type of counseling called cognitive-behavioral therapy (CBT) can help relieve the anxiety linked to chronic (ongoing) insomnia Several medicines also can help relieve your ins...",
+      "NIH: National Heart, Lung, and Blood Institute (National Heart, Lung, and Blood Institute) Insomnia Treatment: Cognitive Behavioral Therapy Instead of Sleeping Pills (Mayo Found...",
+      "MedlinePlus lists good sleep habits, cognitive-behavioral therapy, and in some cases medication as treatments for insomnia."
+    ]
+  },
+  {
+    "note_id": "learning:social_anxiety",
+    "title": "Active Learning Note: Social Anxiety",
+    "topics": [
+      "social_anxiety"
+    ],
+    "modes": [
+      "assessment",
+      "intervention"
+    ],
+    "keywords": [
+      "social_anxiety",
+      "social",
+      "anxiety"
+    ],
+    "source_ids": [
+      "nimh_social_anxiety_brochure"
+    ],
+    "source_count": 1,
+    "treatment_modalities": [],
+    "audience": [],
+    "summary": "Cognitive behavioral therapy (CBT), a research-supported type of psychotherapy, is commonly used to treat social anxiety disorder. Treatment for social anxiety disorder typically involves psychotherapy, medication, or both.",
+    "practice_points": [
+      "Cognitive behavioral therapy (CBT), a research-supported type of psychotherapy, is commonly used to treat social anxiety disorder.",
+      "Treatment for social anxiety disorder typically involves psychotherapy, medication, or both."
+    ]
+  },
+  {
+    "note_id": "learning:stress",
+    "title": "Active Learning Note: Stress",
+    "topics": [
+      "stress"
+    ],
+    "modes": [
+      "assessment",
+      "planning",
+      "support"
+    ],
+    "keywords": [
+      "stress"
+    ],
+    "source_ids": [
+      "medlineplus_insomnia",
+      "nimh_ptsd"
+    ],
+    "source_count": 2,
+    "treatment_modalities": [],
+    "audience": [],
+    "summary": "MedlinePlus distinguishes acute insomnia, which often follows stress or a traumatic event and lasts days to weeks, from chronic insomnia lasting a month or longer. We’re also supporting research on ways to deliver effective treatment across different settings and populations. NIMH-supported research is also focused on developing and improving mental health treatments that can help trauma survivors.",
+    "practice_points": [
+      "We’re also supporting research on ways to deliver effective treatment across different settings and populations.",
+      "NIMH-supported research is also focused on developing and improving mental health treatments that can help trauma survivors.",
+      "This includes research to identify treatment components that can lead to more effective medications, psychotherapies, and device-based treatments."
+    ]
+  }
+]

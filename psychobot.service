@@ -1,0 +1,15 @@
+[Unit]
+Description=Psych Support Bot
+After=docker.service
+Requires=docker.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+WorkingDirectory=/opt/psychobot
+ExecStart=/usr/bin/docker compose -f docker-compose.server.yml up -d
+ExecStop=/usr/bin/docker compose -f docker-compose.server.yml down
+TimeoutStartSec=120
+
+[Install]
+WantedBy=multi-user.target

@@ -185,7 +185,7 @@ MEANS_RESTRICTION_GUIDANCE = {
         },
         "heights": {
             "guidance": (
-                "Identify specific locations that are高处 risks. "
+                "Identify specific locations that are high-risk. "
                 "Avoid those locations during crisis periods. "
                 "Arrange to have someone check in before those times."
             ),

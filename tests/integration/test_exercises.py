@@ -13,6 +13,9 @@ def test_list_exercises() -> None:
     assert "cbt" in body
     assert "act" in body
     assert "dbt" in body
+    assert "thought_record_full" in body["cbt"]
+    assert "values_card_sort" in body["act"]
+    assert "tipp_full" in body["dbt"]
 
 
 def test_get_cbt_thought_record() -> None:
@@ -28,6 +31,14 @@ def test_get_dbt_tipp() -> None:
     assert response.status_code == 200
     body = response.json()
     assert body["name"] == "DBT TIPP Skills for Crisis"
+
+
+def test_get_expanded_cbt_exercise() -> None:
+    response = client.get("/v1/exercises/cbt_thought_record_full")
+    assert response.status_code == 200
+    body = response.json()
+    assert body["name"] == "CBT Thought Record"
+    assert "follow_up_prompts" in body
 
 
 def test_exercise_not_found() -> None:

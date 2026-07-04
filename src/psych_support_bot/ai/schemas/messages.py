@@ -3,14 +3,14 @@ from typing import Literal
 from pydantic import BaseModel, Field
 
 ConversationMode = Literal[
-    "support", "assessment", "intervention", "planning", "crisis"
+    "support", "assessment", "intervention", "planning", "crisis", "help"
 ]
 RiskLevel = Literal["low", "elevated", "high", "critical"]
 
 
 class ConversationRequest(BaseModel):
     user_id: str = Field(..., min_length=1)
-    message: str = Field(..., min_length=1)
+    message: str = Field(..., min_length=1, max_length=2000)
     session_id: str | None = None
     memory_summary: str | None = None
 
@@ -34,6 +34,7 @@ class ConversationResponse(BaseModel):
     risk: RiskResult
     reply: GeneratedReply
     summary: str
+    debug: dict[str, object] = Field(default_factory=dict)
 
 
 class WeeklyReportResponse(BaseModel):
