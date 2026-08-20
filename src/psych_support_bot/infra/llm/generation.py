@@ -20,7 +20,7 @@ from psych_support_bot.ai.prompts.templates import (
 from psych_support_bot.ai.routers.intent import DIAGNOSIS_KEYWORDS
 from psych_support_bot.ai.utils.text_matching import _contains_keyword, _normalize_text
 from psych_support_bot.infra.config.settings import get_settings
-from psych_support_bot.infra.llm.factory import build_chat_model
+from psych_support_bot.infra.llm.factory import build_chat_model, get_temperature_for_mode
 from psych_support_bot.infra.telemetry.tracing import trace_span, update_span_output
 
 logger = logging.getLogger(__name__)
@@ -65,8 +65,8 @@ def _enforce_language(output: str, expected_language: str) -> str:
     return output
 
 
-def _invoke(system_prompt: str, user_message: str, expected_language: str) -> str:
-    model = build_chat_model()
+def _invoke(system_prompt: str, user_message: str, expected_language: str, *, mode: str = "support") -> str:
+    model = build_chat_model(temperature=get_temperature_for_mode(mode))
     messages = [
         SystemMessage(content=system_prompt),
         HumanMessage(content=user_message),
@@ -143,7 +143,7 @@ def _generate_consultation_opinion(
         challenge_allowed=challenge_allowed,
         loop_hint=loop_hint,
     )
-    opinion = _invoke(system_prompt, user_message, expected_language)
+    opinion = _invoke(system_prompt, user_message, expected_language, mode=mode)
     return {
         "agent": agent["label"],
         "school": agent["school"],
@@ -203,7 +203,7 @@ def generate_multidisciplinary_consultation(
         challenge_allowed=challenge_allowed,
         loop_hint=loop_hint,
     )
-    reply_text = _invoke(synthesis_prompt, user_message, expected_language)
+    reply_text = _invoke(synthesis_prompt, user_message, expected_language, mode=mode)
     return reply_text, opinions
 
 
@@ -250,7 +250,7 @@ def generate_clinically_bounded_reply(
     # Inject diagnosis refusal prompt if user is asking for a diagnosis
     if _is_diagnosis_request(user_message):
         system_prompt = system_prompt + "\n\n" + build_diagnosis_refusal_prompt()
-    return _invoke(system_prompt, user_message, expected_language)
+    return _invoke(system_prompt, user_message, expected_language, mode=mode)
 
 
 def generate_questionnaire_reply(
