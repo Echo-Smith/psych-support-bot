@@ -15,4 +15,5 @@ def build_chat_model() -> ChatOpenAI:
         api_key=key,
         base_url=settings.openai_base_url or None,
         temperature=0.0,
+        default_headers={"api-key": settings.openai_api_key},
     )

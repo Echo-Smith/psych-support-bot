@@ -17,12 +17,15 @@ from psych_support_bot.api.routes.reports import router as reports_router
 from psych_support_bot.api.routes.system import router as system_router
 from psych_support_bot.api.routes.users import router as users_router
 from psych_support_bot.infra.db.init_db import init_db
+from psych_support_bot.infra.telemetry.tracing import flush_langfuse, get_langfuse
 
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
     init_db()
+    get_langfuse()
     yield
+    flush_langfuse()
 
 
 STATIC_DIR = Path(__file__).parent / "static"
