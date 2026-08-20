@@ -35,7 +35,7 @@ from psych_support_bot.infra.db.repositories import (
     save_assessment,
 )
 from psych_support_bot.infra.llm.generation import generate_questionnaire_reply
-from psych_support_bot.infra.telemetry.tracing import timed_call
+from psych_support_bot.infra.telemetry.tracing import trace_span, update_span_output
 
 
 class ConversationService:
@@ -390,10 +390,19 @@ class ConversationService:
             "challenge_allowed": False,
             "loop_hint": "Start with broad exploration before narrowing.",
         }
-        raw_result, _trace = timed_call(
+        with trace_span(
             "conversation_graph.invoke",
-            lambda: cast(Any, conversation_graph.invoke(cast(Any, state))),
-        )
+            input={
+                "user_id": payload.user_id,
+                "session_id": session_id,
+                "message": payload.message,
+                "mode": "support",
+            },
+            metadata={"memory_summary": memory_summary},
+        ) as root_obs:
+            raw_result = cast(
+                Any, conversation_graph.invoke(cast(Any, state))
+            )
         result: GraphState = cast(GraphState, raw_result)
         response = ConversationResponse(
             session_id=session_id,
@@ -422,6 +431,12 @@ class ConversationService:
                 ),
             },
         )
+        update_span_output(root_obs, {
+            "mode": result["mode"],
+            "risk_level": result["risk_result"].risk_level,
+            "reply": result["generated_reply"].text,
+            "summary": result["session_summary"],
+        })
         save_conversation_result(
             session=session,
             response=response,
