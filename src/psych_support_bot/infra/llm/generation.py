@@ -1,3 +1,4 @@
+import logging
 from concurrent.futures import ThreadPoolExecutor
 
 from langchain_core.messages import HumanMessage, SystemMessage
@@ -15,7 +16,11 @@ from psych_support_bot.ai.prompts.templates import (
     build_process_prompt,
     build_role_prompt,
 )
+from psych_support_bot.infra.config.settings import get_settings
 from psych_support_bot.infra.llm.factory import build_chat_model
+from psych_support_bot.infra.telemetry.tracing import trace_span, update_span_output
+
+logger = logging.getLogger(__name__)
 
 
 def _coerce_content(content: object) -> str:
@@ -58,8 +63,17 @@ def _invoke(system_prompt: str, user_message: str, expected_language: str) -> st
         SystemMessage(content=system_prompt),
         HumanMessage(content=user_message),
     ]
-    response = model.invoke(messages)
-    output = _coerce_content(response.content)
+    settings = get_settings()
+    with trace_span(
+        "llm.invoke",
+        input={"system_prompt": system_prompt, "user_message": user_message},
+        metadata={"model": settings.openai_model, "language": expected_language},
+        as_type="generation",
+    ) as gen_obs:
+        response = model.invoke(messages)
+        output = _coerce_content(response.content)
+        update_span_output(gen_obs, output)
+
     try:
         return _enforce_language(output, expected_language)
     except ValueError:
@@ -72,13 +86,20 @@ def _invoke(system_prompt: str, user_message: str, expected_language: str) -> st
                 else "Rewrite the entire answer in natural English only. Do not use any Chinese characters."
             )
         )
-        retry_response = model.invoke(
-            [
-                SystemMessage(content=retry_prompt),
-                HumanMessage(content=user_message),
-            ]
-        )
-        retry_output = _coerce_content(retry_response.content)
+        with trace_span(
+            "llm.invoke_retry",
+            input={"system_prompt": retry_prompt, "user_message": user_message},
+            metadata={"model": settings.openai_model, "language": expected_language},
+            as_type="generation",
+        ) as gen_obs_retry:
+            retry_response = model.invoke(
+                [
+                    SystemMessage(content=retry_prompt),
+                    HumanMessage(content=user_message),
+                ]
+            )
+            retry_output = _coerce_content(retry_response.content)
+            update_span_output(gen_obs_retry, retry_output)
         return _enforce_language(retry_output, expected_language)
 
 
