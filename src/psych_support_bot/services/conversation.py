@@ -1,10 +1,11 @@
 import json
+from typing import Any, cast
 from uuid import uuid4
-from typing import Any, Literal, cast
 
 from sqlalchemy.orm import Session
 
 from psych_support_bot.ai.graphs.conversation import conversation_graph
+from psych_support_bot.ai.routers.intent import detect_mode
 from psych_support_bot.ai.schemas.messages import (
     ConversationMode,
     ConversationRequest,
@@ -31,8 +32,8 @@ from psych_support_bot.infra.db.repositories import (
     get_active_questionnaire_session,
     get_session_messages,
     get_user_sessions,
-    save_conversation_result,
     save_assessment,
+    save_conversation_result,
 )
 from psych_support_bot.infra.llm.generation import generate_questionnaire_reply
 from psych_support_bot.infra.telemetry.tracing import trace_span, update_span_output
@@ -123,11 +124,7 @@ class ConversationService:
                 ),
                 payload.message,
             )
-            expected_language = (
-                "zh"
-                if any("\u4e00" <= c <= "\u9fff" for c in first_user_text)
-                else "en"
-            )
+            expected_language = "zh" if any("\u4e00" <= c <= "\u9fff" for c in first_user_text) else "en"
             guide = questionnaire_guide(assessment_type, language=expected_language)
             view = build_questionnaire_session_view(
                 session_id=active_session.id,
@@ -152,16 +149,10 @@ class ConversationService:
                             phase="skipped",
                             current_index=view.current_index,
                             total_items=view.total_items,
-                            next_question=(
-                                view.next_item.text
-                                if view.next_item is not None
-                                else None
-                            ),
+                            next_question=(view.next_item.text if view.next_item is not None else None),
                             options=[
                                 (option.value, option.label)
-                                for option in (
-                                    view.next_item.options if view.next_item else []
-                                )
+                                for option in (view.next_item.options if view.next_item else [])
                             ],
                             answers_so_far=answers,
                         ),
@@ -173,6 +164,9 @@ class ConversationService:
                             "assessment_type": assessment_type,
                         },
                     )
+                user_mode = detect_mode(payload.message)
+                if user_mode != "assessment":
+                    return None
                 is_chinese = any("\u4e00" <= c <= "\u9fff" for c in payload.message)
                 max_hint = 4 if assessment_type == "isi" else 3
                 if is_chinese:
@@ -186,12 +180,9 @@ class ConversationService:
                     phase="invalid_answer",
                     current_index=view.current_index + 1,
                     total_items=view.total_items,
-                    next_question=(
-                        view.next_item.text if view.next_item is not None else None
-                    ),
+                    next_question=(view.next_item.text if view.next_item is not None else None),
                     options=[
-                        (option.value, option.label)
-                        for option in (view.next_item.options if view.next_item else [])
+                        (option.value, option.label) for option in (view.next_item.options if view.next_item else [])
                     ],
                     answers_so_far=answers,
                     error_hint=error_hint,
@@ -231,10 +222,7 @@ class ConversationService:
                         current_index=updated_view.current_index + 1,
                         total_items=updated_view.total_items,
                         next_question=updated_view.next_item.text,
-                        options=[
-                            (option.value, option.label)
-                            for option in updated_view.next_item.options
-                        ],
+                        options=[(option.value, option.label) for option in updated_view.next_item.options],
                         answers_so_far=updated_answers,
                     ),
                     summary=(
@@ -256,9 +244,7 @@ class ConversationService:
                 language=expected_language,
             )
             save_assessment(session, completed.user_id, result)
-            risk_level = (
-                "elevated" if result.interpretation.needs_safety_followup else "low"
-            )
+            risk_level = "elevated" if result.interpretation.needs_safety_followup else "low"
             risk_reason = (
                 "Assessment safety follow-up recommended."
                 if result.interpretation.needs_safety_followup
@@ -277,13 +263,10 @@ class ConversationService:
                     next_question=None,
                     options=[],
                     answers_so_far=updated_answers,
-                    completion_context=build_assessment_followup_reply(
-                        result, user_message=payload.message
-                    ),
+                    completion_context=build_assessment_followup_reply(result, user_message=payload.message),
                 ),
                 summary=(
-                    f"Completed questionnaire {assessment_type} with score {result.score} "
-                    f"({result.severity_band})."
+                    f"Completed questionnaire {assessment_type} with score {result.score} ({result.severity_band})."
                 ),
                 risk_level=risk_level,
                 risk_reason=risk_reason,
@@ -301,9 +284,7 @@ class ConversationService:
             return None
 
         record = create_questionnaire_session(session, payload.user_id, requested)
-        expected_language = (
-            "zh" if any("\u4e00" <= c <= "\u9fff" for c in payload.message) else "en"
-        )
+        expected_language = "zh" if any("\u4e00" <= c <= "\u9fff" for c in payload.message) else "en"
         guide = questionnaire_guide(requested, language=expected_language)
         view = build_questionnaire_session_view(
             session_id=record.id,
@@ -323,13 +304,8 @@ class ConversationService:
                 phase="start",
                 current_index=1,
                 total_items=view.total_items,
-                next_question=(
-                    view.next_item.text if view.next_item is not None else None
-                ),
-                options=[
-                    (option.value, option.label)
-                    for option in (view.next_item.options if view.next_item else [])
-                ],
+                next_question=(view.next_item.text if view.next_item is not None else None),
+                options=[(option.value, option.label) for option in (view.next_item.options if view.next_item else [])],
                 answers_so_far=[],
             ),
             summary=f"Started questionnaire {requested}.",
@@ -357,9 +333,7 @@ class ConversationService:
             return questionnaire_response
 
         session_id = payload.session_id or str(uuid4())
-        memory_summary = payload.memory_summary or build_memory_snapshot(
-            session, payload.user_id
-        )
+        memory_summary = payload.memory_summary or build_memory_snapshot(session, payload.user_id)
         state: GraphState = {
             "user_id": payload.user_id,
             "session_id": session_id,
@@ -389,6 +363,8 @@ class ConversationService:
             "question_strategy": "open",
             "challenge_allowed": False,
             "loop_hint": "Start with broad exploration before narrowing.",
+            "exercise_history": [],
+            "refusal_history": [],
         }
         with trace_span(
             "conversation_graph.invoke",
@@ -400,9 +376,7 @@ class ConversationService:
             },
             metadata={"memory_summary": memory_summary},
         ) as root_obs:
-            raw_result = cast(
-                Any, conversation_graph.invoke(cast(Any, state))
-            )
+            raw_result = cast(Any, conversation_graph.invoke(cast(Any, state)))
         result: GraphState = cast(GraphState, raw_result)
         response = ConversationResponse(
             session_id=session_id,
@@ -417,26 +391,27 @@ class ConversationService:
                 "knowledge_chars": len(result.get("knowledge_context", "")),
                 "memory_chars": len(result.get("memory_summary", "")),
                 "topics": result.get("topics", []),
-                "consultation_required": bool(
-                    result.get("consultation_required", False)
-                ),
+                "consultation_required": bool(result.get("consultation_required", False)),
                 "consultation_agents": result.get("consultation_agents", []),
                 "consultation_notes": result.get("consultation_notes", ""),
                 "consultation_opinions": result.get("consultation_opinions", []),
                 "interview_stage": result.get("interview_stage", "engagement"),
                 "question_strategy": result.get("question_strategy", "open"),
                 "challenge_allowed": bool(result.get("challenge_allowed", False)),
-                "loop_hint": result.get(
-                    "loop_hint", "Start with broad exploration before narrowing."
-                ),
+                "loop_hint": result.get("loop_hint", "Start with broad exploration before narrowing."),
+                "exercise_history": result.get("exercise_history", []),
+                "refusal_history": result.get("refusal_history", []),
             },
         )
-        update_span_output(root_obs, {
-            "mode": result["mode"],
-            "risk_level": result["risk_result"].risk_level,
-            "reply": result["generated_reply"].text,
-            "summary": result["session_summary"],
-        })
+        update_span_output(
+            root_obs,
+            {
+                "mode": result["mode"],
+                "risk_level": result["risk_result"].risk_level,
+                "reply": result["generated_reply"].text,
+                "summary": result["session_summary"],
+            },
+        )
         save_conversation_result(
             session=session,
             response=response,
