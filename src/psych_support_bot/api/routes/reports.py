@@ -3,6 +3,7 @@ from sqlalchemy.orm import Session
 
 from psych_support_bot.ai.schemas.messages import WeeklyReportResponse
 from psych_support_bot.domain.reports.service import build_weekly_summary
+from psych_support_bot.domain.reports.trends import compute_user_trends
 from psych_support_bot.infra.db.repositories import (
     get_recent_checkins,
     save_weekly_report,
@@ -17,6 +18,7 @@ def get_weekly_report(
     user_id: str, session: Session = Depends(get_db_session)
 ) -> WeeklyReportResponse:
     checkins = get_recent_checkins(session, user_id)
-    summary = build_weekly_summary(checkins)
+    trend = compute_user_trends(session, user_id, days=7)
+    summary = build_weekly_summary(checkins, trend_status=trend.overall_status)
     save_weekly_report(session, user_id, summary)
     return WeeklyReportResponse(user_id=user_id, summary=summary)
