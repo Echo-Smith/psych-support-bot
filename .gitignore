@@ -37,6 +37,3 @@ test_report/
 
 # OS artifacts
 .DS_Store
-
-# Temporary HTML previews
-PROJECT_PLAN_DEV_PR.html

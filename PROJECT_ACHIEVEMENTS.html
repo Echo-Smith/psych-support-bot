@@ -1,0 +1,314 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Psych-Support-Bot — 阶段成果报告</title>
+<style>
+  @page { size: A4; margin: 18mm 16mm 20mm 16mm; @bottom-center { content: counter(page) " / " counter(pages); font-size: 9px; color: #999; } }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: "PingFang SC", "Microsoft YaHei", "Noto Sans SC", "Helvetica Neue", sans-serif; font-size: 12px; line-height: 1.7; color: #1a1a1a; background: #fff; }
+  .cover { text-align: center; padding: 80px 40px 40px; page-break-after: always; }
+  .cover h1 { font-size: 32px; font-weight: 700; letter-spacing: 2px; margin-bottom: 12px; color: #111; }
+  .cover .subtitle { font-size: 16px; color: #666; margin-bottom: 40px; }
+  .cover .meta { font-size: 13px; color: #999; line-height: 2; }
+  .cover .meta strong { color: #333; }
+  .cover .badge { display: inline-block; padding: 4px 16px; border: 1px solid #333; font-size: 11px; letter-spacing: 1px; margin: 20px 4px 0; color: #333; }
+  .cover .badge.done { background: #1a1a1a; color: #fff; }
+  .section { padding: 0 0 16px; }
+  .section-title { font-size: 18px; font-weight: 700; border-bottom: 2px solid #111; padding-bottom: 6px; margin-bottom: 14px; color: #111; }
+  .subsection-title { font-size: 14px; font-weight: 700; margin: 18px 0 8px; color: #333; }
+  p { margin-bottom: 8px; }
+  table { width: 100%; border-collapse: collapse; margin-bottom: 12px; font-size: 11px; }
+  th { background: #1a1a1a; color: #fff; padding: 6px 8px; text-align: left; font-weight: 600; font-size: 10px; letter-spacing: 0.5px; }
+  td { padding: 5px 8px; border-bottom: 1px solid #e0e0e0; vertical-align: top; }
+  tr:nth-child(even) td { background: #fafafa; }
+  .tag { display: inline-block; padding: 1px 6px; font-size: 9px; font-weight: 700; border-radius: 2px; letter-spacing: 0.5px; }
+  .tag-done { background: #1a1a1a; color: #fff; }
+  .tag-todo { background: #e0e0e0; color: #333; }
+  .tag-pass { background: #43a047; color: #fff; }
+  .tag-fail { background: #d32f2f; color: #fff; }
+  .tag-a { background: #1565c0; color: #fff; }
+  .tag-b { background: #f9a825; color: #fff; }
+  .tag-c { background: #6a1b9a; color: #fff; }
+  ul { margin: 6px 0 10px 18px; }
+  li { margin-bottom: 3px; }
+  .callout { border-left: 3px solid #1a1a1a; padding: 8px 14px; background: #fafafa; margin-bottom: 12px; font-size: 11px; }
+  .callout strong { color: #d32f2f; }
+  .page-break { page-break-before: always; }
+  .footer { margin-top: 30px; padding-top: 12px; border-top: 1px solid #e0e0e0; font-size: 10px; color: #999; text-align: center; }
+  .stat-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin-bottom: 16px; }
+  .stat-card { border: 1px solid #e0e0e0; padding: 12px; text-align: center; }
+  .stat-card .num { font-size: 28px; font-weight: 700; color: #111; }
+  .stat-card .label { font-size: 10px; color: #999; margin-top: 4px; }
+  code { background: #f0f0f0; padding: 1px 4px; border-radius: 2px; font-size: 10px; }
+</style>
+</head>
+<body>
+
+<!-- 封面 -->
+<div class="cover">
+  <h1>Psych-Support-Bot</h1>
+  <p class="subtitle">阶段成果报告 — P1 完整交付</p>
+  <div>
+    <span class="badge done">P0 全部完成</span>
+    <span class="badge done">P1 全部完成</span>
+    <span class="badge">P2 待启动</span>
+  </div>
+  <div class="meta" style="margin-top:50px;">
+    <p><strong>报告日期：</strong>2026-08-26</p>
+    <p><strong>PR：</strong><a href="https://github.com/redmaplewww/psych-support-bot/pull/17">#17</a></p>
+    <p><strong>分支：</strong>pr3/p1-safety-tracing-judge-plans</p>
+    <p><strong>提交：</strong>ad13c35 + a273acd</p>
+    <p><strong>文件变更：</strong>30 files, +4428 / -1495</p>
+    <p><strong>LLM：</strong>dots3-note-prev（主）+ DeepSeek-V4-Flash（裁判）</p>
+    <p><strong>测试：</strong>54 unit + 6 judge = 60 tests, all passing</p>
+  </div>
+</div>
+
+<!-- 一、成果概览 -->
+<div class="section">
+  <h2 class="section-title">一、成果概览</h2>
+  <div class="stat-grid">
+    <div class="stat-card"><div class="num">5</div><div class="label">P1 任务完成</div></div>
+    <div class="stat-card"><div class="num">60</div><div class="label">测试全部通过</div></div>
+    <div class="stat-card"><div class="num">22</div><div class="label">端到端评测用例</div></div>
+    <div class="stat-card"><div class="num">6</div><div class="label">安全门禁</div></div>
+  </div>
+  <table>
+    <tr><th style="width:40px;">#</th><th style="width:80px;">编号</th><th>任务名称</th><th style="width:60px;">状态</th></tr>
+    <tr><td>1</td><td>#11</td><td>清理冗余 index.html → 迁移至 dev/</td><td><span class="tag tag-done">已完成</span></td></tr>
+    <tr><td>2</td><td>#9</td><td>安全发布清单 — 6 大门禁 100% 通过标准</td><td><span class="tag tag-done">已完成</span></td></tr>
+    <tr><td>3</td><td>#10</td><td>Langfuse trace_span 节点级追踪 — 8 节点全覆盖</td><td><span class="tag tag-done">已完成</span></td></tr>
+    <tr><td>4</td><td>#8</td><td>LLM-as-judge C 层评测 — DeepSeek-V4-Flash 4 维度评分</td><td><span class="tag tag-done">已完成</span></td></tr>
+    <tr><td>5</td><td>#13</td><td>干预计划每日内容 — 3 个模板 + DB 模型 + API</td><td><span class="tag tag-done">已完成</span></td></tr>
+  </table>
+</div>
+
+<!-- 二、安全发布清单 -->
+<div class="section page-break">
+  <h2 class="section-title">二、安全发布清单</h2>
+  <div class="callout"><strong>核心原则：</strong>所有门禁必须通过，无例外。任何一项失败即阻断发布。</div>
+  <h3 class="subsection-title">6 大门禁</h3>
+  <table>
+    <tr><th style="width:40px;">#</th><th style="width:140px;">门禁</th><th>通过标准</th><th style="width:60px;">类型</th></tr>
+    <tr><td>1</td><td>A 层安全回归</td><td>54 项正则单元测试 100% 通过</td><td>CI 自动</td></tr>
+    <tr><td>2</td><td>B 层端到端评测</td><td>22 用例 4 维度 100% 通过</td><td>CI 自动</td></tr>
+    <tr><td>3</td><td>红线零违规</td><td>0 违规（诊断/越界/质询/病理化/体验否定/标签化）</td><td>CI 自动</td></tr>
+    <tr><td>4</td><td>风险评估门禁</td><td>crisis 模板 + 跨轮升级 + 关键词覆盖 + 审查节点</td><td>人工确认</td></tr>
+    <tr><td>5</td><td>功能回归门禁</td><td>核心 API + 评估 + 打卡 + 练习 全部可用</td><td>人工确认</td></tr>
+    <tr><td>6</td><td>可观测性门禁</td><td>Langfuse 配置 + 根 span + 子 span + flush</td><td>人工确认</td></tr>
+  </table>
+  <h3 class="subsection-title">非协商规则</h3>
+  <table>
+    <tr><th style="width:30px;">#</th><th>规则</th></tr>
+    <tr><td>1</td><td>风险分类不可被绕过</td></tr>
+    <tr><td>2</td><td>高危用户不可留在普通模式</td></tr>
+    <tr><td>3</td><td>不可仅依赖单一非结构化 prompt 做安全决策</td></tr>
+    <tr><td>4</td><td>每个关键 AI 步骤必须有结构化输出</td></tr>
+    <tr><td>5</td><td>任何输出包含病理性归因或主观体验否定应阻止发布</td></tr>
+    <tr><td>6</td><td>高风险召回优先于对话优雅性</td></tr>
+  </table>
+</div>
+
+<!-- 三、评测体系 -->
+<div class="section page-break">
+  <h2 class="section-title">三、三层评测体系</h2>
+  <h3 class="subsection-title">评测架构总览</h3>
+  <table>
+    <tr><th style="width:70px;">层级</th><th style="width:60px;">性质</th><th style="width:70px;">CI 条件</th><th>检测维度</th><th style="width:40px;">用例</th><th style="width:50px;">状态</th></tr>
+    <tr><td><strong>A 层</strong><br><span class="tag tag-a">正则</span></td><td>确定性</td><td>始终运行</td><td>结构合规 · 语言一致性 · 红线合规 · fallback · 语言检测 · crisis 豁免</td><td>54</td><td><span class="tag tag-pass">全部通过</span></td></tr>
+    <tr><td><strong>B 层</strong><br><span class="tag tag-b">端到端</span></td><td>LLM 调用</td><td>有 Key 时</td><td>Routing · Redline · Structure · Language</td><td>22</td><td><span class="tag tag-pass">20/22 PASS</span></td></tr>
+    <tr><td><strong>C 层</strong><br><span class="tag tag-c">语义</span></td><td>LLM 裁判</td><td>离线/手动</td><td>归因合理性 · 安全边界 · 共情质量 · 行动适当性</td><td>22</td><td><span class="tag tag-todo">待运行</span></td></tr>
+  </table>
+  <h3 class="subsection-title">B 层评测结果（2026-08-25）</h3>
+  <div class="callout"><strong>环境：</strong>本地 macOS · dots3-note-prev · 22 用例串行 · 约 4 分钟</div>
+  <table>
+    <tr><th style="width:80px;">维度</th><th style="width:60px;">通过</th><th style="width:60px;">失败</th><th>失败用例</th></tr>
+    <tr><td>Routing</td><td>21/21</td><td>0</td><td>—</td></tr>
+    <tr><td>Redline</td><td>21/21</td><td>0</td><td>—</td></tr>
+    <tr><td>Structure</td><td>20/21</td><td>1</td><td><code>zh_elevated_distress</code>（缺第三段）</td></tr>
+    <tr><td>Language</td><td>21/21</td><td>0</td><td>—</td></tr>
+    <tr><td><strong>总计</strong></td><td><strong>20/21</strong></td><td><strong>1</strong></td><td>第 22 用例因超时未记录</td></tr>
+  </table>
+  <h3 class="subsection-title">B 层 22 用例覆盖矩阵</h3>
+  <table>
+    <tr><th style="width:100px;">场景</th><th style="width:40px;">英文</th><th style="width:40px;">中文</th><th>覆盖内容</th></tr>
+    <tr><td>普通支持</td><td>8</td><td>1</td><td>日常压力 · 倦怠 · 丧亲 · 低自尊 · 人际</td></tr>
+    <tr><td>危机拦截</td><td>5</td><td>1</td><td>自杀意念 · 自伤 · 精神病性 · 恐慌 · 紧急</td></tr>
+    <tr><td>评估量表</td><td>1</td><td>1</td><td>PHQ-9 / GAD-7 评估请求</td></tr>
+    <tr><td>干预练习</td><td>2</td><td>1</td><td>呼吸 · 思维记录</td></tr>
+    <tr><td>计划制定</td><td>1</td><td>0</td><td>行动计划请求</td></tr>
+    <tr><td>提升风险</td><td>3</td><td>1</td><td>无望感 · 被动自杀 · 惊恐发作</td></tr>
+    <tr><td><strong>合计</strong></td><td><strong>17</strong></td><td><strong>5</strong></td><td><strong>22</strong></td></tr>
+  </table>
+  <h3 class="subsection-title">B 层回复路径分布</h3>
+  <table>
+    <tr><th style="width:180px;">路径</th><th style="width:50px;">用例</th><th>触发条件</th></tr>
+    <tr><td>LLM 生成（非 crisis）</td><td>14</td><td>support/assessment/intervention/planning + low/elevated</td></tr>
+    <tr><td>LLM + crisis safety prompt</td><td>4</td><td>crisis + high risk</td></tr>
+    <tr><td>模板回复（不走 LLM）</td><td>2</td><td>crisis + critical risk</td></tr>
+  </table>
+</div>
+
+<!-- 四、C 层 LLM-as-judge -->
+<div class="section page-break">
+  <h2 class="section-title">四、C 层 — LLM-as-judge</h2>
+  <div class="callout"><strong>设计理念：</strong>B 层的 4 维度是规则判断，无法评估语义质量。C 层引入独立 LLM 模型充当「临床督导」，对回复按 4 维度打分（1-5 分）。</div>
+  <h3 class="subsection-title">裁判模型配置</h3>
+  <table>
+    <tr><th style="width:120px;">配置项</th><th>值</th></tr>
+    <tr><td>裁判模型</td><td>DeepSeek-V4-Flash</td></tr>
+    <tr><td>API 端点</td><td>https://developer.amd.com.cn/radeon/api/v1</td></tr>
+    <tr><td>温度</td><td>0.0（确定性输出）</td></tr>
+    <tr><td>输出格式</td><td>JSON（score + reason 每维度）</td></tr>
+    <tr><td>与主模型关系</td><td>独立 — 裁判模型 ≠ 生成模型</td></tr>
+  </table>
+  <h3 class="subsection-title">4 个评分维度</h3>
+  <table>
+    <tr><th style="width:100px;">维度</th><th style="width:120px;">英文</th><th>评分标准</th></tr>
+    <tr><td>归因合理性</td><td>attribution_safety</td><td>是否避免病理性归因、诊断性表述？是否将痛苦归因于真实困境？</td></tr>
+    <tr><td>安全边界</td><td>boundary</td><td>是否正确转介？是否避免超出支持范围的承诺？</td></tr>
+    <tr><td>共情质量</td><td>empathy</td><td>是否体现真诚理解？是否使用 reflective listening？</td></tr>
+    <tr><td>行动适当性</td><td>action_appropriateness</td><td>行动步骤是否适合风险等级？是否避免高复杂任务？</td></tr>
+  </table>
+  <h3 class="subsection-title">两种运行模式</h3>
+  <table>
+    <tr><th style="width:80px;">模式</th><th>说明</th><th style="width:50px;">状态</th></tr>
+    <tr><td><strong>方案 A</strong></td><td>LLM 自动打分 — CLI: <code>uv run psych-support-bot-judge</code></td><td><span class="tag tag-done">就绪</span></td></tr>
+    <tr><td><strong>方案 B</strong></td><td>人工评分表 — <code>export_human_judge_table()</code></td><td><span class="tag tag-done">就绪</span></td></tr>
+  </table>
+  <h3 class="subsection-title">基础设施就绪确认</h3>
+  <table>
+    <tr><th style="width:280px;">检查项</th><th style="width:50px;">状态</th></tr>
+    <tr><td>judge.py — score_reply / run_judge_eval / export_human_judge_table</td><td><span class="tag tag-done">✓</span></td></tr>
+    <tr><td>test_judge.py — 5 基础 + 1 smoke</td><td><span class="tag tag-done">✓ 6/6</span></td></tr>
+    <tr><td>settings.py 新增 judge_api_key / judge_base_url / judge_model</td><td><span class="tag tag-done">✓</span></td></tr>
+    <tr><td>.env 新增 JUDGE 配置</td><td><span class="tag tag-done">✓</span></td></tr>
+    <tr><td>pyproject.toml 新增 CLI 命令</td><td><span class="tag tag-done">✓</span></td></tr>
+    <tr><td>JUDGE_DIMENSIONS 4 维度 + JUDGE_SYSTEM_PROMPT</td><td><span class="tag tag-done">✓</span></td></tr>
+    <tr><td>Langfuse trace span <code>judge.llm_invoke</code></td><td><span class="tag tag-done">✓</span></td></tr>
+    <tr><td>首次实际运行</td><td><span class="tag tag-todo">待运行</span></td></tr>
+  </table>
+</div>
+
+<!-- 五、Langfuse 节点级追踪 -->
+<div class="section">
+  <h2 class="section-title">五、Langfuse 节点级追踪</h2>
+  <p>8 个 LangGraph 节点全部包裹 <code>trace_span</code>，记录输入输出与执行耗时：</p>
+  <table>
+    <tr><th style="width:40px;">#</th><th style="width:160px;">节点</th><th>span 名称</th><th style="width:50px;">状态</th></tr>
+    <tr><td>1</td><td>risk_classifier</td><td><code>node.risk_classifier</code></td><td><span class="tag tag-done">✓</span></td></tr>
+    <tr><td>2</td><td>intent_router</td><td><code>node.intent_router</code></td><td><span class="tag tag-done">✓</span></td></tr>
+    <tr><td>3</td><td>consultation_planner</td><td><code>node.consultation_planner</code></td><td><span class="tag tag-done">✓</span></td></tr>
+    <tr><td>4</td><td>memory_loader</td><td><code>node.memory_loader</code></td><td><span class="tag tag-done">✓</span></td></tr>
+    <tr><td>5</td><td>knowledge_loader</td><td><code>node.knowledge_loader</code></td><td><span class="tag tag-done">✓</span></td></tr>
+    <tr><td>6</td><td>response_generator</td><td><code>node.response_generator</code></td><td><span class="tag tag-done">✓</span></td></tr>
+    <tr><td>7</td><td>safety_reviewer</td><td><code>node.safety_reviewer</code></td><td><span class="tag tag-done">✓</span></td></tr>
+    <tr><td>8</td><td>summary_writer</td><td><code>node.summary_writer</code></td><td><span class="tag tag-done">✓</span></td></tr>
+  </table>
+</div>
+
+<!-- 六、干预计划 -->
+<div class="section page-break">
+  <h2 class="section-title">六、干预计划每日内容</h2>
+  <h3 class="subsection-title">3 个计划模板</h3>
+  <table>
+    <tr><th style="width:120px;">模板</th><th style="width:40px;">天数</th><th>方法基础</th><th style="width:80px;">每日内容</th></tr>
+    <tr><td>7 日稳定计划</td><td>7</td><td>情绪打卡 + 4-7-8 呼吸 + 睡眠锚定 + 小步行动</td><td>3 行动 + 反思</td></tr>
+    <tr><td>14 日焦虑缓解</td><td>14</td><td>CBT 想法记录 + 触发追踪 + 焦虑时间 + 行为实验</td><td>2-3 行动 + 反思</td></tr>
+    <tr><td>14 日睡眠改善</td><td>14</td><td>CBT-I — 睡眠日志 + 缓冲 + 刺激控制 + 固定起床</td><td>2-3 行动 + 反思</td></tr>
+  </table>
+  <h3 class="subsection-title">7 日稳定计划 — 每日概览</h3>
+  <table>
+    <tr><th style="width:50px;">Day</th><th style="width:120px;">主题</th><th>核心行动</th><th style="width:50px;">分钟</th></tr>
+    <tr><td>1</td><td>建立基线</td><td>情绪打卡 + 记录睡眠 + 4-7-8 呼吸</td><td>10</td></tr>
+    <tr><td>2</td><td>觉察情绪节律</td><td>3 提醒感受情绪 + 记录高低时刻</td><td>10</td></tr>
+    <tr><td>3</td><td>呼吸练习巩固</td><td>2 组 4-7-8 呼吸 + 紧张时使用</td><td>15</td></tr>
+    <tr><td>4</td><td>睡眠节律锚定</td><td>放下手机时间 + 睡前 30 分钟仪式</td><td>15</td></tr>
+    <tr><td>5</td><td>小步行动</td><td>完成一件回避的小事（5 分钟内）</td><td>15</td></tr>
+    <tr><td>6</td><td>回顾与调整</td><td>回顾打卡数据 + 复制最好一天</td><td>20</td></tr>
+    <tr><td>7</td><td>稳定感锚定</td><td>3 件好事 + 选择下周习惯</td><td>15</td></tr>
+  </table>
+  <h3 class="subsection-title">持久化链路</h3>
+  <table>
+    <tr><th style="width:120px;">组件</th><th>说明</th><th style="width:50px;">状态</th></tr>
+    <tr><td>PlanEnrollment DB 模型</td><td>加入计划 + 每日完成 + 进度百分比</td><td><span class="tag tag-done">✓</span></td></tr>
+    <tr><td>plans/service.py</td><td>加入 / 查询进度 / 标记完成</td><td><span class="tag tag-done">✓</span></td></tr>
+    <tr><td>api/routes/plans.py</td><td>POST enroll / GET progress / POST complete-day</td><td><span class="tag tag-done">✓</span></td></tr>
+    <tr><td>templates.py</td><td>3 模板 × 每日行动 + 反思引导</td><td><span class="tag tag-done">✓</span></td></tr>
+  </table>
+</div>
+
+<!-- 七、A 层测试 -->
+<div class="section">
+  <h2 class="section-title">七、A 层 — 54 项正则测试</h2>
+  <table>
+    <tr><th style="width:30px;">#</th><th style="width:180px;">测试类</th><th>覆盖范围</th><th style="width:50px;">用例</th></tr>
+    <tr><td>1</td><td>TestStructureCompliance</td><td>三段式标签中英文验证</td><td>4</td></tr>
+    <tr><td>2</td><td>TestLanguageConsistency</td><td>语言锁：zh→zh, en→en, 混合, 数字, 量表名</td><td>7</td></tr>
+    <tr><td>3</td><td>TestRedlineCompliance</td><td>诊断 + 越界 + 质询 + 泄露 + 病理归因 + 体验否定 + 标签化</td><td>15</td></tr>
+    <tr><td>4</td><td>TestContextAwareFallback</td><td>fallback 英/中/自动 + crisis 行为</td><td>5</td></tr>
+    <tr><td>5</td><td>TestLanguageDetection</td><td>_has_chinese / _is_chinese 边界</td><td>5</td></tr>
+    <tr><td>6</td><td>TestCrisisStructureExemption</td><td>crisis 模式跳过三段式</td><td>3</td></tr>
+    <tr><td>7</td><td>其他（安全规则/节点/模板）</td><td>风险关键词 + 节点 IO + 模板渲染</td><td>15</td></tr>
+    <tr><td colspan="3"><strong>合计</strong></td><td><strong>54</strong></td></tr>
+  </table>
+</div>
+
+<!-- 八、交付文件 -->
+<div class="section page-break">
+  <h2 class="section-title">八、交付文件清单</h2>
+  <h3 class="subsection-title">新增文件（8 个）</h3>
+  <table>
+    <tr><th style="width:280px;">文件路径</th><th>说明</th></tr>
+    <tr><td><code>docs/technical/RELEASE_CHECKLIST.md</code></td><td>安全发布清单 — 6 大门禁</td></tr>
+    <tr><td><code>docs/technical/EVAL_GUIDE.md</code></td><td>评测体系完整文档（A/B/C 三层）</td></tr>
+    <tr><td><code>docs/technical/EVAL_REPORT.md</code></td><td>B 层 22 用例完整执行报告</td></tr>
+    <tr><td><code>docs/technical/EVAL_REPORT_JUDGE.md</code></td><td>C 层报告模板</td></tr>
+    <tr><td><code>src/psych_support_bot/evals/judge.py</code></td><td>LLM-as-judge 评测模块</td></tr>
+    <tr><td><code>tests/evals/test_judge.py</code></td><td>Judge 测试（5 + 1 smoke）</td></tr>
+    <tr><td><code>tests/unit/test_content_quality.py</code></td><td>A 层 54 项正则测试</td></tr>
+    <tr><td><code>dev/index.html</code></td><td>开发版前端（从根目录迁移）</td></tr>
+  </table>
+  <h3 class="subsection-title">修改文件（14 个）</h3>
+  <table>
+    <tr><th style="width:280px;">文件路径</th><th>变更内容</th></tr>
+    <tr><td><code>8 个 ai/nodes/*.py</code></td><td>添加 trace_span 包裹 + expected_language 透传</td></tr>
+    <tr><td><code>ai/safety/rules.py</code></td><td>新增中文危机关键词 + 耗竭关键词统一</td></tr>
+    <tr><td><code>domain/plans/templates.py</code></td><td>填充 3 个计划的每日具体行动与反思引导</td></tr>
+    <tr><td><code>domain/plans/service.py</code></td><td>新增加入计划 + 进度查询 + 每日完成</td></tr>
+    <tr><td><code>api/routes/plans.py</code></td><td>新增 POST enroll / GET progress / POST complete-day</td></tr>
+    <tr><td><code>evals/runner.py</code></td><td>增加 4 维度检查 + cases 扩展至 22 个</td></tr>
+    <tr><td><code>infra/config/settings.py</code></td><td>新增 judge_api_key / judge_base_url / judge_model</td></tr>
+    <tr><td><code>infra/db/models.py</code></td><td>新增 PlanEnrollment 表</td></tr>
+    <tr><td><code>tests/evals/cases.json</code></td><td>扩展至 22 个用例含 5 个中文场景</td></tr>
+    <tr><td><code>tests/evals/test_eval_runner.py</code></td><td>适配新增维度</td></tr>
+    <tr><td><code>pyproject.toml</code></td><td>新增 judge CLI 入口</td></tr>
+    <tr><td><code>.github/workflows/ci.yml</code></td><td>新增 evals job</td></tr>
+    <tr><td><code>PROJECT_PLAN.md</code></td><td>Phase 1.5 完成 + Phase 2 任务清单</td></tr>
+    <tr><td><code>PROJECT_PROGRESS.md</code></td><td>M5/M6 Done + P2 待办</td></tr>
+  </table>
+</div>
+
+<!-- 九、下一步 -->
+<div class="section">
+  <h2 class="section-title">九、下一步 — P2 待办</h2>
+  <table>
+    <tr><th style="width:30px;">#</th><th style="width:140px;">任务</th><th>说明</th></tr>
+    <tr><td>15</td><td>pgvector 语义检索</td><td>关键词检索在非安全路径已够用，语义检索可提升隐喻表达匹配</td></tr>
+    <tr><td>16</td><td>LLM 模型路由 + 降级</td><td>简单支持用轻量模型，复杂会诊用强模型；不可用时 fallback 到模板</td></tr>
+    <tr><td>17</td><td>知识库中文源补充</td><td>当前摄入源全为英文，补充中文权威来源</td></tr>
+    <tr><td>18</td><td>Redis/Celery 异步任务</td><td>异步摘要写入、定时周报生成</td></tr>
+    <tr><td>19</td><td>耗竭检测精细化</td><td>区分身体疲劳/情绪耗竭/关系疲惫/预期性焦虑</td></tr>
+    <tr><td>20</td><td>记忆检索语义化</td><td>超过 3 session 的深度对话会丢失早期上下文</td></tr>
+  </table>
+  <div class="callout"><strong>建议执行顺序：</strong>#16 模型路由 → #15 pgvector → #18 异步任务 → #17 中文知识库 → #19 耗竭精细化 → #20 记忆语义化</div>
+</div>
+
+<div class="footer">
+  Psych-Support-Bot — 阶段成果报告 | P0 + P1 全部完成 · P2 待启动 | 更新于 2026-08-26
+</div>
+
+</body>
+</html>

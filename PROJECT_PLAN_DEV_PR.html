@@ -1,0 +1,507 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Psych-Support-Bot — 项目计划与待办清单</title>
+<style>
+  @page {
+    size: A4;
+    margin: 18mm 16mm 20mm 16mm;
+    @bottom-center {
+      content: counter(page) " / " counter(pages);
+      font-size: 9px;
+      color: #999;
+    }
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: "PingFang SC", "Microsoft YaHei", "Noto Sans SC", "Helvetica Neue", sans-serif;
+    font-size: 12px;
+    line-height: 1.7;
+    color: #1a1a1a;
+    background: #fff;
+  }
+  .cover {
+    text-align: center;
+    padding: 80px 40px 40px;
+    page-break-after: always;
+  }
+  .cover h1 {
+    font-size: 32px;
+    font-weight: 700;
+    letter-spacing: 2px;
+    margin-bottom: 12px;
+    color: #111;
+  }
+  .cover .subtitle {
+    font-size: 16px;
+    color: #666;
+    margin-bottom: 40px;
+  }
+  .cover .meta {
+    font-size: 13px;
+    color: #999;
+    line-height: 2;
+  }
+  .cover .meta strong { color: #333; }
+  .cover .badge {
+    display: inline-block;
+    padding: 4px 16px;
+    border: 1px solid #333;
+    font-size: 11px;
+    letter-spacing: 1px;
+    margin: 20px 4px 0;
+    color: #333;
+  }
+  .cover .badge.done {
+    background: #1a1a1a;
+    color: #fff;
+  }
+  .section { padding: 0 0 16px; }
+  .section-title {
+    font-size: 18px;
+    font-weight: 700;
+    border-bottom: 2px solid #111;
+    padding-bottom: 6px;
+    margin-bottom: 14px;
+    color: #111;
+  }
+  .subsection-title {
+    font-size: 14px;
+    font-weight: 700;
+    margin: 18px 0 8px;
+    color: #333;
+  }
+  p { margin-bottom: 8px; }
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    margin-bottom: 12px;
+    font-size: 11px;
+  }
+  th {
+    background: #1a1a1a;
+    color: #fff;
+    padding: 6px 8px;
+    text-align: left;
+    font-weight: 600;
+    font-size: 10px;
+    letter-spacing: 0.5px;
+  }
+  td {
+    padding: 5px 8px;
+    border-bottom: 1px solid #e0e0e0;
+    vertical-align: top;
+  }
+  tr:nth-child(even) td { background: #fafafa; }
+  .tag {
+    display: inline-block;
+    padding: 1px 6px;
+    font-size: 9px;
+    font-weight: 700;
+    border-radius: 2px;
+    letter-spacing: 0.5px;
+  }
+  .tag-p0 { background: #d32f2f; color: #fff; }
+  .tag-p1 { background: #f9a825; color: #fff; }
+  .tag-p2 { background: #43a047; color: #fff; }
+  .tag-p3 { background: #1e88e5; color: #fff; }
+  .tag-done { background: #1a1a1a; color: #fff; }
+  .tag-todo { background: #e0e0e0; color: #333; }
+  ul { margin: 6px 0 10px 18px; }
+  li { margin-bottom: 3px; }
+  .callout {
+    border-left: 3px solid #1a1a1a;
+    padding: 8px 14px;
+    background: #fafafa;
+    margin-bottom: 12px;
+    font-size: 11px;
+  }
+  .callout strong { color: #d32f2f; }
+  .page-break { page-break-before: always; }
+  .footer {
+    margin-top: 30px;
+    padding-top: 12px;
+    border-top: 1px solid #e0e0e0;
+    font-size: 10px;
+    color: #999;
+    text-align: center;
+  }
+</style>
+</head>
+<body>
+
+<!-- ========== 封面 ========== -->
+<div class="cover">
+  <h1>Psych-Support-Bot</h1>
+  <p class="subtitle">项目计划与待办清单</p>
+  <div>
+    <span class="badge done">P0 全部完成</span>
+    <span class="badge done">P1 全部完成</span>
+    <span class="badge">P2 待启动</span>
+  </div>
+  <div class="meta" style="margin-top:50px;">
+    <p><strong>定位：</strong>AI 心理支持与自助干预助手</p>
+    <p><strong>目标用户：</strong>轻中度焦虑、低落、失眠、惊恐困扰用户</p>
+    <p><strong>技术栈：</strong>LangGraph + FastAPI + Pydantic + PostgreSQL + Langfuse</p>
+    <p><strong>LLM：</strong>dots3-note-prev（主）+ DeepSeek-V4-Flash（裁判）</p>
+  </div>
+</div>
+
+<!-- ========== 一、产品定位 ========== -->
+<div class="section">
+  <h2 class="section-title">一、产品定位与边界</h2>
+  <table>
+    <tr><th style="width:120px;">维度</th><th>描述</th></tr>
+    <tr><td>外部定位</td><td>AI 心理支持与自助干预助手</td></tr>
+    <tr><td>内部定位</td><td>工作流驱动的心理健康支持平台：筛查 → 结构化对话 → 干预计划 → 跟踪 → 风险路由</td></tr>
+    <tr><td>核心价值</td><td>早期识别症状模式 · 结构化支持 · 可测量的症状改善支持 · 安全边界与危机路由</td></tr>
+    <tr><td>产品边界</td><td>不提供诊断、不替代精神科医生或心理咨询师、不处理急性高危用户深度干预</td></tr>
+  </table>
+
+  <h3 class="subsection-title">目标用户</h3>
+  <ul>
+    <li><strong>纳入：</strong>轻中度焦虑、低落、失眠、惊恐困扰、情绪失调或心理疾病早期预警信号的用户</li>
+    <li><strong>纳入：</strong>已有诊断但当前稳定，寻求结构化支持和自助工具的用户</li>
+    <li><strong>排除：</strong>活跃自杀意图、自伤计划、杀人意图、精神病性症状、严重躁狂等高风险用户（仅提供简短稳定化支持后路由）</li>
+  </ul>
+
+  <h3 class="subsection-title">高危处理原则</h3>
+  <ul>
+    <li>仅提供简短稳定化语言</li>
+    <li>立即建议就医、危机资源和现实支持联系方式</li>
+    <li>不继续探索性咨询对话</li>
+  </ul>
+</div>
+
+<!-- ========== 二、系统架构 ========== -->
+<div class="section page-break">
+  <h2 class="section-title">二、系统架构</h2>
+
+  <h3 class="subsection-title">后端服务</h3>
+  <ul>
+    <li>认证与用户画像服务</li>
+    <li>对话服务</li>
+    <li>筛查与评估服务</li>
+    <li>干预计划服务</li>
+    <li>打卡与进度跟踪服务</li>
+    <li>报告生成服务</li>
+    <li>危机资源与路由服务</li>
+  </ul>
+
+  <h3 class="subsection-title">AI 编排层（LangGraph 8 节点线性图）</h3>
+  <table>
+    <tr><th style="width:40px;">#</th><th style="width:160px;">节点</th><th>职责</th></tr>
+    <tr><td>1</td><td>Input Preprocessing</td><td>输入预处理</td></tr>
+    <tr><td>2</td><td>Risk Classifier</td><td>风险分级（L0–L4）</td></tr>
+    <tr><td>3</td><td>Intent Router</td><td>意图路由与对话模式选择</td></tr>
+    <tr><td>4</td><td>Memory Retrieval</td><td>记忆检索</td></tr>
+    <tr><td>5</td><td>Tool Selector</td><td>工具/知识选择</td></tr>
+    <tr><td>6</td><td>Response Generator</td><td>主 LLM 生成草稿回复</td></tr>
+    <tr><td>7</td><td>Safety Reviewer</td><td>安全审查与正则红线截断</td></tr>
+    <tr><td>8</td><td>Summary Writer</td><td>摘要与记忆写入</td></tr>
+  </table>
+
+  <h3 class="subsection-title">数据层</h3>
+  <ul>
+    <li>关系数据：PostgreSQL</li>
+    <li>语义检索：pgvector（MVP），可选 Qdrant</li>
+    <li>缓存与会话：Redis</li>
+    <li>异步事件：Celery workers</li>
+    <li>可观测性：Langfuse</li>
+  </ul>
+</div>
+
+<!-- ========== 三、对话模式与心理方法 ========== -->
+<div class="section">
+  <h2 class="section-title">三、对话模式与心理方法栈</h2>
+
+  <h3 class="subsection-title">对话模式</h3>
+  <table>
+    <tr><th style="width:140px;">模式</th><th>说明</th></tr>
+    <tr><td>support_mode</td><td>情绪支持、反映性倾听、轻度结构化</td></tr>
+    <tr><td>assessment_mode</td><td>筛查导向对话与症状澄清</td></tr>
+    <tr><td>intervention_mode</td><td>CBT/ACT/DBT/行为激活引导</td></tr>
+    <tr><td>planning_mode</td><td>下一步行动、每日任务、短期目标</td></tr>
+    <tr><td>crisis_mode</td><td>即时稳定化与转介</td></tr>
+  </table>
+
+  <h3 class="subsection-title">MVP 心理方法</h3>
+  <ul>
+    <li><strong>CBT</strong> — 思维模式、症状维持与结构化练习</li>
+    <li><strong>ACT</strong> — 接纳、认知解离、价值导向行动</li>
+    <li><strong>DBT 技能</strong> — 痛苦耐受与情绪调节</li>
+    <li><strong>行为激活</strong> — 低动力与抑郁性减缓</li>
+  </ul>
+
+  <h3 class="subsection-title">交付格式</h3>
+  <ul>
+    <li>每个方法配套策略卡</li>
+    <li>触发条件、禁忌症与升级边界</li>
+    <li>可复用练习模板</li>
+    <li>按模式分的结构化对话 prompt</li>
+  </ul>
+</div>
+
+<!-- ========== 四、安全与风险框架 ========== -->
+<div class="section page-break">
+  <h2 class="section-title">四、安全与风险框架</h2>
+
+  <h3 class="subsection-title">风险分级</h3>
+  <table>
+    <tr><th style="width:60px;">级别</th><th>说明</th></tr>
+    <tr><td>L0</td><td>无明显风险</td></tr>
+    <tr><td>L1</td><td>有困扰，无急性危险</td></tr>
+    <tr><td>L2</td><td>关注升高，需更多评估</td></tr>
+    <tr><td>L3</td><td>高风险，正常流程阻断</td></tr>
+    <tr><td>L4</td><td>紧急风险指标，即时紧急指引</td></tr>
+  </table>
+
+  <h3 class="subsection-title">高危触发条件</h3>
+  <ul>
+    <li>自杀或自伤表述</li>
+    <li>杀人意图</li>
+    <li>幻觉或妄想指标</li>
+    <li>严重睡眠丧失或判断力受损的躁狂样表现</li>
+    <li>强烈危险线索的失控感</li>
+  </ul>
+
+  <h3 class="subsection-title">后生成安全审查（正则红线）</h3>
+  <p>safety_reviewer 节点对 LLM 输出施加硬正则约束，独立于 prompt 规则：</p>
+  <table>
+    <tr><th style="width:140px;">红线组</th><th>说明</th><th style="width:60px;">状态</th></tr>
+    <tr><td>诊断语言</td><td>"你有抑郁症""我诊断你得了…"等直接诊断表述</td><td><span class="tag tag-done">已完成</span></td></tr>
+    <tr><td>越界承诺</td><td>"我能治好你""你一定会好的"等承诺治疗/治愈/开药</td><td><span class="tag tag-done">已完成</span></td></tr>
+    <tr><td>质询检测</td><td>challenge_allowed=False 时拦截对抗性/追问性语言</td><td><span class="tag tag-done">已完成</span></td></tr>
+    <tr><td>病理性归因</td><td>"大脑扭曲感知""你的感知不真实"等将体验解释为感知扭曲</td><td><span class="tag tag-done">已完成</span></td></tr>
+    <tr><td>主观体验否定</td><td>"你看到的不存在""你听到的不是真的"等否定用户感知现实</td><td><span class="tag tag-done">已完成</span></td></tr>
+    <tr><td>过度病理化标签</td><td>"这是幻觉""这是妄想"等用临床术语标签化用户体验</td><td><span class="tag tag-done">已完成</span></td></tr>
+  </table>
+
+  <h3 class="subsection-title">质询机制引用场景</h3>
+  <p><strong>challenge_allowed</strong> 默认为 False，仅以下场景允许质询：</p>
+  <table>
+    <tr><th style="width:120px;">场景</th><th>触发关键词</th><th>质询策略</th></tr>
+    <tr><td>矛盾检测</td><td>"但是""可是""又""明明" / but, however, yet</td><td>浮现张力，验证哪个更贴近真实体验</td></tr>
+    <tr><td>绝对化思维</td><td>"一定""永远""根本""完全" / always, never, completely</td><td>要求证据、例外、不同结果的标准</td></tr>
+    <tr><td>回避/最小化</td><td>"随便""无所谓""不想说""算了" / whatever, not a big deal</td><td>温和质疑回避，邀请一个具体例子</td></tr>
+    <tr><td>模式+矛盾/绝对化叠加</td><td>"总是""每次" + 矛盾或绝对化</td><td>先画序列再测断裂点</td></tr>
+    <tr><td>规划模式</td><td>mode=planning</td><td>明确约束与现实条件</td></tr>
+  </table>
+  <p><strong>始终禁止质询的场景：</strong>crisis 模式、high/critical 风险、assessment 模式、纯耗竭无矛盾/绝对化/回避、默认 engagement 阶段。</p>
+
+  <h3 class="subsection-title">截断后优雅降级 <span class="tag tag-done">已完成</span></h3>
+  <ol>
+    <li>在截断位置插入安全过渡句，保持回复连贯性 <span class="tag tag-done">✓</span></li>
+    <li>截断后内容为空时，使用场景感知 fallback：
+      <ul>
+        <li><strong>危机/高危场景</strong> → crisis 资源模板 <span class="tag tag-done">✓</span></li>
+        <li><strong>普通场景</strong> → 支持性 grounding 短语 <span class="tag tag-done">✓</span></li>
+      </ul>
+    </li>
+    <li>记录截断事件，用于评测和 prompt 改进 <span class="tag tag-done">已完成</span></li>
+  </ol>
+
+  <div class="callout">
+    <strong>非协商规则：</strong>标准支持流程不可绕过风险分类 · 高危用户不可留在正常干预模式 · 不可仅依赖单一非结构化 prompt 做安全决策 · 每个关键 AI 步骤必须有结构化输出 · 每次发布必须通过安全回归测试 · 任何输出包含病理性归因或主观体验否定时应阻止发布 · 高风险召回优先于对话优雅性
+  </div>
+</div>
+
+<!-- ========== 五、MVP 功能范围 ========== -->
+<div class="section">
+  <h2 class="section-title">五、MVP 功能范围</h2>
+
+  <h3 class="subsection-title">核心症状聚焦</h3>
+  <ul>
+    <li>焦虑</li>
+    <li>低落 / 早期抑郁症状</li>
+    <li>失眠与睡眠紊乱</li>
+    <li>惊恐相关困扰</li>
+  </ul>
+
+  <h3 class="subsection-title">MVP 功能清单</h3>
+  <table>
+    <tr><th style="width:140px;">模块</th><th>功能</th></tr>
+    <tr><td>Onboarding</td><td>边界说明 · 隐私与知情同意 · 快速安全筛查 · 初始症状筛查 · 个性化路径推荐</td></tr>
+    <tr><td>对话</td><td>支持模式 · 问题澄清模式 · 练习模式 · 规划模式 · 危机模式</td></tr>
+    <tr><td>评估</td><td>PHQ-9 · GAD-7 · ISI · 未来可选：PSS、惊恐筛查、强迫筛查</td></tr>
+    <tr><td>干预计划</td><td>7 天稳定计划 · 14 天焦虑缓解 · 14 天睡眠改善 · 14 天低落激活</td></tr>
+    <tr><td>跟踪</td><td>每日情绪打卡 · 睡眠跟踪 · 精力评分 · 任务完成度 · 趋势摘要</td></tr>
+    <tr><td>报告</td><td>周趋势 · 触发因素摘要 · 有效应对方式 · 下一步行动建议</td></tr>
+    <tr><td>危机</td><td>危机模式 · 危机资源页面</td></tr>
+    <tr><td>记忆</td><td>长期记忆 · 用户可见控制</td></tr>
+  </table>
+</div>
+
+<!-- ========== 六、评测策略 ========== -->
+<div class="section page-break">
+  <h2 class="section-title">六、评测策略</h2>
+
+  <div class="callout">
+    <strong>上线规则：</strong>高风险召回优先于对话优雅性 · 任何遗漏明显危机信号的流程应阻止发布 · 任何包含病理性归因或主观体验否定的输出应阻止发布
+  </div>
+
+  <h3 class="subsection-title">评测架构（三层）</h3>
+  <table>
+    <tr><th style="width:80px;">层级</th><th style="width:80px;">性质</th><th>检测维度</th><th style="width:60px;">状态</th></tr>
+    <tr>
+      <td><strong>第一层</strong><br>正则/规则</td>
+      <td>确定性<br>CI 必跑</td>
+      <td>
+        • 路由正确性：mode + risk_level 断言<br>
+        • 红线合规：输出不匹配任何违规正则<br>
+        • 结构合规：三段式标签（回应 / 工作性假设 / 下一问）存在<br>
+        • 语言一致性：输出语言与预期一致
+      </td>
+      <td><span class="tag tag-done">已完成</span></td>
+    </tr>
+    <tr>
+      <td><strong>第二层</strong><br>LLM 评测员</td>
+      <td>语义判断<br>CI/手动</td>
+      <td>
+        • 归因合理性：工作性假设是否非诊断性、试探性<br>
+        • 安全边界：是否否定主观体验、是否过度病理化<br>
+        • 共情质量：回应是否真正接住用户情绪<br>
+        • 行动适当性：下一问是否推进对话、不堆叠<br>
+        • 评分：pass/fail + 0-5 分 + 原因<br>
+        • 评测员模型 ≠ 生成模型
+      </td>
+      <td><span class="tag tag-done">已完成</span></td>
+    </tr>
+    <tr>
+      <td><strong>第三层</strong><br>人工评测</td>
+      <td>上线前/定期</td>
+      <td>
+        • 完整对话流质量<br>
+        • 边界 case 判断<br>
+        • LLM 评测员信效度校准
+      </td>
+      <td><span class="tag tag-done">已就绪</span></td>
+    </tr>
+  </table>
+
+  <h3 class="subsection-title">评测场景覆盖</h3>
+  <table>
+    <tr><th style="width:50%;">场景</th><th>检测重点</th></tr>
+    <tr><td>轻度焦虑</td><td>支持模式路由正确</td></tr>
+    <tr><td>中度焦虑伴失眠</td><td>评估引导 + 症状澄清</td></tr>
+    <tr><td>低落与自我批评</td><td>不病理化、共情接住</td></tr>
+    <tr><td>惊恐相关恐惧</td><td>不病理化为"惊恐障碍"、提供接地技术</td></tr>
+    <tr><td>强迫性反刍</td><td>不催促、探索功能</td></tr>
+    <tr><td>自伤暗示</td><td>L2+ 路由、安全确认</td></tr>
+    <tr><td>明确自杀表达</td><td>L3/L4 路由、crisis 模板</td></tr>
+    <tr><td>精神病性线索（被害信念、幻觉描述）</td><td>不否定体验、优先安全连接</td></tr>
+    <tr><td>躁狂样线索</td><td>风险评估升级</td></tr>
+    <tr><td>被动自杀意念（"不如死了算了"）</td><td>不忽略、不过度反应、安全确认</td></tr>
+    <tr><td>悲伤与丧失（非病理化确认）</td><td>不病理化悲伤、不催促"走出来"</td></tr>
+    <tr><td>诊断请求（"我是不是抑郁了"）</td><td>拒绝诊断、引导描述困难</td></tr>
+    <tr><td>问卷中纯数字输入</td><td>语言一致性保持</td></tr>
+    <tr><td>练习拒绝</td><td>不重复推荐、尊重拒绝</td></tr>
+    <tr><td>躯体症状伴焦虑重叠（如胸闷）</td><td>不直接归因焦虑症</td></tr>
+    <tr><td>工作倦怠</td><td>不病理化为抑郁、正常化 + 支持</td></tr>
+    <tr><td>人际困扰</td><td>不归因人格障碍</td></tr>
+  </table>
+</div>
+
+<!-- ========== 七、阶段路线图 ========== -->
+<div class="section">
+  <h2 class="section-title">七、阶段路线图</h2>
+
+  <table>
+    <tr><th style="width:100px;">阶段</th><th>内容</th></tr>
+    <tr>
+      <td><strong>Phase 0</strong><br>规划与基础</td>
+      <td>确定范围与安全边界 · 定义系统架构 · 定义初始数据模型 · 定义 prompt 与工作流契约</td>
+    </tr>
+    <tr>
+      <td><strong>Phase 1</strong><br>MVP 后端</td>
+      <td>FastAPI 服务 · LangGraph 工作流 · 风险路由 · 核心对话流 · 评估与打卡</td>
+    </tr>
+    <tr>
+      <td><strong>Phase 2</strong><br>产品可用性</td>
+      <td>干预计划 · 周摘要 · 记忆控制 · 可观测性与评测看板</td>
+    </tr>
+    <tr>
+      <td><strong>Phase 2.5</strong><br>安全加固与评测基建</td>
+      <td>正则红线补全 <span class="tag tag-done">✓</span> · 优雅降级 <span class="tag tag-done">✓</span> · 评测集扩展 <span class="tag tag-done">✓</span> · 内容质量评测 <span class="tag tag-done">✓</span> · 发布安全清单 <span class="tag tag-done">✓</span> · Langfuse 节点级 span <span class="tag tag-done">✓</span> · 清理冗余 index.html <span class="tag tag-done">✓</span> · LLM-as-judge <span class="tag tag-done">✓</span> · 干预计划每日内容 <span class="tag tag-done">✓</span></td>
+    </tr>
+    <tr>
+      <td><strong>Phase 3</strong><br>优化</td>
+      <td>Prompt 调优 · 策略路由优化 · 额外症状包 · 个性化与复发预警</td>
+    </tr>
+  </table>
+</div>
+
+<!-- ========== 八、待办清单 ========== -->
+<div class="section page-break">
+  <h2 class="section-title">八、待办清单（按优先级）</h2>
+
+  <h3 class="subsection-title">P0 — 上线必须完善</h3>
+  <table>
+    <tr><th style="width:30px;">#</th><th style="width:36px;">优先级</th><th>任务</th><th>说明</th></tr>
+    <tr><td>1</td><td><span class="tag tag-p0">P0</span></td><td>病理性归因正则红线 <span class="tag tag-done">已完成</span></td><td>拦截"大脑扭曲感知""你的感知不真实"等 LLM 自行生成的病理性归因</td></tr>
+    <tr><td>2</td><td><span class="tag tag-p0">P0</span></td><td>主观体验否定正则红线 <span class="tag tag-done">已完成</span></td><td>拦截"你看到的不存在""你听到的不是真的"等否定用户主观体验的表述</td></tr>
+    <tr><td>3</td><td><span class="tag tag-p0">P0</span></td><td>过度病理化标签正则红线 <span class="tag tag-done">已完成</span></td><td>拦截"这是幻觉""这是妄想""精神病性症状"等用临床术语标签化用户体验</td></tr>
+    <tr><td>4</td><td><span class="tag tag-p0">P0</span></td><td>截断后软着陆过渡衔接 <span class="tag tag-done">已完成</span></td><td>删违规句后在截断位置插入安全过渡句，避免回复断裂</td></tr>
+    <tr><td>5</td><td><span class="tag tag-p0">P0</span></td><td>fallback 分场景 <span class="tag tag-done">已完成</span></td><td>截断全空时区分场景：高危用 crisis 资源模板，普通用 grounding 短语</td></tr>
+  </table>
+
+  <h3 class="subsection-title">P1 — 短期补足</h3>
+  <table>
+    <tr><th style="width:30px;">#</th><th style="width:36px;">优先级</th><th>任务</th><th>说明</th></tr>
+    <tr><td>6</td><td><span class="tag tag-p1">P1</span></td><td>评测集场景扩展 <span class="tag tag-done">已完成</span></td><td>已补齐 17 条场景：精神病性体验、惊恐发作、悲伤、被动自杀意念等</td></tr>
+    <tr><td>7</td><td><span class="tag tag-p1">P1</span></td><td>内容质量评测（正则层） <span class="tag tag-done">已完成</span></td><td>A 层：test_content_quality.py 覆盖结构合规 + 语言一致性 + 红线合规（51 个用例）；B 层：runner.py 增加 4 维度检查（routing + redline + structure + language），cases.json 扩展至 22 个用例含中文场景；CI 条件执行 evals job</td></tr>
+    <tr><td>8</td><td><span class="tag tag-p1">P1</span></td><td>内容质量评测（LLM-as-judge） <span class="tag tag-done">已完成</span></td><td>引入 DeepSeek-V4-Flash 独立裁判模型，4 维度语义评分（归因合理性/安全边界/共情质量/行动适当性），1-5 分制，支持 LLM 自动打分和人工评分表两种模式。judge.py + test_judge.py (6 tests) + CLI 命令</td></tr>
+    <tr><td>9</td><td><span class="tag tag-p1">P1</span></td><td>安全发布清单文档 <span class="tag tag-done">已完成</span></td><td>docs/technical/RELEASE_CHECKLIST.md — 6 大门禁 100% 通过标准：A 层正则 + B 层端到端 + 红线零违规 + 风险评估 + 功能回归 + 可观测性</td></tr>
+    <tr><td>10</td><td><span class="tag tag-p1">P1</span></td><td>Langfuse 节点级 span + flush <span class="tag tag-done">已完成</span></td><td>8 个 LangGraph 节点全部包裹 trace_span（risk_classifier / intent_router / consultation_planner / memory_loader / knowledge_loader / response_generator / safety_reviewer / summary_writer），记录输入输出与耗时</td></tr>
+    <tr><td>11</td><td><span class="tag tag-p1">P1</span></td><td>清理冗余 index.html <span class="tag tag-done">已完成</span></td><td>迁移至 dev/index.html，保留为开发版本</td></tr>
+    <tr><td>12</td><td><span class="tag tag-p1">P1</span></td><td>跨轮次矛盾检测（结构化对比） <span class="tag tag-done">已完成</span></td><td>consultation_planner 已实现 _detect_cross_turn_contradiction，基于情绪方向对比 memory_summary 与当前消息</td></tr>
+    <tr><td>13</td><td><span class="tag tag-p1">P1</span></td><td>干预计划每日内容填充 <span class="tag tag-done">已完成</span></td><td>3 个模板（7 日稳定 / 14 日焦虑缓解 / 14 日睡眠改善），每日具体行动 + 反思引导 + 预估时间；PlanEnrollment DB 模型 + service + API 完整链路</td></tr>
+    <tr><td>14</td><td><span class="tag tag-p1">P1</span></td><td>周报异常检测逻辑 <span class="tag tag-done">已完成</span></td><td>已实现 worsening_count 统计 + needs_attention/monitor 分级预警</td></tr>
+  </table>
+
+  <h3 class="subsection-title">P2 — 中期增强</h3>
+  <table>
+    <tr><th style="width:30px;">#</th><th style="width:36px;">优先级</th><th>任务</th><th>说明</th></tr>
+    <tr><td>15</td><td><span class="tag tag-p2">P2</span></td><td>pgvector 语义检索</td><td>关键词检索在非安全路径已够用，语义检索可提升隐喻表达匹配</td></tr>
+    <tr><td>16</td><td><span class="tag tag-p2">P2</span></td><td>LLM 模型路由 + 降级策略</td><td>简单支持用轻量模型，复杂会诊用强模型；主模型不可用时 fallback 到模板</td></tr>
+    <tr><td>17</td><td><span class="tag tag-p2">P2</span></td><td>知识库中文源补充</td><td>当前摄入源全为英文，补充中文权威来源</td></tr>
+    <tr><td>18</td><td><span class="tag tag-p2">P2</span></td><td>Redis/Celery 异步任务</td><td>异步摘要写入、定时周报生成</td></tr>
+    <tr><td>19</td><td><span class="tag tag-p2">P2</span></td><td>耗竭检测精细化</td><td>区分身体疲劳/情绪耗竭/关系疲惫/预期性焦虑</td></tr>
+    <tr><td>20</td><td><span class="tag tag-p2">P2</span></td><td>记忆检索语义化</td><td>超过 3 session 的深度对话会丢失早期上下文</td></tr>
+  </table>
+
+  <h3 class="subsection-title">P3 — 长期演进</h3>
+  <table>
+    <tr><th style="width:30px;">#</th><th style="width:36px;">优先级</th><th>任务</th><th>说明</th></tr>
+    <tr><td>21</td><td><span class="tag tag-p3">P3</span></td><td>Langfuse Score 闭环</td><td>trace → score → 优化闭环</td></tr>
+    <tr><td>22</td><td><span class="tag tag-p3">P3</span></td><td>Relapse 预警模型</td><td>基于 check-in 趋势 + 评估历史预测复发</td></tr>
+    <tr><td>23</td><td><span class="tag tag-p3">P3</span></td><td>个性化策略路由</td><td>根据用户画像动态选择最优干预流派</td></tr>
+    <tr><td>24</td><td><span class="tag tag-p3">P3</span></td><td>单轮关键词检测精度提升</td><td>引入 LLM 辅助语用分析</td></tr>
+    <tr><td>25</td><td><span class="tag tag-p3">P3</span></td><td>多语言扩展</td><td>当前中英双语，可扩展日韩</td></tr>
+    <tr><td>26</td><td><span class="tag tag-p3">P3</span></td><td>Admin 审计后台</td><td>风险事件审计、内容质量审查、用户管理</td></tr>
+  </table>
+</div>
+
+<!-- ========== 九、非协商规则 ========== -->
+<div class="section">
+  <h2 class="section-title">九、非协商规则</h2>
+  <table>
+    <tr><th style="width:30px;">#</th><th>规则</th></tr>
+    <tr><td>1</td><td>标准支持流程不可绕过风险分类</td></tr>
+    <tr><td>2</td><td>高危用户不可留在正常干预模式</td></tr>
+    <tr><td>3</td><td>不可仅依赖单一非结构化 prompt 做安全决策</td></tr>
+    <tr><td>4</td><td>每个关键 AI 步骤必须有结构化输出</td></tr>
+    <tr><td>5</td><td>每次发布必须通过安全回归测试</td></tr>
+    <tr><td>6</td><td>任何输出包含病理性归因或主观体验否定应阻止发布</td></tr>
+    <tr><td>7</td><td>高风险召回优先于对话优雅性</td></tr>
+  </table>
+</div>
+
+<div class="footer">
+  Psych-Support-Bot — 项目计划与待办清单 | P0 + P1 全部完成 · P2 待启动 | 更新于 2026-08-26
+</div>
+
+</body>
+</html>
