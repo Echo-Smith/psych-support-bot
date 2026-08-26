@@ -2,7 +2,7 @@
 
 ## Current Status
 
-- Project state: MVP backend foundation actively implemented
+- Project state: P1 complete, P2 (product usability) ready to start
 - Delivery focus: AI framework foundation and execution-ready roadmap
 - Recommended stack locked for first implementation:
   - `FastAPI`
@@ -34,8 +34,9 @@
 | M2 | Implement AI workflow skeleton | Done | LangGraph flow with risk and routing nodes |
 | M3 | Implement persistence layer | Done | DB models, migrations, repository layer |
 | M4 | Implement core domain APIs | Done | Conversation, assessment, check-in APIs |
-| M5 | Implement safety and observability | In progress | Risk logs, tracing, evaluation harness |
-| M6 | MVP integration complete | In progress | End-to-end support flow |
+| M5 | Implement safety and observability | Done | Risk logs, Langfuse trace_span on 8 nodes, A/B/C 3-layer eval harness |
+| M6 | MVP integration complete | Done | End-to-end support flow, intervention plans, release checklist |
+| M7 | Phase 2: Product usability | Not started | pgvector, model routing, async tasks, Chinese KB |
 
 ## Workstreams
 
@@ -75,8 +76,8 @@
 | Task | Priority | Status | Notes |
 | --- | --- | --- | --- |
 | Define risk levels and contracts | High | Done | Low/elevated/high/critical scaffold added |
-| Create risk regression dataset | High | In progress | Rule-based safety tests added |
-| Build evaluation runner | High | In progress | Safety regression tests added via pytest |
+| Create risk regression dataset | High | Done | 22 cases in cases.json covering 9 scenario types, Chinese + English |
+| Build evaluation runner | High | Done | B-layer runner with 4-dimension checks; A-layer 54 regex tests; C-layer LLM-as-judge |
 | Add Langfuse tracing | Medium | Done | Node-level trace_span instrumentation on all 8 nodes |
 | Create release safety checklist | High | Done | `docs/technical/RELEASE_CHECKLIST.md` with 6-gate strict standard |
 | Add LLM-as-judge evaluation layer | High | Done | C-layer DeepSeek-V4-Flash judge with 4-dimension scoring |
@@ -114,23 +115,14 @@
 - Basic tracing is visible in Langfuse
 - Offline evaluation command can run predefined safety cases
 
-## Immediate Next Actions
+## Immediate Next Actions (P2)
 
-- [x] Create repository folders and initial backend app
-- [x] Add Python project config and dependencies
-- [x] Add base settings module
-- [x] Add AI schema contracts
-- [x] Add first workflow graph
-- [x] Add Alembic migration setup
-- [x] Replace scaffolded response generator with LLM-backed adapter
-- [x] Add persistent session/message storage
-- [x] Add risk evaluation dataset and runner
-- [x] Add full Langfuse trace instrumentation on request lifecycle
-- [x] Create release safety checklist (`docs/technical/RELEASE_CHECKLIST.md`)
-- [x] Add LLM-as-judge evaluation layer (`src/psych_support_bot/evals/judge.py`)
-- [x] Fill intervention plan daily content (`src/psych_support_bot/domain/plans/templates.py`)
-- [ ] Add richer memory retrieval
-- [ ] Add vector memory and knowledge retrieval layer
+- [ ] pgvector semantic retrieval — improve metaphor expression matching (#15)
+- [ ] LLM model routing + fallback strategy — lightweight model for simple support, strong model for complex consultation (#16)
+- [ ] Knowledge base Chinese sources — supplement authoritative Chinese psychology content (#17)
+- [ ] Redis/Celery async tasks — async summary write, scheduled weekly report generation (#18)
+- [ ] Exhaustion subtype differentiation — physical/emotional/relationship/anticipatory (#19)
+- [ ] Semantic memory retrieval — prevent context loss beyond 3 sessions (#20)
 
 ## Progress Log
 

@@ -354,14 +354,14 @@ psych-bot/
 
 ## 15. Phase Roadmap
 
-### Phase 0: Planning and foundation
+### Phase 0: Planning and foundation (Done)
 
 - Finalize scope and safety boundary
 - Define system architecture
 - Define initial data model
 - Define prompt and workflow contracts
 
-### Phase 1: MVP backend
+### Phase 1: MVP backend (Done)
 
 - Build FastAPI service
 - Build LangGraph workflow
@@ -369,12 +369,32 @@ psych-bot/
 - Implement core conversation flow
 - Implement assessments and check-ins
 
-### Phase 2: Product usability
+### Phase 1.5: Safety hardening and eval infrastructure (Done)
 
-- Add intervention plans
-- Add weekly summaries
-- Add memory controls
-- Add observability and evaluation dashboard support
+- Pathological attribution regex red lines (P0)
+- Subjective experience denial regex red lines (P0)
+- Over-pathologization label regex red lines (P0)
+- Graceful degradation after truncation (P0)
+- Context-aware fallback (P0)
+- Eval case expansion to 22 scenarios incl. Chinese (P1)
+- Content quality eval — A-layer 54 regex tests (P1)
+- Content quality eval — B-layer 22 end-to-end LLM cases (P1)
+- Content quality eval — C-layer LLM-as-judge with DeepSeek-V4-Flash (P1)
+- Release safety checklist — 6-gate 100% standard (P1)
+- Langfuse node-level trace_span on all 8 nodes (P1)
+- Cross-turn contradiction detection (P1)
+- Intervention plan daily content — 3 templates (P1)
+- Weekly report anomaly detection (P1)
+- Cleanup redundant index.html → dev/ (P1)
+
+### Phase 2: Product usability (Next)
+
+- pgvector semantic retrieval for metaphor matching
+- LLM model routing + fallback strategy
+- Knowledge base Chinese sources
+- Redis/Celery async tasks (summary write, scheduled weekly reports)
+- Exhaustion subtype differentiation
+- Semantic memory retrieval for long conversations
 
 ### Phase 3: Optimization
 
@@ -382,19 +402,40 @@ psych-bot/
 - Strategy routing optimization
 - Additional symptom packs
 - Better personalization and relapse warnings
+- Langfuse Score closed-loop optimization
+- Relapse prediction model
+- Personalized strategy routing
+- Multi-language expansion
+- Admin audit dashboard
 
 ## 16. Immediate Build Priorities
 
-1. Initialize repository structure
-2. Set up FastAPI app and configuration management
-3. Define Pydantic schemas for risk, routing, memory, and responses
-4. Build first LangGraph conversation workflow
-5. Implement risk classifier contract and placeholder adapters
-6. Add PostgreSQL models and migrations
-7. Add Redis and Celery integration
-8. Add tracing with Langfuse
-9. Create evaluation dataset format
-10. Build first end-to-end conversation API
+### Completed (Phase 0 + 1 + 1.5)
+
+1. ~~Initialize repository structure~~
+2. ~~Set up FastAPI app and configuration management~~
+3. ~~Define Pydantic schemas for risk, routing, memory, and responses~~
+4. ~~Build first LangGraph conversation workflow~~
+5. ~~Implement risk classifier contract and placeholder adapters~~
+6. ~~Add PostgreSQL models and migrations~~
+7. ~~Add Redis and Celery integration~~
+8. ~~Add tracing with Langfuse (node-level trace_span on all 8 nodes)~~
+9. ~~Create evaluation dataset format (A/B/C three-layer)~~
+10. ~~Build first end-to-end conversation API~~
+11. ~~Safety hardening: pathological attribution / experience denial / over-pathologization regex red lines~~
+12. ~~Graceful degradation + context-aware fallback~~
+13. ~~Release safety checklist (6-gate 100% standard)~~
+14. ~~LLM-as-judge C-layer evaluation (DeepSeek-V4-Flash, 4-dimension scoring)~~
+15. ~~Intervention plan daily content (3 × 7-day templates + PlanEnrollment DB model)~~
+
+### Next (Phase 2)
+
+16. pgvector semantic retrieval — improve metaphor expression matching
+17. LLM model routing + fallback — lightweight model for simple support, strong model for complex consultation
+18. Knowledge base Chinese sources — supplement authoritative Chinese psychology content
+19. Redis/Celery async tasks — async summary write, scheduled weekly report generation
+20. Exhaustion subtype differentiation — physical fatigue / emotional exhaustion / relationship fatigue / anticipatory anxiety
+21. Semantic memory retrieval — prevent context loss beyond 3 sessions
 
 ## 17. Non-Negotiable Rules for Future Work
 
