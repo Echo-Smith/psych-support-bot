@@ -1,3 +1,5 @@
+import re
+
 from psych_support_bot.ai.schemas.messages import RiskResult
 from psych_support_bot.ai.utils.text_matching import (
     _match_any,
@@ -82,6 +84,33 @@ ELEVATED_RISK_KEYWORDS = [
     "太累了",
     "撑不下去",
 ]
+
+# C2: Regex patterns for Chinese elevated-risk synonym variants.
+# These cover expressions that pure substring matching in ELEVATED_RISK_KEYWORDS
+# would miss, such as 没意思 (vs 没意义), 没用, 没价值, 没动力, etc.
+# Each pattern is designed to match the core semantic concept without
+# false-positiving on unrelated uses (e.g. 不是这个意思 → NOT a match).
+ELEVATED_RISK_REGEX_PATTERNS_ZH: list[str] = [
+    # Worthlessness / meaninglessness: 没/无 + 意思/意义/价值/用/劲
+    r"没(有什么)?(意思|意义|价值|用|劲)",
+    r"无(意思|意义|价值|动力)",
+    r"没什么(意思|意义|价值|用|干劲|动力)",
+    r"活着没(意思|意义|价值|用)",
+    r"觉得没(意思|意义|价值|用)",
+    # Hopelessness variants
+    r"没(有什么)?希望",
+    r"没(有什么)?盼头",
+    r"看不到希望",
+    r"没(有什么)?动力",
+    r"没(有什么)?干劲",
+    # Exhaustion variants beyond 太累了
+    r"累(得)?不行",
+    r"累(到)?不想动",
+    r"身心俱疲",
+    r"精疲力竭",
+]
+
+_ELEVATED_RISK_REGEX_ZH = [re.compile(p, re.IGNORECASE) for p in ELEVATED_RISK_REGEX_PATTERNS_ZH]
 
 CRITICAL_RISK_KEYWORDS = [
     "tonight",
@@ -316,7 +345,9 @@ def classify_message_risk(text: str) -> RiskResult:
             needs_crisis_mode=True,
             reason="High-risk safety language detected.",
         )
-    if _match_any(normalized, compact, ELEVATED_RISK_KEYWORDS):
+    if _match_any(normalized, compact, ELEVATED_RISK_KEYWORDS) or any(
+        p.search(normalized) for p in _ELEVATED_RISK_REGEX_ZH
+    ):
         return RiskResult(
             risk_level="elevated",
             risk_types=["distress"],

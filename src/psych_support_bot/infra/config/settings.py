@@ -24,6 +24,10 @@ class Settings(BaseSettings):
     langfuse_host: str = Field(default="https://cloud.langfuse.com", alias="LANGFUSE_HOST")
     default_conversation_mode: str = "support"
     app_debug: bool = False
+    # LLM-as-judge model (separate model for evaluation scoring)
+    judge_api_key: str = Field(default="", alias="JUDGE_API_KEY")
+    judge_base_url: str = Field(default="", alias="JUDGE_BASE_URL")
+    judge_model: str = Field(default="DeepSeek-V4-Flash", alias="JUDGE_MODEL")
 
     @model_validator(mode="after")
     def apply_dashscope_fallbacks(self) -> "Settings":

@@ -77,8 +77,10 @@
 | Define risk levels and contracts | High | Done | Low/elevated/high/critical scaffold added |
 | Create risk regression dataset | High | In progress | Rule-based safety tests added |
 | Build evaluation runner | High | In progress | Safety regression tests added via pytest |
-| Add Langfuse tracing | Medium | In progress | Config helper added; full tracing still pending |
-| Create release safety checklist | High | Not started | Required before launch |
+| Add Langfuse tracing | Medium | Done | Node-level trace_span instrumentation on all 8 nodes |
+| Create release safety checklist | High | Done | `docs/technical/RELEASE_CHECKLIST.md` with 6-gate strict standard |
+| Add LLM-as-judge evaluation layer | High | Done | C-layer DeepSeek-V4-Flash judge with 4-dimension scoring |
+| Fill intervention plan daily content | High | Done | 3 plan templates with daily actions and reflection prompts |
 
 ### 5. Product Logic
 
@@ -123,8 +125,11 @@
 - [x] Replace scaffolded response generator with LLM-backed adapter
 - [x] Add persistent session/message storage
 - [x] Add risk evaluation dataset and runner
+- [x] Add full Langfuse trace instrumentation on request lifecycle
+- [x] Create release safety checklist (`docs/technical/RELEASE_CHECKLIST.md`)
+- [x] Add LLM-as-judge evaluation layer (`src/psych_support_bot/evals/judge.py`)
+- [x] Fill intervention plan daily content (`src/psych_support_bot/domain/plans/templates.py`)
 - [ ] Add richer memory retrieval
-- [ ] Add full Langfuse trace instrumentation on request lifecycle
 - [ ] Add vector memory and knowledge retrieval layer
 
 ## Progress Log
@@ -147,3 +152,25 @@
 - Added Alembic baseline migration files
 - Added LLM-backed response generation with safe fallback
 - Added API and risk evaluation tests
+
+### 2026-08-26 (P1 Complete)
+
+- Moved `index.html` to `dev/index.html` (development version retained)
+- Created `docs/technical/RELEASE_CHECKLIST.md` — strict 6-gate release standard (100% pass required)
+- Added Langfuse `trace_span` instrumentation on all 8 LangGraph nodes (risk_classifier, intent_router, consultation_planner, memory_loader, knowledge_loader, response_generator, safety_reviewer, summary_writer)
+- Created `src/psych_support_bot/evals/judge.py` — LLM-as-judge C-layer evaluation:
+  - 4 dimensions: attribution_safety, boundary, empathy, action_appropriateness (1-5 scale)
+  - Judge model: DeepSeek-V4-Flash via dedicated API endpoint
+  - `score_reply()` — single-case judge scoring with JSON output parsing
+  - `run_judge_eval()` — batch judge over B-layer results
+  - `export_human_judge_table()` — Markdown scorecard for manual review
+  - Langfuse trace span `judge.llm_invoke` for observability
+- Created `tests/evals/test_judge.py` — 5 basic tests + 1 smoke test (all passing)
+- Updated `EVAL_GUIDE.md` with C-layer documentation (positioning, 4 dimensions, judge config, execution flow, relationship to B-layer)
+- Created `EVAL_REPORT_JUDGE.md` — C-layer evaluation report template (pending first run)
+- Filled 3 intervention plan templates in `domain/plans/templates.py`:
+  - `anxiety_management_7day` — CBT-based daily actions + reflection prompts
+  - `sleep_hygiene_7day` — ISI-aligned daily sleep routines
+  - `mood_monitoring_7day` — PHQ-9 tracking + behavioral activation
+- Implemented `PlanEnrollment` DB model + plans service + API routes (enrollment, progress query, daily completion toggle)
+- All 54 unit tests + 6 judge tests passing; lint clean

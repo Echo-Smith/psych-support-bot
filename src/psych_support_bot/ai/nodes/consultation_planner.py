@@ -10,6 +10,7 @@ from psych_support_bot.ai.utils.text_matching import (
     _contains_keyword,
     _normalize_text,
 )
+from psych_support_bot.infra.telemetry.tracing import trace_span, update_span_output
 
 logger = logging.getLogger(__name__)
 
@@ -193,34 +194,52 @@ def _detect_cross_turn_contradiction(memory_summary: str, current_message: str) 
 
 
 def plan_consultation(state: GraphState) -> GraphState:
-    required = should_trigger_multidisciplinary_consultation(
-        user_message=state["user_message"],
-        mode=state["mode"],
-        risk_level=state["risk_result"].risk_level,
-    )
-    state["consultation_required"] = required
-    state["consultation_agents"] = consultation_agent_labels() if required else []
-    state["consultation_notes"] = ""
-    state["consultation_opinions"] = []
-    interview_process = determine_interview_process(
-        user_message=state["user_message"],
-        mode=state["mode"],
-        risk_level=state["risk_result"].risk_level,
-    )
-    state["interview_stage"] = str(interview_process["interview_stage"])
-    state["question_strategy"] = str(interview_process["question_strategy"])
-    state["challenge_allowed"] = bool(interview_process["challenge_allowed"])
+    with trace_span(
+        "node.consultation_planner",
+        input={
+            "user_message": state["user_message"],
+            "mode": state["mode"],
+            "risk_level": state["risk_result"].risk_level,
+            "memory_summary": state.get("memory_summary", ""),
+        },
+    ) as obs:
+        required = should_trigger_multidisciplinary_consultation(
+            user_message=state["user_message"],
+            mode=state["mode"],
+            risk_level=state["risk_result"].risk_level,
+        )
+        state["consultation_required"] = required
+        state["consultation_agents"] = consultation_agent_labels() if required else []
+        state["consultation_notes"] = ""
+        state["consultation_opinions"] = []
+        interview_process = determine_interview_process(
+            user_message=state["user_message"],
+            mode=state["mode"],
+            risk_level=state["risk_result"].risk_level,
+        )
+        state["interview_stage"] = str(interview_process["interview_stage"])
+        state["question_strategy"] = str(interview_process["question_strategy"])
+        state["challenge_allowed"] = bool(interview_process["challenge_allowed"])
 
-    loop_hint = str(interview_process["loop_hint"])
+        loop_hint = str(interview_process["loop_hint"])
 
-    # B2.1: Cross-turn contradiction detection
-    # If the user's emotional direction has shifted between turns,
-    # prepend a contradiction hint to the loop_hint so the LLM can
-    # gently surface the tension rather than ignoring the shift.
-    contradiction_hint = _detect_cross_turn_contradiction(state.get("memory_summary", ""), state["user_message"])
-    if contradiction_hint:
-        loop_hint = contradiction_hint + " " + loop_hint
-        logger.info("Cross-turn contradiction detected; loop_hint updated.")
+        # B2.1: Cross-turn contradiction detection
+        # If the user's emotional direction has shifted between turns,
+        # prepend a contradiction hint to the loop_hint so the LLM can
+        # gently surface the tension rather than ignoring the shift.
+        contradiction_hint = _detect_cross_turn_contradiction(state.get("memory_summary", ""), state["user_message"])
+        if contradiction_hint:
+            loop_hint = contradiction_hint + " " + loop_hint
+            logger.info("Cross-turn contradiction detected; loop_hint updated.")
 
-    state["loop_hint"] = loop_hint
+        state["loop_hint"] = loop_hint
+
+        update_span_output(obs, {
+            "consultation_required": required,
+            "consultation_agents": state["consultation_agents"],
+            "interview_stage": state["interview_stage"],
+            "question_strategy": state["question_strategy"],
+            "challenge_allowed": state["challenge_allowed"],
+            "contradiction_detected": bool(contradiction_hint),
+        })
     return state
