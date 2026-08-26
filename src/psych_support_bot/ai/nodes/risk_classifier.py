@@ -4,6 +4,7 @@ import re
 from psych_support_bot.ai.safety.rules import classify_message_risk
 from psych_support_bot.ai.schemas.messages import RiskResult
 from psych_support_bot.ai.schemas.state import GraphState
+from psych_support_bot.infra.telemetry.tracing import trace_span, update_span_output
 
 logger = logging.getLogger(__name__)
 
@@ -31,27 +32,38 @@ def _has_previous_elevated(memory_summary: str) -> bool:
 
 
 def classify_risk(state: GraphState) -> GraphState:
-    risk_result = classify_message_risk(state["user_message"])
-    state["risk_result"] = RiskResult(**risk_result.model_dump())
+    with trace_span(
+        "node.risk_classifier",
+        input={"user_message": state["user_message"], "memory_summary": state.get("memory_summary", "")},
+    ) as obs:
+        risk_result = classify_message_risk(state["user_message"])
+        state["risk_result"] = RiskResult(**risk_result.model_dump())
 
-    # B2.2: Cross-turn risk tracking
-    # If the current turn is elevated AND the previous turn was also elevated,
-    # automatically upgrade to high risk. Persistent elevated distress across
-    # consecutive turns signals accumulating risk that warrants closer attention.
-    if risk_result.risk_level == "elevated":
-        memory_summary = state.get("memory_summary", "")
-        if _has_previous_elevated(memory_summary):
-            state["risk_result"] = RiskResult(
-                risk_level="high",
-                risk_types=[*risk_result.risk_types, "cumulative_elevated"],
-                needs_crisis_mode=True,
-                reason=(
-                    "Consecutive elevated distress across turns; "
-                    "upgraded to high risk for safety. Original: " + risk_result.reason
-                ),
-            )
-            logger.info("Cross-turn risk upgrade: elevated -> high (consecutive elevated detected)")
+        # B2.2: Cross-turn risk tracking
+        # If the current turn is elevated AND the previous turn was also elevated,
+        # automatically upgrade to high risk. Persistent elevated distress across
+        # consecutive turns signals accumulating risk that warrants closer attention.
+        if risk_result.risk_level == "elevated":
+            memory_summary = state.get("memory_summary", "")
+            if _has_previous_elevated(memory_summary):
+                state["risk_result"] = RiskResult(
+                    risk_level="high",
+                    risk_types=[*risk_result.risk_types, "cumulative_elevated"],
+                    needs_crisis_mode=True,
+                    reason=(
+                        "Consecutive elevated distress across turns; "
+                        "upgraded to high risk for safety. Original: " + risk_result.reason
+                    ),
+                )
+                logger.info("Cross-turn risk upgrade: elevated -> high (consecutive elevated detected)")
 
-    if state["risk_result"].needs_crisis_mode:
-        state["mode"] = "crisis"
+        if state["risk_result"].needs_crisis_mode:
+            state["mode"] = "crisis"
+
+        update_span_output(obs, {
+            "risk_level": state["risk_result"].risk_level,
+            "risk_types": state["risk_result"].risk_types,
+            "needs_crisis_mode": state["risk_result"].needs_crisis_mode,
+            "mode": state["mode"],
+        })
     return state

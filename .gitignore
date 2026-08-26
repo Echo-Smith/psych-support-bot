@@ -34,3 +34,6 @@ nul
 
 # Test reports
 test_report/
+
+# OS artifacts
+.DS_Store

@@ -9,6 +9,7 @@ from psych_support_bot.ai.prompts.templates import (
     build_system_guidance,
 )
 from psych_support_bot.ai.schemas.state import GraphState
+from psych_support_bot.infra.telemetry.tracing import trace_span, update_span_output
 
 logger = logging.getLogger(__name__)
 
@@ -241,38 +242,51 @@ def _sanitize_challenge(text: str) -> tuple[str, bool]:
 
 
 def review_response(state: GraphState) -> GraphState:
-    text = state["generated_reply"].text
+    with trace_span(
+        "node.safety_reviewer",
+        input={"reply_text": state["generated_reply"].text[:200], "challenge_allowed": state.get("challenge_allowed", False)},
+    ) as obs:
+        text = state["generated_reply"].text
 
-    # 1. Prompt leak detection (existing logic)
-    has_leak = any(marker in text for marker in LEAK_MARKERS)
+        # 1. Prompt leak detection (existing logic)
+        has_leak = any(marker in text for marker in LEAK_MARKERS)
 
-    # 2. Diagnosis language detection (existing P0-3 logic)
-    has_diagnosis = any(p.search(text) for p in _DIAGNOSIS_REGEX)
+        # 2. Diagnosis language detection (existing P0-3 logic)
+        has_diagnosis = any(p.search(text) for p in _DIAGNOSIS_REGEX)
 
-    # 3. Overreach/promise detection (existing P0-3 logic)
-    has_overreach = any(p.search(text) for p in _OVERREACH_REGEX)
+        # 3. Overreach/promise detection (existing P0-3 logic)
+        has_overreach = any(p.search(text) for p in _OVERREACH_REGEX)
 
-    # 4. B2.3: Challenge review — when challenge_allowed is False, detect
-    #    and remove confrontational/probing language.
-    challenge_allowed = state.get("challenge_allowed", False)
-    has_challenge = False
-    if not challenge_allowed:
-        has_challenge = _detect_challenge(text)
+        # 4. B2.3: Challenge review — when challenge_allowed is False, detect
+        #    and remove confrontational/probing language.
+        challenge_allowed = state.get("challenge_allowed", False)
+        has_challenge = False
+        if not challenge_allowed:
+            has_challenge = _detect_challenge(text)
 
-    if has_leak:
-        # Prompt leak: full replacement (safety critical)
-        text = _fallback_text(state["user_message"], state.get("expected_language", ""))
-    elif has_diagnosis or has_overreach:
-        # Diagnosis/overreach: truncate violating sentences, keep the rest
-        sanitized, was_modified = _sanitize_text(text)
-        text = sanitized if (was_modified and sanitized) else _fallback_text(state["user_message"], state.get("expected_language", ""))
-    elif has_challenge:
-        # Challenge in non-challenge-allowed context: remove challenge sentences
-        sanitized, was_modified = _sanitize_challenge(text)
-        text = sanitized if (was_modified and sanitized) else _fallback_text(state["user_message"], state.get("expected_language", ""))
+        if has_leak:
+            # Prompt leak: full replacement (safety critical)
+            text = _fallback_text(state["user_message"], state.get("expected_language", ""))
+        elif has_diagnosis or has_overreach:
+            # Diagnosis/overreach: truncate violating sentences, keep the rest
+            sanitized, was_modified = _sanitize_text(text)
+            text = sanitized if (was_modified and sanitized) else _fallback_text(state["user_message"], state.get("expected_language", ""))
+        elif has_challenge:
+            # Challenge in non-challenge-allowed context: remove challenge sentences
+            sanitized, was_modified = _sanitize_challenge(text)
+            text = sanitized if (was_modified and sanitized) else _fallback_text(state["user_message"], state.get("expected_language", ""))
 
-    state["generated_reply"].text = text
+        state["generated_reply"].text = text
 
-    if state["risk_result"].needs_crisis_mode:
-        state["generated_reply"].includes_action_step = True
+        if state["risk_result"].needs_crisis_mode:
+            state["generated_reply"].includes_action_step = True
+
+        update_span_output(obs, {
+            "has_leak": has_leak,
+            "has_diagnosis": has_diagnosis,
+            "has_overreach": has_overreach,
+            "has_challenge": has_challenge,
+            "modified": has_leak or has_diagnosis or has_overreach or has_challenge,
+            "final_text": text[:200],
+        })
     return state

@@ -113,3 +113,16 @@ class WeeklyReportRecord(Base):
     user_id: Mapped[str] = mapped_column(String(64), index=True)
     summary: Mapped[str] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+
+class PlanEnrollment(Base):
+    __tablename__ = "plan_enrollments"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    user_id: Mapped[str] = mapped_column(String(64), index=True)
+    plan_id: Mapped[str] = mapped_column(String(64))
+    enrolled_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+    completed_days_json: Mapped[str] = mapped_column(Text, default="[]")
+    current_day: Mapped[int] = mapped_column(Integer, default=1)
+    status: Mapped[str] = mapped_column(String(32), default="active")
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, onupdate=utcnow)
