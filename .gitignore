@@ -37,3 +37,9 @@ test_report/
 
 # OS artifacts
 .DS_Store
+
+# Agent skills (local installs)
+.agents/
+.claude/skills/
+skills-lock.json
+.mimosa/

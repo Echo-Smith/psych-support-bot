@@ -1,10 +1,28 @@
 from psych_support_bot.domain.assessments.service import (
     build_progress_prefix,
+    classify_disengage,
     cooldown_days_for,
     detect_pause_request,
     detect_retest_override,
     format_trend_line,
 )
+
+
+def test_classify_disengage_matrix() -> None:
+    assert classify_disengage("我先暂停一下，等会再来") == "pause"
+    assert classify_disengage("等我忙完这阵子") == "pause"
+    # 常见退出说法必须被识别为 skip（此前正是这个洞）
+    assert classify_disengage("我不想再回答了") == "skip"
+    assert classify_disengage("别问了") == "skip"
+    assert classify_disengage("算了不测了") == "skip"
+    # 安静诉求
+    assert classify_disengage("我只想安静待一会儿") == "quiet"
+    assert classify_disengage("让我静静") == "quiet"
+    assert classify_disengage("just want quiet for now") == "quiet"
+    # 普通回复不得误判
+    assert classify_disengage("3") is None
+    assert classify_disengage("今天上班好累啊") is None
+    assert detect_pause_request("我只想安静待一会儿") is False
 
 
 def test_detect_pause_request_matches_zh_and_en() -> None:

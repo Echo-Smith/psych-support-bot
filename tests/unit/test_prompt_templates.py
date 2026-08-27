@@ -48,3 +48,32 @@ def test_consultation_synthesis_prompt_requires_unlabeled_messages() -> None:
 
     assert "three short unlabeled conversational messages" in prompt
     assert "must use the labels" not in prompt
+
+
+def test_output_prompt_quiet_mode_suppresses_questions() -> None:
+    prompt = build_output_prompt(
+        mode="support",
+        risk_level="low",
+        user_message="我只想安静待一会儿",
+        no_question_mode=True,
+    )
+
+    assert "QUIET MODE OVERRIDE" in prompt
+    assert "Omit every question this turn" in prompt
+    # 默认三段式说明被静音分支替换
+    assert "EXACTLY three short conversational messages" not in prompt
+    assert "Omit Message 3" not in prompt
+
+
+def test_process_prompt_quiet_mode_forbids_challenge() -> None:
+    prompt = build_process_prompt(
+        interview_stage="hypothesis_testing",
+        question_strategy="gentle_challenge",
+        challenge_allowed=True,
+        loop_hint="Test the absolute claim against exceptions.",
+        expected_language="en",
+        no_question_mode=True,
+    )
+
+    assert "do not probe" in prompt
+    assert "Gentle challenge is allowed" not in prompt

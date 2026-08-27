@@ -33,6 +33,11 @@ def write_summary(state: GraphState) -> GraphState:
                 f"Bot replied ({len(state['generated_reply'].text)} chars): {reply_text}"
             )
 
+        # Layer 3 of disengagement handling: persist the quiet preference into
+        # the rolling session summaries so later turns inherit it via memory.
+        if state.get("no_question_mode"):
+            summary += " [user prefers NO questions right now — keep responses minimal until they re-engage]"
+
         state["session_summary"] = summary
         update_span_output(obs, {"session_summary": summary[:200]})
     return state

@@ -60,6 +60,9 @@ def generate_response(state: GraphState) -> GraphState:
     ) as gen_obs:
         state["fallback_used"] = False
         risk_level = state["risk_result"].risk_level
+        # Quiet mode is honored on ordinary support paths only; the crisis
+        # paths below deliberately ignore it so safety resources still flow.
+        no_question_mode = bool(state.get("no_question_mode", False))
 
         # B3.3: Inject refusal history into loop_hint before LLM generation
         _inject_refusal_context(state)
@@ -107,6 +110,7 @@ def generate_response(state: GraphState) -> GraphState:
                         challenge_allowed=bool(state.get("challenge_allowed", False)),
                         loop_hint=state.get("loop_hint", "Start broad, reflect, then narrow."),
                         expected_language=state.get("expected_language", ""),
+                        no_question_mode=no_question_mode,
                     )
                     state["consultation_opinions"] = opinions
                 else:
@@ -124,6 +128,7 @@ def generate_response(state: GraphState) -> GraphState:
                         challenge_allowed=bool(state.get("challenge_allowed", False)),
                         loop_hint=state.get("loop_hint", "Start broad, reflect, then narrow."),
                         expected_language=state.get("expected_language", ""),
+                        no_question_mode=no_question_mode,
                     )
                     state["consultation_opinions"] = []
             except Exception:

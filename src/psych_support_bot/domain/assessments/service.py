@@ -280,8 +280,17 @@ def detect_skip_or_exit(message: str) -> bool:
         "don't want",
         "want to stop",
         "want to quit",
+        "not anymore",
+        "don't ask",
+        "no more questions",
+        "leave me alone",
         "不想做了",
         "不想做",
+        "不想答了",
+        "不想回答",
+        "不想再回答",
+        "别再问了",
+        "别问了",
         "跳过",
         "算了",
         "不要",
@@ -295,12 +304,42 @@ def detect_skip_or_exit(message: str) -> bool:
     return any(word in lowered for word in skip_words)
 
 
+_QUIET_WORDS = [
+    "让我静静",
+    "想静静",
+    "静一静",
+    "安静待",
+    "安静一会",
+    "一个人待",
+    "不想说话",
+    "just want quiet",
+    "want silence",
+]
+
+
+def classify_disengage(message: str) -> str | None:
+    """Classify disengagement intent shared by questionnaire flow and normal chat.
+
+    Returns ``"pause"`` (hold the questionnaire, keep partial answers),
+    ``"skip"`` (abandon it), ``"quiet"`` (user wants company without being
+    questioned), or ``None``.
+    """
+    lowered = message.strip().casefold()
+    if detect_pause_request(message):
+        return "pause"
+    if detect_skip_or_exit(message):
+        return "skip"
+    if any(word in lowered for word in _QUIET_WORDS):
+        return "quiet"
+    return None
+
+
 # Minimum days between runs of the same screening scale; re-running sooner
 # yields unstable scores that may alarm users.
 RETEST_COOLDOWN_DAYS: dict[AssessmentType, int] = {"phq9": 7, "gad7": 7, "isi": 14}
 
 _RETEST_OVERRIDE_WORDS = ["重新测", "重测", "重新做", "再来一次", "再测一次", "again"]
-_PAUSE_WORDS = ["暂停", "停一下", "放一放", "待会", "待会儿", "等会", "等下", "pause"]
+_PAUSE_WORDS = ["暂停", "停一下", "放一放", "待会", "待会儿", "等会", "等下", "等我", "pause"]
 
 
 def cooldown_days_for(assessment_type: AssessmentType) -> int:

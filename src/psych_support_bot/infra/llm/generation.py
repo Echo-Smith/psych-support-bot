@@ -175,6 +175,7 @@ def generate_multidisciplinary_consultation(
     challenge_allowed: bool,
     loop_hint: str,
     expected_language: str = "",
+    no_question_mode: bool = False,
 ) -> tuple[str, list[dict[str, str]]]:
     if not expected_language:
         expected_language = _expected_language(user_message)
@@ -213,6 +214,7 @@ def generate_multidisciplinary_consultation(
         challenge_allowed=challenge_allowed,
         loop_hint=loop_hint,
         expected_language=expected_language,
+        no_question_mode=no_question_mode,
     )
     reply_text = _invoke(synthesis_prompt, user_message, expected_language, mode=mode)
     return reply_text, opinions
@@ -232,6 +234,7 @@ def generate_clinically_bounded_reply(
     challenge_allowed: bool = False,
     loop_hint: str = "Start broad, then narrow.",
     expected_language: str = "",
+    no_question_mode: bool = False,
 ) -> str:
     if not expected_language:
         expected_language = _expected_language(user_message)
@@ -250,6 +253,7 @@ def generate_clinically_bounded_reply(
                 challenge_allowed=challenge_allowed,
                 loop_hint=loop_hint,
                 expected_language=expected_language,
+                no_question_mode=no_question_mode,
             ),
             build_context_prompt(
                 memory_summary=memory_summary,
@@ -260,6 +264,7 @@ def generate_clinically_bounded_reply(
                 risk_level=risk_level,
                 user_message=user_message,
                 expected_language=expected_language,
+                no_question_mode=no_question_mode,
             ),
         ]
     )

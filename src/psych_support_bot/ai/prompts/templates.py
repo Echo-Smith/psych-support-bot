@@ -145,22 +145,36 @@ def build_output_prompt(
     user_message: str = "",
     *,
     expected_language: str = "",
+    no_question_mode: bool = False,
 ) -> str:
     if not expected_language and user_message:
         expected_language = "zh" if any("\u4e00" <= char <= "\u9fff" for char in user_message) else "en"
     reflection_label, hypothesis_label, question_label = build_visible_reply_labels(expected_language)
-    return (
+    common = (
         f"Conversation mode: {mode}. {build_system_guidance(mode=mode, risk_level=risk_level)} "
         f"{build_language_lock_prompt(expected_language)} "
         "Keep the reply under 180 words when possible. "
-        "Write the reply as EXACTLY three short conversational messages separated by one blank line. "
-        f"No labels, headings, numbering, or meta words like '{reflection_label}', '{hypothesis_label}', '{question_label}'. "
+        "No labels, headings, numbering, or meta words like "
+        f"'{reflection_label}', '{hypothesis_label}', '{question_label}'. "
+        "Do not open with greetings like 你好/Hello or self-introductions; respond directly to what the user just said. "
+    )
+    if no_question_mode:
+        return (
+            common
+            + "QUIET MODE OVERRIDE: the user has asked NOT to be questioned right now. "
+            "Write ONE very short empathic message that mirrors their feeling, optionally followed by a brief "
+            "presence line such as '我在，你不用说话也没关系' / 'I'm here — you don't have to talk'. "
+            "Omit every question this turn: do not probe, do not suggest exercises, do not challenge. "
+            "Resume normal conversation only when the user explicitly asks you something."
+        )
+    return (
+        common
+        + "Write the reply as EXACTLY three short conversational messages separated by one blank line. "
         "Message 1 briefly mirrors the user's core feeling or tension. "
         "Message 2 shares one tentative, plain-language, explicitly non-diagnostic impression framed as an educated guess you could be wrong about "
         "(e.g., '我有个感觉，不一定对'), never as a clinical analysis of the user. "
         "Message 3 contains at most one question that moves the conversation forward; omit it entirely if the user mainly needs to vent. "
-        "Never stack multiple questions. "
-        "Do not open with greetings like 你好/Hello or self-introductions; respond directly to what the user just said."
+        "Never stack multiple questions."
     )
 
 
@@ -171,7 +185,15 @@ def build_process_prompt(
     challenge_allowed: bool,
     loop_hint: str,
     expected_language: str,
+    no_question_mode: bool = False,
 ) -> str:
+    if no_question_mode:
+        return (
+            "Clinical process frame: the user has asked to be left in peace — do not probe, "
+            "do not challenge, do not test hypotheses this turn. "
+            "Keep the presence warm and minimal; let silence be acceptable. "
+            "This mode stays in effect until the user explicitly asks you something."
+        )
     challenge_rule = (
         "Gentle challenge is allowed when the user's statements conflict, become overly absolute, or avoid concrete detail. Challenge with curiosity, not confrontation."
         if challenge_allowed
@@ -256,6 +278,7 @@ def build_consultation_synthesis_prompt(
     challenge_allowed: bool,
     loop_hint: str,
     expected_language: str = "",
+    no_question_mode: bool = False,
 ) -> str:
     if not expected_language and user_message:
         expected_language = "zh" if any("\u4e00" <= char <= "\u9fff" for char in user_message) else "en"
@@ -275,7 +298,14 @@ def build_consultation_synthesis_prompt(
                 challenge_allowed=challenge_allowed,
                 loop_hint=loop_hint,
                 expected_language=expected_language,
+                no_question_mode=no_question_mode,
             ),
+            (
+                "QUIET MODE ACTIVE: reduce the visible reply to one or two supportive lines with NO question, "
+                "regardless of what the consultation opinions propose."
+            )
+            if no_question_mode
+            else "Consultation roster:\n" + consultation_framework,
             build_context_prompt(
                 memory_summary=memory_summary,
                 knowledge_context=knowledge_context,
@@ -285,8 +315,11 @@ def build_consultation_synthesis_prompt(
                 risk_level=risk_level,
                 user_message=user_message,
                 expected_language=expected_language,
+                no_question_mode=no_question_mode,
             ),
-            "Consultation roster:\n" + consultation_framework,
+        ]
+        + (["Consultation roster:\n" + consultation_framework] if no_question_mode else [])
+        + [
             "Consultation opinions:\n" + consultation_opinions,
         ]
     )

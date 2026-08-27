@@ -20,8 +20,8 @@ from psych_support_bot.domain.assessments.service import (
     build_assessment_result,
     build_progress_prefix,
     build_questionnaire_session_view,
+    classify_disengage,
     cooldown_days_for,
-    detect_pause_request,
     detect_questionnaire_request,
     detect_retest_override,
     detect_skip_or_exit,
@@ -222,19 +222,34 @@ class ConversationService:
             )
 
             if answer_value is None:
-                if detect_pause_request(payload.message):
+                disengage = classify_disengage(payload.message)
+                if disengage in {"pause", "quiet"}:
+                    # "安静待会儿" during a questionnaire also parks it — pressing
+                    # for numbers after that would be the worst possible reply.
                     pause_questionnaire_session(session, active_session)
                     zh_pause = expected_language == "zh"
-                    tip = (
-                        f"好，{guide.title}先放在这里。已作答的 {len(answers)} 题都保存了，"
-                        f"之后想继续时说一声「继续{guide.title}」就行。现在想做点别的也可以。"
-                        if zh_pause
-                        else (
-                            f"Sure, we'll leave the {guide.title} here. Your {len(answers)} answered "
-                            "items are saved — just ask to continue whenever you're ready, "
-                            "or talk about something else for now."
+                    if disengage == "quiet":
+                        tip = (
+                            f"好，{guide.title}就放到这里，已答的 {len(answers)} 题都保存了。"
+                            "你想静静的话，我在旁边陪着，不问任何问题；想继续的时候说一声就行。"
+                            if zh_pause
+                            else (
+                                f"Of course — we'll leave the {guide.title} here; your {len(answers)} "
+                                "answers are saved. I'll keep you company quietly, no questions. "
+                                "Just say the word whenever you want to continue."
+                            )
                         )
-                    )
+                    else:
+                        tip = (
+                            f"好，{guide.title}先放在这里。已作答的 {len(answers)} 题都保存了，"
+                            f"之后想继续时说一声「继续{guide.title}」就行。现在想做点别的也可以。"
+                            if zh_pause
+                            else (
+                                f"Sure, we'll leave the {guide.title} here. Your {len(answers)} answered "
+                                "items are saved — just ask to continue whenever you're ready, "
+                                "or talk about something else for now."
+                            )
+                        )
                     return self._build_response(
                         session_id=active_session.id,
                         mode="assessment",
@@ -585,6 +600,9 @@ class ConversationService:
             "loop_hint": "Start with broad exploration before narrowing.",
             "exercise_history": [],
             "refusal_history": [],
+            # Quiet mode: honor "别问了/让我静静" by suppressing questions this
+            # turn; summary_writer persists the preference for later turns.
+            "no_question_mode": classify_disengage(payload.message) == "quiet",
             "expected_language": expected_language,
         }
         with trace_span(
