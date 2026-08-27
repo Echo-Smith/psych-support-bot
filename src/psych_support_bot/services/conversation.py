@@ -1,4 +1,5 @@
 import json
+from datetime import UTC, datetime
 from typing import Any, cast
 from uuid import uuid4
 
@@ -17,9 +18,14 @@ from psych_support_bot.domain.assessments.schemas import AssessmentAnswerSet
 from psych_support_bot.domain.assessments.service import (
     build_assessment_followup_reply,
     build_assessment_result,
+    build_progress_prefix,
     build_questionnaire_session_view,
+    cooldown_days_for,
+    detect_pause_request,
     detect_questionnaire_request,
+    detect_retest_override,
     detect_skip_or_exit,
+    format_trend_line,
     parse_questionnaire_answer,
     questionnaire_guide,
 )
@@ -29,8 +35,12 @@ from psych_support_bot.infra.db.repositories import (
     complete_questionnaire_session,
     create_questionnaire_session,
     get_active_questionnaire_session,
+    get_latest_assessment,
+    get_paused_questionnaire_session,
     get_session_messages,
     get_user_sessions,
+    pause_questionnaire_session,
+    resume_questionnaire_session,
     save_assessment,
     save_conversation_result,
 )
@@ -85,6 +95,42 @@ def _detect_expected_language(
     return "en"
 
 
+_SAFETY_RESOURCES_ZH = (
+    "如果你此刻感到很难受，请记得随时可以拨打全国心理援助热线 400-161-9995（24 小时），"
+    "紧急情况请直接拨打 120。你不必独自扛着这些。"
+)
+_SAFETY_RESOURCES_EN = (
+    "If things feel heavy right now, the 988 Suicide & Crisis Lifeline (call or text 988) "
+    "is available around the clock, and in an emergency please call 911. You don't have to carry this alone."
+)
+
+
+def _options_payload(options: Any) -> list[dict[str, Any]]:
+    return [{"value": option.value, "label": option.label} for option in (options or [])]
+
+
+def _days_since(dt: datetime) -> int:
+    """Whole days since *dt*, tolerating both naive and aware timestamps
+    (SQLite round-trips drop tzinfo)."""
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=UTC)
+    return max((datetime.now(UTC) - dt).days, 0)
+
+
+def _count_recent_invalid_answers(prior_messages: list[Any], assessment_type: str) -> int:
+    """Count consecutive trailing user messages that failed answer parsing."""
+    misses = 0
+    for record in reversed(prior_messages):
+        if getattr(record, "role", "") != "user":
+            continue
+        if parse_questionnaire_answer(getattr(record, "content", ""), assessment_type) is not None:
+            break
+        misses += 1
+        if misses >= 3:
+            break
+    return misses
+
+
 class ConversationService:
     def _build_response(
         self,
@@ -96,6 +142,7 @@ class ConversationService:
         risk_level: str = "low",
         risk_reason: str = "No obvious high-risk language detected.",
         debug: dict[str, object] | None = None,
+        question_options: list[dict[str, Any]] | None = None,
     ) -> ConversationResponse:
         return ConversationResponse(
             session_id=session_id,
@@ -112,6 +159,7 @@ class ConversationService:
                 includes_action_step=True,
             ),
             summary=summary,
+            question_options=question_options or [],
             debug=debug or {},
         )
 
@@ -174,6 +222,31 @@ class ConversationService:
             )
 
             if answer_value is None:
+                if detect_pause_request(payload.message):
+                    pause_questionnaire_session(session, active_session)
+                    zh_pause = expected_language == "zh"
+                    tip = (
+                        f"好，{guide.title}先放在这里。已作答的 {len(answers)} 题都保存了，"
+                        f"之后想继续时说一声「继续{guide.title}」就行。现在想做点别的也可以。"
+                        if zh_pause
+                        else (
+                            f"Sure, we'll leave the {guide.title} here. Your {len(answers)} answered "
+                            "items are saved — just ask to continue whenever you're ready, "
+                            "or talk about something else for now."
+                        )
+                    )
+                    return self._build_response(
+                        session_id=active_session.id,
+                        mode="assessment",
+                        reply_text=tip,
+                        summary=f"Questionnaire {assessment_type} paused at item {len(answers)}.",
+                        debug={
+                            "source": "questionnaire_paused",
+                            "llm_used": False,
+                            "fallback_used": False,
+                            "assessment_type": assessment_type,
+                        },
+                    )
                 skip_exit = detect_skip_or_exit(payload.message)
                 if skip_exit:
                     completed = complete_questionnaire_session(session, active_session)
@@ -208,7 +281,18 @@ class ConversationService:
                     error_hint = f"请回复一个数字（0到{max_hint}之间），对应你的感受。"
                 else:
                     error_hint = f"Please reply with a number (0 through {max_hint}) matching your experience."
-                reply_text = _questionnaire_reply(
+                misses = _count_recent_invalid_answers(prior_messages, assessment_type)
+                if misses >= 2:
+                    if is_chinese:
+                        error_hint += " 如果暂时不想测了，回复「暂停」可以保存进度稍后再来；有其他想聊的也直接说。"
+                    else:
+                        error_hint += (
+                            " If you'd rather stop for now, reply \"pause\" and your progress will be saved; "
+                            "you can also just tell me what's on your mind."
+                        )
+                reply_text = build_progress_prefix(
+                    guide.title, view.current_index + 1, view.total_items, expected_language
+                ) + _questionnaire_reply(
                     user_message=payload.message,
                     expected_language=expected_language,
                     guide=guide,
@@ -227,6 +311,7 @@ class ConversationService:
                     mode="assessment",
                     reply_text=reply_text,
                     summary=f"Questionnaire {assessment_type} still in progress.",
+                    question_options=_options_payload(view.next_item.options if view.next_item else []),
                     debug={
                         "source": "questionnaire_progress",
                         "llm_used": True,
@@ -246,24 +331,28 @@ class ConversationService:
                 language=expected_language,
             )
             if updated_view.next_item is not None:
+                reply_text = build_progress_prefix(
+                    guide.title, updated_view.current_index + 1, updated_view.total_items, expected_language
+                ) + _questionnaire_reply(
+                    user_message=payload.message,
+                    expected_language=expected_language,
+                    guide=guide,
+                    phase="progress",
+                    current_index=updated_view.current_index + 1,
+                    total_items=updated_view.total_items,
+                    next_question=updated_view.next_item.text,
+                    options=[(option.value, option.label) for option in updated_view.next_item.options],
+                    answers_so_far=updated_answers,
+                )
                 return self._build_response(
                     session_id=updated.id,
                     mode="assessment",
-                    reply_text=_questionnaire_reply(
-                        user_message=payload.message,
-                        expected_language=expected_language,
-                        guide=guide,
-                        phase="progress",
-                        current_index=updated_view.current_index + 1,
-                        total_items=updated_view.total_items,
-                        next_question=updated_view.next_item.text,
-                        options=[(option.value, option.label) for option in updated_view.next_item.options],
-                        answers_so_far=updated_answers,
-                    ),
+                    reply_text=reply_text,
                     summary=(
                         f"Questionnaire {assessment_type} progress "
                         f"{updated_view.current_index}/{updated_view.total_items}."
                     ),
+                    question_options=_options_payload(updated_view.next_item.options),
                     debug={
                         "source": "questionnaire_progress",
                         "llm_used": True,
@@ -278,6 +367,9 @@ class ConversationService:
                 answers=AssessmentAnswerSet(answers=updated_answers),
                 language=expected_language,
             )
+            # Capture the previous run BEFORE saving this one so trend
+            # comparison refers to the prior attempt, not the current.
+            previous = get_latest_assessment(session, completed.user_id, assessment_type)
             save_assessment(session, completed.user_id, result)
             risk_level = "elevated" if result.interpretation.needs_safety_followup else "low"
             risk_reason = (
@@ -285,6 +377,19 @@ class ConversationService:
                 if result.interpretation.needs_safety_followup
                 else "Assessment completed without urgent safety signal."
             )
+            completion_context = build_assessment_followup_reply(result, user_message=payload.message)
+            if result.interpretation.needs_safety_followup:
+                # PHQ-9 item 9 endorsed: lead the completion message with care
+                # and crisis resources instead of burying them in the summary.
+                resources = _SAFETY_RESOURCES_ZH if expected_language == "zh" else _SAFETY_RESOURCES_EN
+                completion_context = f"{resources} {completion_context}"
+            if previous is not None:
+                completion_context += " " + format_trend_line(
+                    expected_language,
+                    prev_score=previous.score,
+                    days_since=_days_since(previous.created_at),
+                    new_score=result.score,
+                )
             return self._build_response(
                 session_id=completed.id,
                 mode="assessment",
@@ -298,7 +403,7 @@ class ConversationService:
                     next_question=None,
                     options=[],
                     answers_so_far=updated_answers,
-                    completion_context=build_assessment_followup_reply(result, user_message=payload.message),
+                    completion_context=completion_context,
                 ),
                 summary=(
                     f"Completed questionnaire {assessment_type} with score {result.score} ({result.severity_band})."
@@ -318,9 +423,80 @@ class ConversationService:
         if requested is None:
             return None
 
-        record = create_questionnaire_session(session, payload.user_id, requested)
         expected_language = _detect_expected_language(payload.message)
         guide = questionnaire_guide(requested, language=expected_language)
+        zh = expected_language == "zh"
+
+        paused = get_paused_questionnaire_session(session, payload.user_id, requested)
+        if paused is not None:
+            resume_questionnaire_session(session, paused)
+            answers = cast(list[int], json.loads(paused.answers_json or "[]"))
+            view = build_questionnaire_session_view(
+                session_id=paused.id,
+                user_id=paused.user_id,
+                assessment_type=requested,
+                answers=answers,
+                status="in_progress",
+                language=expected_language,
+            )
+            reply_text = build_progress_prefix(
+                guide.title, view.current_index + 1, view.total_items, expected_language
+            ) + _questionnaire_reply(
+                user_message=payload.message,
+                expected_language=expected_language,
+                guide=guide,
+                phase="resumed",
+                current_index=view.current_index + 1,
+                total_items=view.total_items,
+                next_question=(view.next_item.text if view.next_item is not None else None),
+                options=[(option.value, option.label) for option in (view.next_item.options if view.next_item else [])],
+                answers_so_far=answers,
+            )
+            return self._build_response(
+                session_id=paused.id,
+                mode="assessment",
+                reply_text=reply_text,
+                summary=f"Resumed questionnaire {requested} at item {len(answers)}.",
+                question_options=_options_payload(view.next_item.options if view.next_item else []),
+                debug={
+                    "source": "assessment_resumed",
+                    "llm_used": True,
+                    "fallback_used": False,
+                    "assessment_type": requested,
+                },
+            )
+
+        recent = get_latest_assessment(session, payload.user_id, requested)
+        if recent is not None and not detect_retest_override(payload.message):
+            days_since = _days_since(recent.created_at)
+            if days_since < cooldown_days_for(requested):
+                tip = (
+                    f"你在 {days_since} 天前刚做过{guide.title}，当时的得分是 {recent.score} 分"
+                    f"（{recent.severity_band}）。一周内重复施测分数波动较大，参考意义有限。"
+                    f"如果想看变化趋势，建议过几天再来。当然，如果你确实想现在重新测一遍，回复「重新测」即可开始；"
+                    f"或者直接跟我聊聊最近的状态也可以。"
+                    if zh
+                    else (
+                        f"You completed the {guide.title} {days_since} day(s) ago, scoring {recent.score} "
+                        f"({recent.severity_band}). Retaking within a week tends to produce unstable scores. "
+                        "If you'd still like to redo it now, just say \"retake\"; otherwise feel free to "
+                        "tell me how you've been lately."
+                    )
+                )
+                return self._build_response(
+                    session_id=payload.session_id or str(uuid4()),
+                    mode="assessment",
+                    reply_text=tip,
+                    summary=f"{requested} retest declined by cooldown ({days_since}d).",
+                    debug={
+                        "source": "assessment_cooldown",
+                        "llm_used": False,
+                        "fallback_used": False,
+                        "assessment_type": requested,
+                    },
+                )
+
+        record = create_questionnaire_session(session, payload.user_id, requested)
         view = build_questionnaire_session_view(
             session_id=record.id,
             user_id=record.user_id,
@@ -332,7 +508,8 @@ class ConversationService:
         return self._build_response(
             session_id=record.id,
             mode="assessment",
-            reply_text=_questionnaire_reply(
+            reply_text=build_progress_prefix(guide.title, 1, view.total_items, expected_language)
+            + _questionnaire_reply(
                 user_message=payload.message,
                 expected_language=expected_language,
                 guide=guide,
@@ -344,6 +521,7 @@ class ConversationService:
                 answers_so_far=[],
             ),
             summary=f"Started questionnaire {requested}.",
+            question_options=_options_payload(view.next_item.options if view.next_item else []),
             debug={
                 "source": "assessment_start",
                 "llm_used": True,

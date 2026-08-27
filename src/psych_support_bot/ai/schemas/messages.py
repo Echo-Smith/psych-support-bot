@@ -1,4 +1,4 @@
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
@@ -34,6 +34,8 @@ class ConversationResponse(BaseModel):
     risk: RiskResult
     reply: GeneratedReply
     summary: str
+    # Tappable option chips for in-chat questionnaire items; empty elsewhere.
+    question_options: list[dict[str, Any]] = Field(default_factory=list)
     debug: dict[str, object] = Field(default_factory=dict)
 
 

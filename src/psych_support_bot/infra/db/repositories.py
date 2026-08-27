@@ -303,6 +303,52 @@ def complete_questionnaire_session(
     return session_record
 
 
+def pause_questionnaire_session(
+    session: Session, session_record: QuestionnaireSessionRecord
+) -> QuestionnaireSessionRecord:
+    """Put an in-progress questionnaire on hold, keeping partial answers."""
+    session_record.status = "paused"
+    session.commit()
+    session.refresh(session_record)
+    return session_record
+
+
+def resume_questionnaire_session(
+    session: Session, session_record: QuestionnaireSessionRecord
+) -> QuestionnaireSessionRecord:
+    session_record.status = "in_progress"
+    session.commit()
+    session.refresh(session_record)
+    return session_record
+
+
+def get_paused_questionnaire_session(
+    session: Session, user_id: str, assessment_type: str
+) -> QuestionnaireSessionRecord | None:
+    stmt = (
+        select(QuestionnaireSessionRecord)
+        .where(QuestionnaireSessionRecord.user_id == user_id)
+        .where(QuestionnaireSessionRecord.assessment_type == assessment_type)
+        .where(QuestionnaireSessionRecord.status == "paused")
+        .order_by(desc(QuestionnaireSessionRecord.updated_at))
+        .limit(1)
+    )
+    return session.execute(stmt).scalar_one_or_none()
+
+
+def get_latest_assessment(
+    session: Session, user_id: str, assessment_type: str
+) -> AssessmentRecord | None:
+    stmt = (
+        select(AssessmentRecord)
+        .where(AssessmentRecord.user_id == user_id)
+        .where(AssessmentRecord.assessment_type == assessment_type)
+        .order_by(desc(AssessmentRecord.created_at))
+        .limit(1)
+    )
+    return session.execute(stmt).scalar_one_or_none()
+
+
 def save_checkin(session: Session, user_id: str, checkin: DailyCheckin) -> CheckinRecord:
     ensure_user(session, user_id)
     record = CheckinRecord(

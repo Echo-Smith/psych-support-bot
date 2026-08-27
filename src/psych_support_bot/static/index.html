@@ -1800,6 +1800,7 @@
       document.getElementById('sendBtn').disabled = true;
       input.value = '';
       addMessage('user', message);
+      clearStaleChips();
       try {
         const res = await fetch(API_BASE + '/v1/conversations/respond', {
           method: 'POST',
@@ -1814,7 +1815,11 @@
         const parts = (data.reply && Array.isArray(data.reply.messages) && data.reply.messages.length)
           ? data.reply.messages.slice(0, 3)
           : [data.reply.text];
-        renderBotParts(parts, data.mode, data.risk);
+        renderBotParts(parts, data.mode, data.risk, () => {
+          if (Array.isArray(data.question_options) && data.question_options.length) {
+            renderScaleChips(data.question_options);
+          }
+        });
       } catch (err) {
         console.error(err);
         addMessage('bot', '抱歉，遇到了问题：' + err.message + '。请确认后端服务正在运行。');
@@ -1907,7 +1912,7 @@
     }
 
     // Render a reply as consecutive IM-style bubbles with typing rhythm between them.
-    function renderBotParts(parts, mode, risk) {
+    function renderBotParts(parts, mode, risk, onDone) {
       let i = 0;
       const step = () => {
         hideTyping();
@@ -1916,9 +1921,41 @@
         i++;
         if (i < parts.length) {
           setTimeout(() => { showTyping(); setTimeout(step, 700); }, 400);
+        } else if (onDone) {
+          onDone();
         }
       };
       step();
+    }
+
+    // Tappable option chips for in-chat questionnaire items.
+    function clearStaleChips() {
+      document.querySelectorAll('.scale-options[data-live="1"]').forEach(el => {
+        el.dataset.live = '0';
+        el.querySelectorAll('button').forEach(b => { b.disabled = true; b.style.opacity = '.5'; });
+      });
+    }
+
+    function renderScaleChips(options) {
+      clearStaleChips();
+      const chatArea = document.getElementById('chatArea');
+      const d = document.createElement('div');
+      d.className = 'msg bot';
+      let btns = '';
+      options.forEach(o => {
+        btns += '<button type="button" class="chip" data-value="' + o.value + '" style="margin:3px"' +
+          ' onclick="pickScale(' + Number(o.value) + ')">' +
+          escapeHtml(String(o.value) + ' · ' + (o.label || '')) + '</button>';
+      });
+      d.innerHTML = '<div class="bubble"><div class="scale-options" data-live="1">' + btns + '</div></div>';
+      chatArea.appendChild(d);
+      chatArea.scrollTop = chatArea.scrollHeight;
+    }
+
+    function pickScale(value) {
+      clearStaleChips();
+      document.getElementById('messageInput').value = String(value);
+      sendMessage();
     }
 
     function updateRiskIndicator(risk) {

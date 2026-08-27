@@ -295,6 +295,59 @@ def detect_skip_or_exit(message: str) -> bool:
     return any(word in lowered for word in skip_words)
 
 
+# Minimum days between runs of the same screening scale; re-running sooner
+# yields unstable scores that may alarm users.
+RETEST_COOLDOWN_DAYS: dict[AssessmentType, int] = {"phq9": 7, "gad7": 7, "isi": 14}
+
+_RETEST_OVERRIDE_WORDS = ["重新测", "重测", "重新做", "再来一次", "再测一次", "again"]
+_PAUSE_WORDS = ["暂停", "停一下", "放一放", "待会", "待会儿", "等会", "等下", "pause"]
+
+
+def cooldown_days_for(assessment_type: AssessmentType) -> int:
+    return RETEST_COOLDOWN_DAYS.get(assessment_type, 7)
+
+
+def detect_retest_override(message: str) -> bool:
+    lowered = message.strip().casefold()
+    return any(word in lowered for word in _RETEST_OVERRIDE_WORDS)
+
+
+def detect_pause_request(message: str) -> bool:
+    lowered = message.strip().casefold()
+    return any(word in lowered for word in _PAUSE_WORDS)
+
+
+def build_progress_prefix(title: str, current_index: int, total_items: int, language: str) -> str:
+    """Deterministic progress header shown to the user before each question."""
+    if language == "zh":
+        return f"〔{title} · 第 {current_index}/{total_items} 题〕\n\n"
+    return f"[{title} · Question {current_index}/{total_items}]\n\n"
+
+
+def format_trend_line(language: str, *, prev_score: int, days_since: int, new_score: int) -> str:
+    """One-line comparison against the previous completed run of the same scale."""
+    if language == "zh":
+        when = f"（{days_since} 天前）" if days_since else ""
+        if new_score < prev_score:
+            verdict = f"比上次低了 {prev_score - new_score} 分，整体有所缓解。"
+        elif new_score > prev_score:
+            verdict = f"比上次高了 {new_score - prev_score} 分。分数波动不一定代表变糟，我们可以一起看看是哪些条目在变化。"
+        else:
+            verdict = "和上次基本持平。"
+        return f"对比一下：你上次的得分是 {prev_score}{when}，这次是 {new_score} 分，{verdict}"
+    when = f" ({days_since} days ago)" if days_since else ""
+    if new_score < prev_score:
+        verdict = f"that is {prev_score - new_score} points lower than last time — things have eased somewhat."
+    elif new_score > prev_score:
+        verdict = (
+            f"that is {new_score - prev_score} points higher than last time. "
+            "A change in score does not necessarily mean things got worse; we can look at which items moved."
+        )
+    else:
+        verdict = "essentially unchanged from last time."
+    return f"For comparison: you scored {prev_score}{when}, and this time {new_score} points — {verdict}"
+
+
 def build_questionnaire_prompt(view: QuestionnaireSessionView, *, error_hint: str | None = None) -> str:
     if view.next_item is None:
         return f"{view.questionnaire_title} is complete. I can help you interpret the result in plain language."
