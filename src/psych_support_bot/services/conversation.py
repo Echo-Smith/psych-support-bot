@@ -603,6 +603,8 @@ class ConversationService:
             # Quiet mode: honor "别问了/让我静静" by suppressing questions this
             # turn; summary_writer persists the preference for later turns.
             "no_question_mode": classify_disengage(payload.message) == "quiet",
+            # Depth of this conversation; feeds stage-floor escalation.
+            "turn_count": len(prior_messages),
             "expected_language": expected_language,
         }
         with trace_span(
@@ -614,8 +616,22 @@ class ConversationService:
                 "mode": "support",
             },
             metadata={"memory_summary": memory_summary},
+            session_id=session_id,
+            user_id=payload.user_id,
         ) as root_obs:
             raw_result = cast(Any, conversation_graph.invoke(cast(Any, state)))
+            done_state: GraphState = cast(GraphState, raw_result)
+            # Root-level output so the Langfuse UI shows a usable summary row
+            # per conversation turn instead of a null output.
+            update_span_output(
+                root_obs,
+                {
+                    "session_id": session_id,
+                    "mode": done_state["mode"],
+                    "risk_level": done_state["risk_result"].risk_level,
+                    "reply_text": done_state["generated_reply"].text[:200],
+                },
+            )
         result: GraphState = cast(GraphState, raw_result)
         response = ConversationResponse(
             session_id=session_id,

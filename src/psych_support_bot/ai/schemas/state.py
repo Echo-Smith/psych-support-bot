@@ -33,6 +33,8 @@ class GraphState(TypedDict):
     # Language determined from conversation history to keep language consistent
     # even when the current message is language-neutral (e.g. pure numbers).
     expected_language: str
+    # Number of prior messages in this session; drives stage-floor escalation.
+    turn_count: int
     # Disengagement preference: user asked NOT to be questioned this turn
     # ("我只想安静待一会儿"). Safe paths (crisis/high risk) ignore this.
     no_question_mode: bool

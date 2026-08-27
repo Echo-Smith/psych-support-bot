@@ -216,6 +216,7 @@ def plan_consultation(state: GraphState) -> GraphState:
             user_message=state["user_message"],
             mode=state["mode"],
             risk_level=state["risk_result"].risk_level,
+            turn_count=int(state.get("turn_count") or 0),
         )
         state["interview_stage"] = str(interview_process["interview_stage"])
         state["question_strategy"] = str(interview_process["question_strategy"])

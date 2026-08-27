@@ -168,6 +168,7 @@ def determine_interview_process(
     user_message: str,
     mode: ConversationMode,
     risk_level: RiskLevel,
+    turn_count: int = 0,
 ) -> dict[str, str | bool]:
     normalized, compact = _normalize_text(user_message)
     has_open_exploration = _matches_any(normalized, compact, OPEN_EXPLORATION_KEYWORDS)
@@ -290,6 +291,32 @@ def determine_interview_process(
         stage = "formulation"
         question_strategy = "clarifying"
         loop_hint = "Clarify what the user has already tried, what changed, and what keeps the problem going before teaching a technique."
+
+    # Stage-floor escalation (fix for stuck-at-engagement): when the keyword
+    # cascade produced nothing and the conversation has been going on for
+    # several turns, advance the stage by depth so the process frame evolves
+    # instead of resetting to engagement every vague short message.
+    if (
+        mode == "support"
+        and risk_level not in {"high", "critical"}
+        and stage == "engagement"
+        and loop_hint.startswith("Start broad")
+        and turn_count >= 2
+    ):
+        if turn_count < 6:
+            stage = "exploration"
+            loop_hint = (
+                "The conversation has moved past opening. Build on what was shared in "
+                "previous turns instead of starting over; explore the thread the user "
+                "kept coming back to."
+            )
+        else:
+            stage = "pattern_analysis"
+            question_strategy = "looping"
+            loop_hint = (
+                "Several turns in: connect recurring themes across previous messages into a "
+                "sequence (trigger -> thought -> feeling), and only deepen where it is still unclear."
+            )
 
     return {
         "interview_stage": stage,

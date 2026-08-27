@@ -81,6 +81,8 @@ def trace_span(
     input: object | None = None,
     metadata: dict[str, object] | None = None,
     as_type: str = "span",
+    session_id: str | None = None,
+    user_id: str | None = None,
 ):
     """Context manager that creates a Langfuse observation span.
 
@@ -100,12 +102,33 @@ def trace_span(
     )
     try:
         obs = cm.__enter__()
+        _attach_trace_fields(obs, session_id=session_id, user_id=user_id)
         yield obs
     except Exception as exc:
         cm.__exit__(type(exc), exc, exc.__traceback__)
         raise
     else:
         cm.__exit__(None, None, None)
+
+
+def _attach_trace_fields(obs, *, session_id: str | None, user_id: str | None) -> None:
+    """Best-effort mapping of session/user onto the parent trace so the UI
+    groups conversations correctly."""
+    if obs is None or not (session_id or user_id):
+        return
+    update_trace = getattr(obs, "update_trace", None)
+    if not callable(update_trace):
+        logger.debug("Langfuse span lacks update_trace; skipping trace fields")
+        return
+    try:
+        kwargs: dict[str, str] = {}
+        if session_id:
+            kwargs["session_id"] = session_id
+        if user_id:
+            kwargs["user_id"] = user_id
+        update_trace(**kwargs)
+    except Exception:
+        logger.debug("Failed to set Langfuse trace session/user fields", exc_info=True)
 
 
 def update_span_output(obs, output: object) -> None:
