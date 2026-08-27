@@ -1,4 +1,5 @@
 import logging
+import re
 
 from psych_support_bot.ai.consultation import consultation_agent_descriptions
 from psych_support_bot.ai.prompts.templates import build_crisis_safety_prompt
@@ -12,6 +13,20 @@ from psych_support_bot.infra.llm.generation import (
 from psych_support_bot.infra.telemetry.tracing import trace_span, update_span_output
 
 logger = logging.getLogger(__name__)
+
+
+def _split_reply_messages(text: str) -> list[str]:
+    """Split a generated reply into IM-style bubble messages (max 3).
+
+    Returns an empty list when the reply cannot be meaningfully split,
+    so callers fall back to rendering ``text`` as a single bubble.
+    """
+    parts = [p.strip() for p in re.split(r"\n\s*\n", text or "") if p.strip()]
+    if len(parts) <= 1:
+        return []
+    if len(parts) > 3:
+        parts = [*parts[:2], "\n\n".join(parts[2:])]
+    return parts
 
 
 def _inject_refusal_context(state: GraphState) -> None:
@@ -133,6 +148,8 @@ def generate_response(state: GraphState) -> GraphState:
             text=reply_text,
             style=state["mode"],
             includes_action_step=True,
+            # Crisis replies keep hotline resources in one intact bubble.
+            messages=_split_reply_messages(reply_text) if risk_level in {"low", "elevated"} else [],
         )
         state["consultation_notes"] = (
             f"{len(state.get('consultation_opinions', []))} agents consulted; stage={state.get('interview_stage', 'engagement')}; question={state.get('question_strategy', 'open')}"

@@ -24,6 +24,8 @@ class GeneratedReply(BaseModel):
     text: str
     style: ConversationMode
     includes_action_step: bool = True
+    # IM-style bubbles for conversational replies; empty means render `text` as one bubble.
+    messages: list[str] = Field(default_factory=list)
 
 
 class ConversationResponse(BaseModel):

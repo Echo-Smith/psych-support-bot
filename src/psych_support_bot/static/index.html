@@ -1811,7 +1811,10 @@
         SESSION_ID = data.session_id;
         updateRiskIndicator(data.risk);
         updateDebugState(data);
-        addMessage('bot', data.reply.text, data.mode, data.risk);
+        const parts = (data.reply && Array.isArray(data.reply.messages) && data.reply.messages.length)
+          ? data.reply.messages.slice(0, 3)
+          : [data.reply.text];
+        renderBotParts(parts, data.mode, data.risk);
       } catch (err) {
         console.error(err);
         addMessage('bot', '抱歉，遇到了问题：' + err.message + '。请确认后端服务正在运行。');
@@ -1863,8 +1866,9 @@
       if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendMessage(); }
     }
 
-    function addMessage(role, content, mode, risk) {
+    function addMessage(role, content, mode, risk, showHeader) {
       mode = mode || ''; risk = risk || {};
+      if (typeof showHeader === 'undefined') showHeader = true;
       const chatArea = document.getElementById('chatArea');
       const welcome = chatArea.querySelector('.welcome');
       if (welcome) welcome.remove();
@@ -1874,19 +1878,47 @@
 
       let header = '';
       let bodyInner = '';
-      if (role === 'bot') {
+      if (role === 'bot' && showHeader) {
         const rl = risk.risk_level || 'low';
         const rc = RISK_COLORS[rl] || 'risk-low';
         const rlLbl = RISK_LABELS[rl] || '低风险';
         header = '<div class="msg-header"><span class="risk-tag ' + rc + '">' + rlLbl + '</span>' +
           (mode ? '<span class="mode-tag">' + mode + '</span>' : '') + '</div>';
-        bodyInner = renderMarkdown(content);
-      } else {
-        bodyInner = escapeHtml(content);
       }
+      bodyInner = renderMarkdown(content);
       msgDiv.innerHTML = header + '<div class="bubble">' + bodyInner + '</div>';
       chatArea.appendChild(msgDiv);
       chatArea.scrollTop = chatArea.scrollHeight;
+    }
+
+    function showTyping() {
+      const chatArea = document.getElementById('chatArea');
+      const d = document.createElement('div');
+      d.className = 'msg bot';
+      d.id = 'typingBubble';
+      d.innerHTML = '<div class="bubble" style="color:#94a3b8;font-style:italic">正在输入…</div>';
+      chatArea.appendChild(d);
+      chatArea.scrollTop = chatArea.scrollHeight;
+    }
+
+    function hideTyping() {
+      const t = document.getElementById('typingBubble');
+      if (t) t.remove();
+    }
+
+    // Render a reply as consecutive IM-style bubbles with typing rhythm between them.
+    function renderBotParts(parts, mode, risk) {
+      let i = 0;
+      const step = () => {
+        hideTyping();
+        const first = i === 0;
+        addMessage('bot', parts[i], first ? mode : '', first ? risk : {}, first);
+        i++;
+        if (i < parts.length) {
+          setTimeout(() => { showTyping(); setTimeout(step, 700); }, 400);
+        }
+      };
+      step();
     }
 
     function updateRiskIndicator(risk) {

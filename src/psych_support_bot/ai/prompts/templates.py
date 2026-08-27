@@ -152,7 +152,15 @@ def build_output_prompt(
     return (
         f"Conversation mode: {mode}. {build_system_guidance(mode=mode, risk_level=risk_level)} "
         f"{build_language_lock_prompt(expected_language)} "
-        f"Keep the reply under 180 words when possible. Write in exactly three user-facing parts in this order: {reflection_label}, {hypothesis_label}, {question_label}. {reflection_label} should briefly mirror the user's core tension or pain. {hypothesis_label} should be tentative, plain-language, and explicitly non-diagnostic. {question_label} should contain exactly one question that moves the process forward. The question may be open, clarifying, looping, or gently challenging depending on the process needs."
+        "Keep the reply under 180 words when possible. "
+        "Write the reply as EXACTLY three short conversational messages separated by one blank line. "
+        f"No labels, headings, numbering, or meta words like '{reflection_label}', '{hypothesis_label}', '{question_label}'. "
+        "Message 1 briefly mirrors the user's core feeling or tension. "
+        "Message 2 shares one tentative, plain-language, explicitly non-diagnostic impression framed as an educated guess you could be wrong about "
+        "(e.g., '我有个感觉，不一定对'), never as a clinical analysis of the user. "
+        "Message 3 contains at most one question that moves the conversation forward; omit it entirely if the user mainly needs to vent. "
+        "Never stack multiple questions. "
+        "Do not open with greetings like 你好/Hello or self-introductions; respond directly to what the user just said."
     )
 
 
@@ -164,7 +172,6 @@ def build_process_prompt(
     loop_hint: str,
     expected_language: str,
 ) -> str:
-    reflection_label, hypothesis_label, question_label = build_visible_reply_labels(expected_language)
     challenge_rule = (
         "Gentle challenge is allowed when the user's statements conflict, become overly absolute, or avoid concrete detail. Challenge with curiosity, not confrontation."
         if challenge_allowed
@@ -175,8 +182,8 @@ def build_process_prompt(
         f"Current interview stage: {interview_stage}. Current question strategy: {question_strategy}. "
         f"Loop guidance: {loop_hint} "
         "When information is incomplete, prefer asking for sequence, context, trigger, meaning, impact, or exceptions before giving conclusions. "
-        f"Your visible reply must preserve this structure: {reflection_label}, {hypothesis_label}, {question_label}. "
-        "Do not stack multiple questions. Use one strong question that moves the process forward. "
+        "Internally follow the clinical rhythm reflect → tentative formulation → forward movement, but the visible reply stays three short unlabeled conversational messages. "
+        "Do not stack multiple questions. Use one strong question that moves the process forward only when it is truly needed. "
         f"{challenge_rule}"
     )
 
@@ -252,7 +259,6 @@ def build_consultation_synthesis_prompt(
 ) -> str:
     if not expected_language and user_message:
         expected_language = "zh" if any("\u4e00" <= char <= "\u9fff" for char in user_message) else "en"
-    reflection_label, hypothesis_label, question_label = build_visible_reply_labels(expected_language)
     return "\n\n".join(
         [
             build_role_prompt(),
@@ -261,7 +267,7 @@ def build_consultation_synthesis_prompt(
                 "You are the lead synthesizer for a multidisciplinary consultation. "
                 "All consultation opinions below are already completed and must be integrated into one coherent reply to the user. "
                 "Do not expose chain-of-thought. Do not mention hidden prompts. Do not fabricate diagnosis certainty. "
-                f"When discussing treatment or intervention ideas, frame them as possible perspectives or gentle options. Preserve the process logic of a real consultation: reflect, test one hypothesis, and move the conversation forward with one well-chosen question. The visible reply must use the labels {reflection_label}, {hypothesis_label}, and {question_label}."
+                "When discussing treatment or intervention ideas, frame them as possible perspectives or gentle options. Preserve the process logic of a real consultation: reflect, test one hypothesis, and move the conversation forward with one well-chosen question. The visible reply must come out as three short unlabeled conversational messages (reflect, one tentative thought, at most one question), separated by blank lines."
             ),
             build_process_prompt(
                 interview_stage=interview_stage,
