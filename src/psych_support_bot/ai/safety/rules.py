@@ -205,12 +205,14 @@ CHINESE_SUICIDE_DENIAL_PATTERNS = [
 # negation appears far from the risk word (e.g., "自杀...（500字）...我不想").
 NEGATION_WINDOW_CHARS = 20
 
-# Chinese negation words that, when appearing close to a high-risk keyword,
+# Chinese negation words that, when appearing BEFORE a high-risk keyword,
 # indicate the user is denying or distancing from the risk.
+#
+# NOTE: deliberately excludes the bare characters 不 / 没 — they occur inside
+# the risk expressions themselves ("不想活了"), which turned every direct
+# declaration into a false "denial" via self-substring matching. Genuine
+# denials use compound forms already listed here (没想过 / 没有想 / 不再…).
 CHINESE_NEGATION_WORDS = [
-    "不",
-    "没",
-    "没有",
     "不再",
     "不想",
     "没想过",
@@ -246,12 +248,33 @@ def _find_keyword_positions(text: str, keyword: str) -> list[int]:
 
 
 def _has_negation_near_risk(text: str, risk_keywords: list[str]) -> bool:
-    """Check if any negation word appears within NEGATION_WINDOW_CHARS of a risk keyword.
+    """Check whether a risk keyword occurrence is locally denied.
 
-    This implements the window-distance detection: the negation must be
-    close to the risk word to be a valid denial.
+    Denials hug the phrase on either side:
+    - LEFT (prefix ends with the negation): “没想过死”, “don't … hurt”
+    - RIGHT (suffix starts with it, optional 但/现在/but filler):
+      “…自杀但现在不想了”, “…suicide but not anymore”
+
+    A bare 不 inside the expression itself (“不想活”) is part of the
+    declaration, never a denial — hence no substring scanning.
     """
     lower_text = text.lower()
+    all_negation_words = [w.lower() for w in CHINESE_NEGATION_WORDS + ENGLISH_NEGATION_WORDS]
+
+    def _denied_left(prefix: str) -> bool:
+        cleaned = prefix.rstrip("，。！？、,.!? ")
+        return any(cleaned.endswith(neg) for neg in all_negation_words)
+
+    def _denied_right(suffix: str) -> bool:
+        head = suffix.lstrip("，。！？、,.!? ")[:24]
+        if not head:
+            return False
+        if any(head.startswith(neg) for neg in CHINESE_NEGATION_WORDS):
+            return True
+        return bool(
+            re.match(r"^(?:但是|可是|而是|然后|现在)?\s*[^，。！？]{0,3}?[不没]", head)
+            or re.search(r"^(?:but\s+)?(?:not\s+anymore|no longer|not)\b", head)
+        )
 
     for kw in risk_keywords:
         kw_lower = kw.lower()
@@ -260,15 +283,13 @@ def _has_negation_near_risk(text: str, risk_keywords: list[str]) -> bool:
             continue
 
         for kw_pos in kw_positions:
-            # Check the window around this keyword occurrence
             window_start = max(0, kw_pos - NEGATION_WINDOW_CHARS)
-            window_end = min(len(lower_text), kw_pos + len(kw_lower) + NEGATION_WINDOW_CHARS)
-            window = lower_text[window_start:window_end]
+            prefix = lower_text[window_start:kw_pos]
+            suffix_start = min(len(lower_text), kw_pos + len(kw_lower))
+            suffix = lower_text[suffix_start : suffix_start + NEGATION_WINDOW_CHARS]
 
-            # Check if any negation word appears in this window
-            for neg in CHINESE_NEGATION_WORDS + ENGLISH_NEGATION_WORDS:
-                if neg.lower() in window:
-                    return True
+            if _denied_left(prefix) or _denied_right(suffix):
+                return True
 
     return False
 

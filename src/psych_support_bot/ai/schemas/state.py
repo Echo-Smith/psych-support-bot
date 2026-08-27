@@ -35,6 +35,9 @@ class GraphState(TypedDict):
     expected_language: str
     # Number of prior messages in this session; drives stage-floor escalation.
     turn_count: int
+    # Minimum risk level enforced by the classifier ("elevated"/"high"/"" );
+    # derived from recent screening results that flagged safety follow-up.
+    safety_floor_risk_level: str
     # Disengagement preference: user asked NOT to be questioned this turn
     # ("我只想安静待一会儿"). Safe paths (crisis/high risk) ignore this.
     no_question_mode: bool

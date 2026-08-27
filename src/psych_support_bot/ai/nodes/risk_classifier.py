@@ -57,6 +57,32 @@ def classify_risk(state: GraphState) -> GraphState:
                 )
                 logger.info("Cross-turn risk upgrade: elevated -> high (consecutive elevated detected)")
 
+        # Safety floor from recent screening results (e.g. a PHQ-9 run whose
+        # item-9 answer set needs_safety_followup). A single turn without any
+        # matching keyword must not downgrade below a recent clinical signal;
+        # severity >= high also arms crisis mode like a direct detection would.
+        # NOTE: applied *before* the mode switch below so a floor of high
+        # routes into crisis mode exactly like a natively detected signal.
+        floor = str(state.get("safety_floor_risk_level") or "").strip()
+        if floor in {"elevated", "high", "critical"}:
+            severity = {"low": 0, "elevated": 1, "high": 2, "critical": 3}
+            current = state["risk_result"]
+            if severity[current.risk_level] < severity[floor]:
+                state["risk_result"] = RiskResult(
+                    risk_level=floor,
+                    risk_types=[*current.risk_types, "recent_screening_flag"],
+                    needs_crisis_mode=current.needs_crisis_mode or severity[floor] >= 2,
+                    reason=(
+                        "Safety floor applied: recent screening flagged safety follow-up. "
+                        "Original: " + current.reason
+                    ),
+                )
+                logger.info(
+                    "Safety floor applied: %s -> %s (recent screening flag)",
+                    current.risk_level,
+                    floor,
+                )
+
         if state["risk_result"].needs_crisis_mode:
             state["mode"] = "crisis"
 

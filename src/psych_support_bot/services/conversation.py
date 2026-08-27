@@ -117,6 +117,11 @@ def _days_since(dt: datetime) -> int:
     return max((datetime.now(UTC) - dt).days, 0)
 
 
+# How long a screening result with needs_safety_followup keeps enforcing the
+# elevated-risk floor on every incoming message.
+SAFETY_FLOOR_WINDOW_DAYS = 7
+
+
 def _count_recent_invalid_answers(prior_messages: list[Any], assessment_type: str) -> int:
     """Count consecutive trailing user messages that failed answer parsing."""
     misses = 0
@@ -605,6 +610,18 @@ class ConversationService:
             "no_question_mode": classify_disengage(payload.message) == "quiet",
             # Depth of this conversation; feeds stage-floor escalation.
             "turn_count": len(prior_messages),
+            # A recent flagged screening (PHQ-9 item 9 etc.) raises the risk
+            # floor so quiet/ambiguous turns still land in the safety path.
+            "safety_floor_risk_level": (
+                "elevated"
+                if (
+                    (recent_screening := get_latest_assessment(session, payload.user_id, "phq9"))
+                    is not None
+                    and recent_screening.needs_safety_followup
+                    and _days_since(recent_screening.created_at) <= SAFETY_FLOOR_WINDOW_DAYS
+                )
+                else ""
+            ),
             "expected_language": expected_language,
         }
         with trace_span(
@@ -658,15 +675,9 @@ class ConversationService:
                 "refusal_history": result.get("refusal_history", []),
             },
         )
-        update_span_output(
-            root_obs,
-            {
-                "mode": result["mode"],
-                "risk_level": result["risk_result"].risk_level,
-                "reply": result["generated_reply"].text,
-                "summary": result["session_summary"],
-            },
-        )
+        # NOTE: root trace output/session fields are written inside the
+        # trace_span block above; the span is already closed here, so any
+        # update after it would be silently dropped.
         save_conversation_result(
             session=session,
             response=response,
