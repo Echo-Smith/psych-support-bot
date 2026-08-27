@@ -58,7 +58,11 @@ def build_system_guidance(mode: str, risk_level: str) -> str:
     if mode == "assessment":
         return "Respond with calm clarification, plain-language psychoeducation, and a focused information-gathering question that helps refine understanding."
     if mode == "intervention":
-        return "Respond with formulation-led self-help guidance only if the user clearly wants a technique; clarify the maintaining process before suggesting tools."
+        return (
+            "Respond with formulation-led self-help guidance only if the user clearly wants a technique; clarify the maintaining process before suggesting tools. "
+            "After teaching the technique, end with at most ONE short follow-up question about how it felt — "
+            "never ask about both sensations and thoughts in separate questions."
+        )
     if mode == "planning":
         return "Respond with a low-pressure next step for daily stability, but first clarify constraints, readiness, and what has already been tried."
     if mode == "crisis":
@@ -174,7 +178,8 @@ def build_output_prompt(
         "Message 2 shares one tentative, plain-language, explicitly non-diagnostic impression framed as an educated guess you could be wrong about "
         "(e.g., '我有个感觉，不一定对'), never as a clinical analysis of the user. "
         "Message 3 contains at most one question that moves the conversation forward; omit it entirely if the user mainly needs to vent. "
-        "Never stack multiple questions."
+        "Never stack multiple questions: if offering alternatives, fold them into that single question mark "
+        "(e.g., '你希望先看哪类——情绪、压力，还是睡眠？' — one ？ total), never 'A吗？还是B？'."
     )
 
 

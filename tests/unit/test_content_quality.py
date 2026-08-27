@@ -407,10 +407,22 @@ class TestCrisisStructureExemption:
         crisis_text_zh = "我很担心你现在的安全。建议你立即拨打120急救。"
         assert _check_structure(crisis_text_zh, "zh", mode="crisis") is True
 
-    def test_non_crisis_mode_still_requires_structure(self) -> None:
-        """非 crisis 模式仍然要求三段式标签。"""
+    def test_non_crisis_mode_structure_contract(self) -> None:
+        """非 crisis 模式：无标签短消息合法；临床标签/多问号拒绝。"""
         from psych_support_bot.evals.runner import _check_structure
 
-        # 缺少三段式标签的回复
-        plain_text = "I understand you are feeling stressed today."
-        assert _check_structure(plain_text, "en", mode="support") is False
+        # 无标签的 1~3 条短消息 → 合法
+        assert (
+            _check_structure("I understand you are feeling stressed today.", "en", mode="support")
+            is True
+        )
+        labeled_zh = "回应：你今天很累。\n\n工作性假设：也许压力源在工作。\n\n下一问：最近睡得如何？"
+        assert _check_structure(labeled_zh, "zh", mode="support") is False
+
+        # 超过三条段落 → 拒绝
+        four_parts = "一\n\n二\n\n三\n\n四"
+        assert _check_structure(four_parts, "zh", mode="support") is False
+
+        # 两个及以上问号 → 拒绝（不许堆叠提问）
+        stacked = "辛苦了。\n\n想聊聊吗？还是先休息？"
+        assert _check_structure(stacked, "zh", mode="support") is False

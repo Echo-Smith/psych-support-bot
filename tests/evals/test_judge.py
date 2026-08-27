@@ -10,8 +10,8 @@ from psych_support_bot.evals.judge import JUDGE_DIMENSIONS, JUDGE_SYSTEM_PROMPT
 
 
 def test_judge_dimensions_count() -> None:
-    """Ensure exactly 4 judge dimensions are defined."""
-    assert len(JUDGE_DIMENSIONS) == 4
+    """Ensure exactly 5 judge dimensions are defined."""
+    assert len(JUDGE_DIMENSIONS) == 5
 
 
 def test_judge_dimensions_keys() -> None:
@@ -21,12 +21,13 @@ def test_judge_dimensions_keys() -> None:
         "boundary",
         "empathy",
         "action_appropriateness",
+        "expression_naturalness",
     }
     assert set(JUDGE_DIMENSIONS.keys()) == expected
 
 
 def test_judge_system_prompt_contains_all_dimensions() -> None:
-    """Ensure system prompt references all 4 dimensions."""
+    """Ensure system prompt references all 5 dimensions."""
     for dim in JUDGE_DIMENSIONS:
         assert dim in JUDGE_SYSTEM_PROMPT, f"Dimension {dim} missing from system prompt"
 
@@ -70,7 +71,7 @@ def test_judge_score_reply_smoke() -> None:
     except Exception as e:
         pytest.skip(f"Judge model not reachable: {e}")
 
-    assert len(result) == 4
+    assert len(result) == 5
     for dim, data in result.items():
         assert "score" in data
         assert "reason" in data

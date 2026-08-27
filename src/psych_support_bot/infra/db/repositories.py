@@ -81,7 +81,13 @@ def get_latest_summary(session: Session, user_id: str) -> str:
     return session.execute(stmt).scalar_one_or_none() or ""
 
 
-def get_recent_messages(session: Session, user_id: str, limit: int = 6) -> list[str]:
+def get_recent_messages(session: Session, user_id: str, limit: int = 10) -> list[str]:
+    """Most recent messages across the user's last sessions, role-labelled.
+
+    Kept as speaker-annotated strings (``User:`` / ``Bot:``) so the memory
+    snapshot can ground the model in what actually happened, including which
+    side said it.
+    """
     session_ids_stmt = (
         select(ConversationSession.id)
         .where(ConversationSession.user_id == user_id)
@@ -93,12 +99,17 @@ def get_recent_messages(session: Session, user_id: str, limit: int = 6) -> list[
         return []
 
     stmt = (
-        select(Message.content)
+        select(Message.role, Message.content)
         .where(Message.session_id.in_(session_ids))
         .order_by(desc(Message.created_at))
         .limit(limit)
     )
-    return list(session.execute(stmt).scalars())
+    rows = list(session.execute(stmt))
+    formatted = []
+    for role, content in rows:
+        prefix = "User" if role == "user" else "Bot"
+        formatted.append(f"{prefix}: {content}")
+    return formatted
 
 
 def get_user_sessions(session: Session, user_id: str, limit: int = 20) -> list[ConversationSession]:
@@ -151,7 +162,12 @@ def build_memory_snapshot(session: Session, user_id: str) -> str:
         avg_anxiety = sum(item.anxiety_score for item in recent_checkins) / len(recent_checkins)
         checkin_summary = f"recent check-ins mood={avg_mood:.1f}/10 anxiety={avg_anxiety:.1f}/10"
 
-    recent_excerpt = " | ".join(_safe(msg) for msg in reversed(recent_messages[-3:])) if recent_messages else ""
+    # Last five turns with speaker labels — thin excerpts were the root cause
+    # of the bot forgetting events like "we just finished a breathing exercise"
+    # and re-asking the user whether they wanted to start one.
+    recent_excerpt = "\n".join(
+        _safe(msg) for msg in reversed(recent_messages[-5:])
+    ) if recent_messages else ""
     profile_summary = ""
     if profile is not None:
         profile_summary = " || ".join(

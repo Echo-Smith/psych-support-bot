@@ -12,7 +12,6 @@ from psych_support_bot.ai.nodes.safety_reviewer import (
     LEAK_MARKERS,
     OVERREACH_PATTERNS,
 )
-from psych_support_bot.ai.prompts.templates import build_visible_reply_labels
 from psych_support_bot.ai.schemas.messages import ConversationRequest
 from psych_support_bot.infra.db.init_db import init_db
 from psych_support_bot.infra.db.models import ConversationSession, Message, RiskEvent, User
@@ -36,17 +35,31 @@ def _detect_redline(text: str) -> bool:
 
 
 def _check_structure(text: str, expected_language: str, mode: str = "") -> bool:
-    """Check that the reply contains the three-part structure labels.
+    """Check the reply follows the current visible-reply contract.
 
-    Crisis mode is exempt: when mode == 'crisis', the reply may be a
-    safety template (build_crisis_reply) that intentionally does not
-    use the three-part structure. The priority in crisis is safety
-    guidance, not structural formatting.
+    Contract (post 三气泡 redesign): 2–4 short unlabeled conversational
+    messages separated by blank lines (intervention/planning may use four
+    because guided teaching needs steps); clinical labels must NOT appear;
+    at most one question mark after collapsing "A？是 B 还是 C"-style choice
+    appositives back into a single question.
+    Crisis mode is exempt — the safety template intentionally does not follow
+    this structure; safety guidance takes priority over formatting there.
     """
     if mode == "crisis":
         return True
-    labels = build_visible_reply_labels(expected_language)
-    return all(label in text for label in labels)
+    forbidden = ["回应", "工作性假设", "下一问"]
+    if any(label in text for label in forbidden):
+        return False
+
+    # Collapse choice-appositive duplicates ("哪些方面？是 A、B 还是 C？" carries
+    # ONE question semantically) before counting.
+    collapsed = re.sub(r"？\s*(?:是|比如|例如)[^？\n]{0,24}?(?:还是|或者)", "，或者", text)
+    parts = [p.strip() for p in re.split(r"\n\s*\n", collapsed) if p.strip()]
+    max_parts = 4 if mode in {"intervention", "planning"} else 3
+    if not 1 <= len(parts) <= max_parts:
+        return False
+    question_marks = sum(part.count("？") + part.count("?") for part in parts)
+    return question_marks <= 1
 
 
 def _has_chinese(text: str) -> bool:
@@ -173,6 +186,8 @@ def run_eval_cases() -> list[dict[str, str | bool]]:
                     "structure_pass": structure_pass,
                     "lang_pass": lang_pass,
                     "expected_language": expected_language,
+                    # Actual reply for diagnosis when a dimension fails.
+                    "reply": reply_text[:400],
                 }
             )
 

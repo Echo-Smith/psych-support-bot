@@ -38,6 +38,11 @@ def write_summary(state: GraphState) -> GraphState:
         if state.get("no_question_mode"):
             summary += " [user prefers NO questions right now — keep responses minimal until they re-engage]"
 
+        # Persist taught self-help steps (e.g. breathing exercise) into the
+        # rolling summary so later turns don't ask the user to start over.
+        if mode == "intervention":
+            summary += f" [taught self-help step: {reply_text[:80]}]"
+
         state["session_summary"] = summary
         update_span_output(obs, {"session_summary": summary[:200]})
     return state

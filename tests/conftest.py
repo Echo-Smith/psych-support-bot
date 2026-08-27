@@ -1,5 +1,34 @@
+"""Shared pytest configuration.
+
+1. Clear cached settings at session start (existing behaviour).
+2. Isolate the suite from real Langfuse exports: the repository `.env`
+   carries production Langfuse keys, and without this fixture every pytest
+   run streamed synthetic node spans into the live project, polluting the
+   traces used for reviewing real conversations.
+"""
+
+import pytest
+
 from psych_support_bot.infra.config.settings import get_settings
 
 
 def pytest_sessionstart(session) -> None:  # type: ignore[no-untyped-def]
     get_settings.cache_clear()
+
+
+@pytest.fixture(autouse=True)
+def _no_langfuse_export(monkeypatch):
+    monkeypatch.delenv("LANGFUSE_PUBLIC_KEY", raising=False)
+    monkeypatch.delenv("LANGFUSE_SECRET_KEY", raising=False)
+
+    # Drop cached settings/singleton created before (or outside) this fixture.
+    monkeypatch.setattr(
+        "psych_support_bot.infra.telemetry.tracing._langfuse_client", None
+    )
+    get_settings.cache_clear()
+
+    yield
+
+    from psych_support_bot.infra.telemetry import tracing
+
+    tracing._langfuse_client = None
