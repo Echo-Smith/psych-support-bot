@@ -1,5 +1,7 @@
+import contextvars
 import logging
 from concurrent.futures import ThreadPoolExecutor
+from functools import partial
 
 from langchain_core.messages import HumanMessage, SystemMessage
 
@@ -180,24 +182,38 @@ def generate_multidisciplinary_consultation(
     if not expected_language:
         expected_language = _expected_language(user_message)
     agents = consultation_agents()
-    with ThreadPoolExecutor(max_workers=len(agents)) as executor:
-        futures = [
-            executor.submit(
-                _generate_consultation_opinion,
-                agent=agent,
-                user_message=user_message,
-                mode=mode,
-                risk_level=risk_level,
-                memory_summary=memory_summary,
-                knowledge_context=knowledge_context,
-                expected_language=expected_language,
-                interview_stage=interview_stage,
-                question_strategy=question_strategy,
-                challenge_allowed=challenge_allowed,
-                loop_hint=loop_hint,
+    # ThreadPoolExecutor workers do NOT inherit the caller's contextvars, so
+    # without seeding each task with a snapshot of this context the agents'
+    # Langfuse spans detach from the current trace and appear as top-level
+    # "llm.invoke" traces in the UI. Each job gets its own copy of a context
+    # captured here (copies are independent → safe to run concurrently).
+    seed_ctx = contextvars.copy_context()
+
+    def _collect_jobs() -> list[tuple[contextvars.Context, partial[dict[str, str]]]]:
+        return [
+            (
+                contextvars.copy_context(),
+                partial(
+                    _generate_consultation_opinion,
+                    agent=agent,
+                    user_message=user_message,
+                    mode=mode,
+                    risk_level=risk_level,
+                    memory_summary=memory_summary,
+                    knowledge_context=knowledge_context,
+                    expected_language=expected_language,
+                    interview_stage=interview_stage,
+                    question_strategy=question_strategy,
+                    challenge_allowed=challenge_allowed,
+                    loop_hint=loop_hint,
+                ),
             )
             for agent in agents
         ]
+
+    jobs = seed_ctx.run(_collect_jobs)
+    with ThreadPoolExecutor(max_workers=len(agents)) as executor:
+        futures = [executor.submit(job_ctx.run, fn) for job_ctx, fn in jobs]
         opinions = [future.result() for future in futures]
 
     opinions_text = "\n\n".join(f"[{item['agent']} - {item['school']}]\n{item['opinion']}" for item in opinions)

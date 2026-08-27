@@ -113,22 +113,25 @@ def trace_span(
 
 def _attach_trace_fields(obs, *, session_id: str | None, user_id: str | None) -> None:
     """Best-effort mapping of session/user onto the parent trace so the UI
-    groups conversations correctly."""
+    groups conversations correctly.
+
+    Langfuse v4 reads these from OTel span attributes (keys ``session.id``
+    and ``user.id``); ``update_trace`` no longer exists on spans there.
+    """
     if obs is None or not (session_id or user_id):
         return
-    update_trace = getattr(obs, "update_trace", None)
-    if not callable(update_trace):
-        logger.debug("Langfuse span lacks update_trace; skipping trace fields")
+    otel_span = getattr(obs, "_otel_span", None)
+    is_recording = getattr(otel_span, "is_recording", None)
+    if otel_span is None or not (callable(is_recording) and is_recording()):
+        logger.debug("Langfuse span has no recording otel span; skipping trace fields")
         return
     try:
-        kwargs: dict[str, str] = {}
         if session_id:
-            kwargs["session_id"] = session_id
+            otel_span.set_attribute("session.id", session_id)
         if user_id:
-            kwargs["user_id"] = user_id
-        update_trace(**kwargs)
+            otel_span.set_attribute("user.id", user_id)
     except Exception:
-        logger.debug("Failed to set Langfuse trace session/user fields", exc_info=True)
+        logger.debug("Failed to set Langfuse trace session/user attributes", exc_info=True)
 
 
 def update_span_output(obs, output: object) -> None:
