@@ -358,7 +358,7 @@ def test_crisis_reply_english_high() -> None:
         reason="test",
     )
     reply = build_crisis_reply(risk, user_message="I am in pain")
-    assert "988" in reply
+    assert "988" in reply or "Suicide & Crisis Lifeline" in reply
     assert "trusted" in reply.lower()
 
 

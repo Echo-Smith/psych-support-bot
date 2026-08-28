@@ -1,12 +1,15 @@
 from __future__ import annotations
 
+import ipaddress
 import json
 import os
 import re
+import socket
 from dataclasses import dataclass
 from html.parser import HTMLParser
 from pathlib import Path
 from urllib.error import HTTPError, URLError
+from urllib.parse import urlsplit
 from urllib.request import Request, urlopen
 
 try:
@@ -258,7 +261,32 @@ def load_all_corpora() -> list[CorpusChunk]:
     return [*load_public_corpus(), *load_local_corpus(), *load_ingested_corpus()]
 
 
+def _assert_public_http_url(url: str) -> None:
+    """Reject non-http(s) schemes and hosts that resolve to loopback/private/reserved addresses (SSRF guard)."""
+    parsed = urlsplit(url)
+    if parsed.scheme not in {"http", "https"}:
+        raise ValueError(f"URL scheme not allowed: {parsed.scheme or '(none)'}")
+    if not parsed.hostname:
+        raise ValueError("URL must include a hostname")
+    try:
+        addr_infos = socket.getaddrinfo(parsed.hostname, parsed.port or (443 if parsed.scheme == "https" else 80))
+    except socket.gaierror as exc:  # pragma: no cover - depends on DNS
+        raise ValueError(f"URL host does not resolve: {parsed.hostname}") from exc
+    for info in addr_infos:
+        ip = ipaddress.ip_address(info[4][0])
+        if (
+            ip.is_private
+            or ip.is_loopback
+            or ip.is_link_local
+            or ip.is_reserved
+            or ip.is_multicast
+            or ip.is_unspecified
+        ):
+            raise ValueError(f"URL host resolves to a blocked address: {parsed.hostname}")
+
+
 def fetch_url_text(url: str, timeout: int = 30) -> str:
+    _assert_public_http_url(url)
     request = Request(url, headers={"User-Agent": USER_AGENT})
     with urlopen(request, timeout=timeout) as response:
         charset = response.headers.get_content_charset() or "utf-8"
