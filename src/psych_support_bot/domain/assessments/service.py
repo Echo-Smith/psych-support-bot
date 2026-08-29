@@ -410,7 +410,18 @@ def build_assessment_followup_reply(result: AssessmentResult, *, user_message: s
 
     if is_zh:
         lines.append(f"感谢你完成{result.questionnaire_title}。")
-        lines.append(f"你的得分是{result.score}，属于{result.severity_band}范围。")
+        # severity_band 字段保持英文枚举值，仅在中文展示文案里做映射，
+        # 避免"属于mild范围"这类中英夹杂。
+        zh_band = {
+            "minimal": "极轻度",
+            "mild": "轻度",
+            "moderate": "中度",
+            "moderately_severe": "中重度",
+            "severe": "重度",
+            "subthreshold": "亚阈值",
+            "none": "无明显",
+        }.get(result.severity_band, result.severity_band)
+        lines.append(f"你的得分是{result.score}，属于{zh_band}范围。")
     else:
         lines.append(f"Thanks for completing {result.questionnaire_title}.")
         lines.append(f"Your score is {result.score}, which falls in the {result.severity_band} range.")

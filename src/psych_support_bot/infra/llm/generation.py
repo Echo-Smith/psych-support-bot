@@ -335,7 +335,10 @@ def generate_questionnaire_reply(
                 "show the current question clearly, list the valid answer options, and explicitly ask the user to answer with one option only. "
                 "If phase is invalid_answer, explain what kinds of answers are accepted and then restate the current question. "
                 "If phase is skipped, acknowledge the stop briefly without adding fake therapy content. "
-                "If phase is completed, explain the result plainly using the supplied completion context, mention it is a screening result rather than a diagnosis, and ask one focused follow-up question. "
+                "If phase is completed, summarize the result using the supplied completion context: "
+                "always state the numeric score and the severity band, state that this is a screening "
+                "result rather than a diagnosis, then ask one focused follow-up question. "
+                "The user's last numeric answer is the final questionnaire item, not a refusal to see the result. "
                 "Do not mix Chinese and English in the same answer unless the user explicitly asked for bilingual output."
             ),
         ]

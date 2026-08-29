@@ -106,10 +106,13 @@ def test_assessment_followup_includes_supportive_interpretation() -> None:
     assert final is not None
     assert final.debug["source"] == "assessment_result"
     assert final.debug["llm_used"] is True
-    assert "some low-mood symptoms are present" in final.reply.text
-    assert "motivation, concentration, energy" in final.reply.text
-    assert "screening result" in final.reply.text
-    assert "not a diagnosis" in final.reply.text
+    assert final.debug["assessment_score"] == 8
+    # LLM 契约：完成回复必须向用户陈述分数，并说明这是筛查而非诊断。
+    # （逐字解读文案由 domain 层单测覆盖，集成层不断言 LLM 转述的措辞。）
+    assert "8" in final.reply.text
+    lowered = final.reply.text.lower()
+    assert "screening" in lowered or "not a diagnosis" in lowered
+    assert final.reply.text
 
 
 def test_consultation_metadata_is_exposed_for_consult_request() -> None:
@@ -190,8 +193,12 @@ def test_process_metadata_is_exposed_for_contradiction_style_message() -> None:
     assert result.debug["challenge_allowed"] is True
 
 
-def test_non_assessment_message_during_assessment_falls_back_to_support() -> None:
-    """活跃评估期间发送非评估消息应回落到对话图，不应当作无效答案。"""
+def test_non_assessment_message_during_assessment_reprompts_same_question() -> None:
+    """活跃评估期间发送非数字消息按无效答案处理：重问当前题、不推进问卷。
+
+    25370c9 回归 main 行为：问卷进行中不再做 detect_mode 跳出，
+    非数字输入触发 invalid_answer 重问，避免问卷被闲聊打断丢失进度。
+    """
     user_id = f"non-assessment-during-{uuid4()}"
     with SessionLocal() as session:
         start = conversation_service.respond(
@@ -201,24 +208,23 @@ def test_non_assessment_message_during_assessment_falls_back_to_support() -> Non
         assert start.mode == "assessment"
         assert start.debug["source"] == "assessment_start"
 
-        # 在量表进行中发送一句支持意图消息（不是数字也不是退出指令）
+        # 在量表进行中发送一句支持意图消息（不是数字也不是退出/暂停指令）
         mid = conversation_service.respond(
             ConversationRequest(user_id=user_id, message="我最近还感到很焦虑"),
             session=session,
         )
 
-    # 应当回落到对话图，不进入 invalid_answer 分支
+    # 按无效答案处理：留在问卷内，重问当前题
     assert mid is not None
-    assert mid.debug.get("source") not in {
-        "questionnaire_progress",
-        "assessment_result",
-    }
-    assert mid.mode in {"support", "intervention", "planning", "crisis"}
+    assert mid.mode == "assessment"
+    assert mid.debug.get("source") == "questionnaire_progress"
+    # 题目不推进：仍是开始时的那道题
+    assert mid.question_options == start.question_options
     assert mid.reply.text
 
 
-def test_help_message_during_assessment_does_not_continue_questionnaire() -> None:
-    """活跃评估期间发送 help 意图不应让评估继续推进。"""
+def test_help_message_during_assessment_reprompts_without_advancing() -> None:
+    """活跃评估期间发送 help 意图按无效答案处理：不推进、不丢进度。"""
     user_id = f"help-during-assessment-{uuid4()}"
     with SessionLocal() as session:
         start = conversation_service.respond(
@@ -233,12 +239,12 @@ def test_help_message_during_assessment_does_not_continue_questionnaire() -> Non
             session=session,
         )
 
-        # 帮助回复不能是量表提示或要求输入数字的错误提示
-        text = help_resp.reply.text
-        assert "请回复一个数字" not in text
-        assert "Please reply with a number" not in text
-        # 也不能推进到下一题（source 不是 questionnaire_progress）
-        assert help_resp.debug.get("source") != "questionnaire_progress"
+    assert help_resp.mode == "assessment"
+    assert help_resp.debug.get("source") == "questionnaire_progress"
+    # 不推进到下一题：仍是当前题
+    assert help_resp.question_options == start.question_options
+    # 回复不为空
+    assert help_resp.reply.text
 
 
 def test_numeric_answer_during_assessment_proceeds_normally() -> None:
