@@ -14,6 +14,28 @@ from psych_support_bot.infra.telemetry.tracing import trace_span, update_span_ou
 
 logger = logging.getLogger(__name__)
 
+# Verbatim-repeat guard: when the freshly generated reply is byte-identical
+# to the previous bot turn (Langfuse 巡检 2026-08-28 发现两轮不同输入产出
+# 完全相同的回复), append a differentiated follow-up so consecutive turns
+# never read as a copied message. Template (critical) replies are exempt —
+# they are intentionally fixed.
+_ZH_REPEAT_FOLLOWUP = (
+    "\n\n换个角度说——此刻你的身体有什么感觉？是紧绷、发沉，还是别样的感受？"
+)
+_EN_REPEAT_FOLLOWUP = (
+    "\n\nLet's take a different angle — what do you notice in your body right "
+    "now: tension, heaviness, or something else?"
+)
+
+
+def _dedupe_reply(reply_text: str, previous_reply: str, expected_language: str) -> str:
+    stripped = reply_text.strip()
+    if not previous_reply or not stripped or stripped != previous_reply.strip():
+        return reply_text
+    followup = _ZH_REPEAT_FOLLOWUP if expected_language == "zh" else _EN_REPEAT_FOLLOWUP
+    logger.warning("Reply identical to previous turn; appending differentiated follow-up.")
+    return reply_text + followup
+
 
 def _split_reply_messages(text: str) -> list[str]:
     """Split a generated reply into IM-style bubble messages (max 3).
@@ -148,6 +170,15 @@ def generate_response(state: GraphState) -> GraphState:
                         "I am here with you. Although I am experiencing some technical difficulty, "
                         "I still want to support you. Let us slow down and talk about how you are feeling right now."
                     )
+
+        # LLM-generated paths guard against verbatim repeats of the previous
+        # turn; the critical template reply is intentionally fixed.
+        if risk_level != "critical":
+            reply_text = _dedupe_reply(
+                reply_text,
+                state.get("last_bot_reply", ""),
+                state.get("expected_language", ""),
+            )
 
         state["generated_reply"] = GeneratedReply(
             text=reply_text,

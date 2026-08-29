@@ -1,4 +1,5 @@
 import json
+import logging
 from datetime import UTC, datetime
 from typing import Any, cast
 from uuid import uuid4
@@ -136,6 +137,9 @@ def _count_recent_invalid_answers(prior_messages: list[Any], assessment_type: st
     return misses
 
 
+logger = logging.getLogger(__name__)
+
+
 class ConversationService:
     def _build_response(
         self,
@@ -191,23 +195,45 @@ class ConversationService:
             error_hint: str | None = None,
             completion_context: str | None = None,
         ) -> str:
-            return generate_questionnaire_reply(
-                user_message=user_message,
-                expected_language=expected_language,
-                assessment_title=guide.title,
-                assessment_code=guide.code,
-                phase=phase,
-                timeframe=guide.timeframe,
-                purpose=guide.purpose,
-                instructions=guide.instructions,
-                current_index=current_index,
-                total_items=total_items,
-                next_question=next_question,
-                options=options,
-                answers_so_far=answers_so_far,
-                error_hint=error_hint,
-                completion_context=completion_context,
-            )
+            try:
+                return generate_questionnaire_reply(
+                    user_message=user_message,
+                    expected_language=expected_language,
+                    assessment_title=guide.title,
+                    assessment_code=guide.code,
+                    phase=phase,
+                    timeframe=guide.timeframe,
+                    purpose=guide.purpose,
+                    instructions=guide.instructions,
+                    current_index=current_index,
+                    total_items=total_items,
+                    next_question=next_question,
+                    options=options,
+                    answers_so_far=answers_so_far,
+                    error_hint=error_hint,
+                    completion_context=completion_context,
+                )
+            except Exception:
+                # 上游 LLM 不可用（限流/内容安全拦截/网络故障）时问卷流程不能
+                # 崩给用户：回退到确定性结构化提示（不走 LLM）。
+                # Langfuse 巡检（2026-08-23）发现该路径 LLM 403 会直接 500。
+                logger.exception("Questionnaire LLM reply failed; using deterministic fallback.")
+                zh = expected_language == "zh"
+                if phase == "completed":
+                    return completion_context or (
+                        f"{guide.title}已完成，感谢你的作答。" if zh else f"{guide.title} is complete. Thank you for answering."
+                    )
+                options_text = (
+                    "，".join(f"{value}={label}" for value, label in options)
+                    if zh
+                    else ", ".join(f"{value} = {label}" for value, label in options)
+                )
+                body = next_question or ""
+                if options_text:
+                    body += f"（{options_text}）" if zh else f" ({options_text})"
+                if error_hint:
+                    body += f" {error_hint}"
+                return build_progress_prefix(guide.title, current_index, total_items, expected_language) + body
 
         active_session = get_active_questionnaire_session(session, payload.user_id)
         if active_session is not None:
@@ -623,6 +649,15 @@ class ConversationService:
                 else ""
             ),
             "expected_language": expected_language,
+            # 最近一条 bot 回复：response_generator 用它做逐字重复检测。
+            "last_bot_reply": next(
+                (
+                    m.content
+                    for m in reversed(prior_messages)
+                    if getattr(m, "role", "") == "assistant"
+                ),
+                "",
+            ),
         }
         with trace_span(
             "conversation_graph.invoke",
@@ -636,7 +671,51 @@ class ConversationService:
             session_id=session_id,
             user_id=payload.user_id,
         ) as root_obs:
-            raw_result = cast(Any, conversation_graph.invoke(cast(Any, state)))
+            try:
+                raw_result = cast(Any, conversation_graph.invoke(cast(Any, state)))
+            except Exception:
+                # 最后一道防线：graph 内部任何未捕获异常（LLM 故障、节点 bug）
+                # 都不能以 500 形式暴露给处于脆弱状态的用户。
+                # Langfuse 巡检（2026-08-23）：越狱输入触发上游 403 后
+                # graph 输出为空，用户端收到错误响应。
+                logger.exception("Conversation graph failed; serving static safety fallback reply.")
+                update_span_output(root_obs, {"error": "graph_invoke_failed", "fallback": True})
+                fallback_zh = expected_language == "zh"
+                reply_text = (
+                    "我在这里陪你。刚刚我这边遇到了一点技术问题，没能好好回应你，"
+                    "但你的感受很重要。如果你现在感到不安全，请立即拨打120，"
+                    "或联系一位信任的人陪在你身边。"
+                    if fallback_zh
+                    else (
+                        "I am here with you. I just hit a technical problem and could not respond properly, "
+                        "but your feelings matter. If you feel unsafe right now, please call emergency "
+                        "services or reach out to someone you trust."
+                    )
+                )
+                fallback_response = ConversationResponse(
+                    session_id=session_id,
+                    mode="support",
+                    risk=RiskResult(
+                        risk_level="low",
+                        risk_types=[],
+                        needs_crisis_mode=False,
+                        reason="Graph failure fallback.",
+                    ),
+                    reply=GeneratedReply(text=reply_text, style="support", includes_action_step=True),
+                    summary="Graph invocation failed; static safety fallback served.",
+                    debug={
+                        "source": "graph_fallback",
+                        "llm_used": False,
+                        "fallback_used": True,
+                    },
+                )
+                save_conversation_result(
+                    session=session,
+                    response=fallback_response,
+                    user_message=payload.message,
+                    user_id=payload.user_id,
+                )
+                return fallback_response
             done_state: GraphState = cast(GraphState, raw_result)
             # Root-level output so the Langfuse UI shows a usable summary row
             # per conversation turn instead of a null output.

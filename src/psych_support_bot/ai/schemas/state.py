@@ -41,3 +41,6 @@ class GraphState(TypedDict):
     # Disengagement preference: user asked NOT to be questioned this turn
     # ("我只想安静待一会儿"). Safe paths (crisis/high risk) ignore this.
     no_question_mode: bool
+    # Most recent bot reply in this session ("" when none). The response
+    # generator uses it to avoid serving a verbatim-identical reply twice.
+    last_bot_reply: str

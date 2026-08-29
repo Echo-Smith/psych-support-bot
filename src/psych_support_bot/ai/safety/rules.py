@@ -35,6 +35,14 @@ HIGH_RISK_KEYWORDS = [
     "上吊",
     "吞药",
     "服药过量",
+    # 被动死亡意愿的隐喻表述。Langfuse 巡检发现真实会话中
+    # "我只想逃离这个世界" 被判 low，漏掉了危机干预。
+    # 误报代价（多展示一次危机资源）远小于漏报代价，故纳入高危。
+    "逃离这个世界",
+    "离开这个世界",
+    "想去另一个世界",
+    "escape this world",
+    "leave this world",
 ]
 
 NEGATION_PATTERNS = [
@@ -83,6 +91,13 @@ ELEVATED_RISK_KEYWORDS = [
     "不配活着",
     "太累了",
     "撑不下去",
+    # Langfuse 巡检补充：真实会话中"我真的不行了"被判 low。
+    # 痛苦升级信号，但语义不足以触发危机模式，纳入 elevated。
+    "熬不住了",
+    "真的不行了",
+    "快不行了",
+    "can't take it anymore",
+    "cannot take it anymore",
 ]
 
 # C2: Regex patterns for Chinese elevated-risk synonym variants.

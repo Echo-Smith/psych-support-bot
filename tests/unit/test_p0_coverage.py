@@ -382,3 +382,71 @@ def test_self_harm_aligned() -> None:
     assert detect_mode("I want to self-harm") == "crisis"
     risk = classify_message_risk("I want to self-harm")
     assert risk.risk_level == "high"
+
+
+# ---------------------------------------------------------------------------
+# Langfuse 巡检 (2026-08-28) 回归：危机隐喻漏报与逐字重复回复
+# ---------------------------------------------------------------------------
+
+
+def test_escape_world_metaphor_triggers_crisis() -> None:
+    """真实会话中'我只想逃离这个世界'曾被判 low 并跳过危机干预，现必须触发危机模式。"""
+    for message in ("我只想逃离这个世界", "我想离开这个世界", "I want to escape this world"):
+        risk = classify_message_risk(message)
+        assert risk.risk_level == "high", message
+        assert risk.needs_crisis_mode is True, message
+
+
+def test_negated_escape_world_stays_below_crisis() -> None:
+    """否定表述（'不想逃离这个世界'）不应触发危机模式。"""
+    risk = classify_message_risk("我不想逃离这个世界")
+    assert risk.risk_level in {"low", "elevated"}
+    assert risk.needs_crisis_mode is False
+
+
+def test_really_cannot_take_it_is_elevated() -> None:
+    """'我真的不行了' / "I can't take it anymore" 至少应判定 elevated 而非 low。"""
+    for message in ("我真的不行了", "I can't take it anymore"):
+        risk = classify_message_risk(message)
+        assert risk.risk_level in {"elevated", "high"}, message
+
+
+def test_verbatim_repeat_appends_differentiated_followup() -> None:
+    """两轮不同输入产出逐字相同回复时，第二轮回补差异化追问而非复读。"""
+    canned = "看到你现在的状态，我能感受到你正承受着巨大的压力。"
+    monkeypatched_reply = canned
+
+    import psych_support_bot.ai.nodes.response_generator as rg
+
+    saved = rg.generate_clinically_bounded_reply
+    rg.generate_clinically_bounded_reply = lambda **_: monkeypatched_reply
+    try:
+        state = _build_state(mode="support", user_message="我只想逃离这个世界", risk_level="low")
+        state["last_bot_reply"] = canned
+        state["expected_language"] = "zh"
+        result = generate_response(state)
+    finally:
+        rg.generate_clinically_bounded_reply = saved
+
+    text = result["generated_reply"].text
+    assert text.startswith(canned)
+    assert text != canned  # 追加了差异化追问
+    assert "身体" in text
+
+
+def test_no_repeat_guard_when_replies_differ() -> None:
+    """回复与上一轮不同时不追加任何内容。"""
+    canned = "这一次的回复和上一轮完全不同。"
+    import psych_support_bot.ai.nodes.response_generator as rg
+
+    saved = rg.generate_clinically_bounded_reply
+    rg.generate_clinically_bounded_reply = lambda **_: canned
+    try:
+        state = _build_state(mode="support", user_message="今天有点累", risk_level="low")
+        state["last_bot_reply"] = "上一轮的回复内容"
+        state["expected_language"] = "zh"
+        result = generate_response(state)
+    finally:
+        rg.generate_clinically_bounded_reply = saved
+
+    assert result["generated_reply"].text == canned
