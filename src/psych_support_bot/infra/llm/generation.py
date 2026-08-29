@@ -1,5 +1,7 @@
 import contextvars
 import logging
+import time
+from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from functools import partial
 
@@ -27,6 +29,29 @@ from psych_support_bot.infra.llm.factory import (
 from psych_support_bot.infra.telemetry.tracing import trace_span, update_span_output
 
 logger = logging.getLogger(__name__)
+
+
+class LLMUnavailableError(RuntimeError):
+    """LLM 在重试后仍不可用，且调用方未提供 fallback。
+
+    所有用 LLM 的路径都必须最终处理这个异常（或提前传入 fallback），
+    不允许以裸 500 的形式暴露给处于脆弱状态的用户。
+    """
+
+
+# Retry policy: transient failures (429 / 5xx / timeout / connection) get a
+# bounded number of retries with backoff. Deterministic client errors (auth,
+# content-safety rejection, bad request) are never retried — they cannot
+# succeed on a second attempt.
+_RETRY_BACKOFF_SECONDS: tuple[float, ...] = (0.5, 1.0)
+_NON_RETRYABLE_STATUS_CODES = {400, 401, 403, 404, 422}
+
+
+def _is_retryable_llm_error(exc: Exception) -> bool:
+    status = getattr(exc, "status_code", None)
+    if isinstance(status, int):
+        return status not in _NON_RETRYABLE_STATUS_CODES
+    return True
 
 
 def _is_diagnosis_request(text: str) -> bool:
@@ -72,6 +97,7 @@ def _invoke(
     expected_language: str,
     *,
     mode: str = "support",
+    fallback: Callable[[], str] | None = None,
 ) -> str:
     model = build_chat_model(temperature=get_temperature_for_mode(mode))
     messages = [
@@ -85,7 +111,35 @@ def _invoke(
         metadata={"model": settings.openai_model, "language": expected_language},
         as_type="generation",
     ) as gen_obs:
-        response = model.invoke(messages)
+        # Single choke point for LLM availability: transient errors are
+        # retried with backoff; after exhaustion the caller-declared fallback
+        # (if any) is served, otherwise LLMUnavailableError is raised.
+        response = None
+        last_exc: Exception | None = None
+        for attempt in range(len(_RETRY_BACKOFF_SECONDS) + 1):
+            try:
+                response = model.invoke(messages)
+                last_exc = None
+                break
+            except Exception as exc:  # noqa: BLE001 – 咽喉层必须接住所有 LLM 异常
+                last_exc = exc
+                if attempt >= len(_RETRY_BACKOFF_SECONDS) or not _is_retryable_llm_error(exc):
+                    break
+                logger.warning(
+                    "LLM call failed (attempt %d/%d, retryable): %s",
+                    attempt + 1,
+                    len(_RETRY_BACKOFF_SECONDS) + 1,
+                    exc,
+                )
+                time.sleep(_RETRY_BACKOFF_SECONDS[attempt])
+        if last_exc is not None or response is None:
+            update_span_output(gen_obs, {"error": str(last_exc)[:300]})
+            if fallback is not None:
+                logger.exception("LLM unavailable after retries; serving caller-declared fallback.")
+                fallback_text = fallback()
+                update_span_output(gen_obs, {"fallback": fallback_text[:300]})
+                return fallback_text
+            raise LLMUnavailableError(f"LLM unavailable: {last_exc}") from last_exc
         output = _coerce_content(response.content)
         update_span_output(gen_obs, output)
 
@@ -155,7 +209,18 @@ def _generate_consultation_opinion(
         challenge_allowed=challenge_allowed,
         loop_hint=loop_hint,
     )
-    opinion = _invoke(system_prompt, user_message, expected_language, mode=mode)
+    fallback_note = (
+        f"（{agent['label']}视角暂时不可用。）"
+        if expected_language == "zh"
+        else f"({agent['label']} perspective temporarily unavailable.)"
+    )
+    opinion = _invoke(
+        system_prompt,
+        user_message,
+        expected_language,
+        mode=mode,
+        fallback=lambda: fallback_note,
+    )
     return {
         "agent": agent["label"],
         "school": agent["school"],
@@ -232,7 +297,23 @@ def generate_multidisciplinary_consultation(
         expected_language=expected_language,
         no_question_mode=no_question_mode,
     )
-    reply_text = _invoke(synthesis_prompt, user_message, expected_language, mode=mode)
+    # Synthesis failure degrades to the raw opinions instead of crashing the
+    # whole consultation — the per-agent calls above already succeeded.
+    def _synthesis_fallback() -> str:
+        zh = expected_language == "zh"
+        return (
+            f"综合多方会诊意见（{mode}模式，风险 {risk_level}）：\n\n{opinions_text}"
+            if zh
+            else f"Synthesis of consultation opinions ({mode} mode, risk {risk_level}):\n\n{opinions_text}"
+        )
+
+    reply_text = _invoke(
+        synthesis_prompt,
+        user_message,
+        expected_language,
+        mode=mode,
+        fallback=_synthesis_fallback,
+    )
     return reply_text, opinions
 
 
@@ -307,6 +388,7 @@ def generate_questionnaire_reply(
     answers_so_far: list[int],
     error_hint: str | None = None,
     completion_context: str | None = None,
+    fallback: Callable[[], str] | None = None,
 ) -> str:
     options_text = ", ".join(f"{value} = {label}" for value, label in options)
     system_prompt = "\n\n".join(
@@ -343,4 +425,4 @@ def generate_questionnaire_reply(
             ),
         ]
     )
-    return _invoke(system_prompt, user_message, expected_language)
+    return _invoke(system_prompt, user_message, expected_language, fallback=fallback)

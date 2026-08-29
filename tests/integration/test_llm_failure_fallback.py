@@ -2,31 +2,55 @@
 
 上游 LLM 不可用（限流 / 内容安全拦截 / 网络故障）时，任何用户路径都不应
 收到 500 或空响应：
-1. 问卷进行中 → 回退确定性结构化提示（不走 LLM）。
+1. 问卷进行中 → 经 _invoke 咽喉层回退确定性结构化提示（不走 LLM）。
 2. 图整体失败 → 回落静态安全文案。
+
+降级下沉到 _invoke 之后，这里的测试直接替换 build_chat_model 返回必抛
+异常的假模型，覆盖真实全链路（_invoke 重试/降级 → 调用方 fallback）。
 """
 
+from types import SimpleNamespace
 from uuid import uuid4
+
+import openai
 
 from psych_support_bot.ai.schemas.messages import ConversationRequest
 from psych_support_bot.infra.db.init_db import init_db
 from psych_support_bot.infra.db.session import SessionLocal
+from psych_support_bot.infra.llm import generation as llm_generation
 from psych_support_bot.services import conversation as conversation_module
 from psych_support_bot.services.conversation import conversation_service
 
 init_db()
 
 
-def test_questionnaire_llm_failure_falls_back_to_deterministic_prompt(monkeypatch) -> None:
-    """问卷进行中 LLM 调用失败时，返回确定性题干提示而不是异常。"""
+class _AlwaysFailingModel:
+    """invoke 必抛给定异常的假 ChatOpenAI，用于打穿 _invoke 全链路。"""
 
-    def _boom(**_: object) -> str:
-        raise PermissionDeniedError("Request rejected by content safety review")
+    def __init__(self, exc_factory) -> None:
+        self._exc_factory = exc_factory
 
+    def invoke(self, _messages: object) -> object:
+        raise self._exc_factory()
+
+
+def _patch_failing_model(monkeypatch, exc_factory) -> None:
     monkeypatch.setattr(
-        conversation_module,
-        "generate_questionnaire_reply",
-        _boom,
+        llm_generation,
+        "build_chat_model",
+        lambda **_: _AlwaysFailingModel(exc_factory),
+    )
+
+
+def test_questionnaire_llm_failure_falls_back_to_deterministic_prompt(monkeypatch) -> None:
+    """问卷进行中 LLM 调用失败（403 内容安全拦截）时，返回确定性题干提示。"""
+    _patch_failing_model(
+        monkeypatch,
+        lambda: openai.PermissionDeniedError(
+            "Request rejected by content safety review",
+            response=SimpleNamespace(status_code=403),
+            body=None,
+        ),
     )
 
     user_id = f"llm-fail-questionnaire-{uuid4()}"
@@ -38,7 +62,7 @@ def test_questionnaire_llm_failure_falls_back_to_deterministic_prompt(monkeypatc
         assert start.mode == "assessment"
         assert start.debug["source"] == "assessment_start"
 
-        # 此时 LLM 已被打桩为必抛异常——答题仍应得到确定性提示
+        # 此时 LLM 全链路必抛 403——答题仍应得到确定性提示
         step = conversation_service.respond(
             ConversationRequest(user_id=user_id, message="2"),
             session=session,
@@ -74,22 +98,16 @@ def test_graph_failure_serves_static_fallback(monkeypatch) -> None:
     assert "技术" in result.reply.text
 
 
-class PermissionDeniedError(Exception):
-    """模拟 openai.PermissionDeniedError，测试只关心异常传播路径。"""
-
-
 def test_permission_denied_error_type_is_caught(monkeypatch) -> None:
-    """真实的 openai.PermissionDeniedError 子类异常也必须被降级路径捕获。"""
-    import openai
-
-    def _boom(**_: object) -> str:
-        raise openai.PermissionDeniedError(
+    """真实的 openai.PermissionDeniedError 必须被 _invoke 降级路径捕获。"""
+    _patch_failing_model(
+        monkeypatch,
+        lambda: openai.PermissionDeniedError(
             "Request rejected by Alibaba Cloud content safety review",
-            response=None,
+            response=SimpleNamespace(status_code=403),
             body=None,
-        )
-
-    monkeypatch.setattr(conversation_module, "generate_questionnaire_reply", _boom)
+        ),
+    )
 
     user_id = f"llm-fail-403-{uuid4()}"
     with SessionLocal() as session:

@@ -195,33 +195,17 @@ class ConversationService:
             error_hint: str | None = None,
             completion_context: str | None = None,
         ) -> str:
-            try:
-                return generate_questionnaire_reply(
-                    user_message=user_message,
-                    expected_language=expected_language,
-                    assessment_title=guide.title,
-                    assessment_code=guide.code,
-                    phase=phase,
-                    timeframe=guide.timeframe,
-                    purpose=guide.purpose,
-                    instructions=guide.instructions,
-                    current_index=current_index,
-                    total_items=total_items,
-                    next_question=next_question,
-                    options=options,
-                    answers_so_far=answers_so_far,
-                    error_hint=error_hint,
-                    completion_context=completion_context,
-                )
-            except Exception:
-                # 上游 LLM 不可用（限流/内容安全拦截/网络故障）时问卷流程不能
-                # 崩给用户：回退到确定性结构化提示（不走 LLM）。
-                # Langfuse 巡检（2026-08-23）发现该路径 LLM 403 会直接 500。
-                logger.exception("Questionnaire LLM reply failed; using deterministic fallback.")
-                zh = expected_language == "zh"
+            zh = expected_language == "zh"
+
+            # 上游 LLM 不可用（限流/内容安全拦截/网络故障）时的确定性降级，
+            # 经 _invoke 咽喉层声明调用——问卷流程不允许崩给用户。
+            # Langfuse 巡检（2026-08-23）发现该路径 LLM 403 会直接 500。
+            def deterministic_fallback() -> str:
                 if phase == "completed":
                     return completion_context or (
-                        f"{guide.title}已完成，感谢你的作答。" if zh else f"{guide.title} is complete. Thank you for answering."
+                        f"{guide.title}已完成，感谢你的作答。"
+                        if zh
+                        else f"{guide.title} is complete. Thank you for answering."
                     )
                 options_text = (
                     "，".join(f"{value}={label}" for value, label in options)
@@ -234,6 +218,25 @@ class ConversationService:
                 if error_hint:
                     body += f" {error_hint}"
                 return build_progress_prefix(guide.title, current_index, total_items, expected_language) + body
+
+            return generate_questionnaire_reply(
+                user_message=user_message,
+                expected_language=expected_language,
+                assessment_title=guide.title,
+                assessment_code=guide.code,
+                phase=phase,
+                timeframe=guide.timeframe,
+                purpose=guide.purpose,
+                instructions=guide.instructions,
+                current_index=current_index,
+                total_items=total_items,
+                next_question=next_question,
+                options=options,
+                answers_so_far=answers_so_far,
+                error_hint=error_hint,
+                completion_context=completion_context,
+                fallback=deterministic_fallback,
+            )
 
         active_session = get_active_questionnaire_session(session, payload.user_id)
         if active_session is not None:
