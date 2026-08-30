@@ -15,6 +15,9 @@ MODE_TEMPERATURES: dict[str, float] = {
     "support": 0.4,
     "planning": 0.4,
     "intervention": 0.5,
+    # Risk classification must be deterministic and reproducible — a judgement
+    # that flips with sampling noise directly changes crisis-mode routing.
+    "risk_classification": 0.0,
 }
 DEFAULT_TEMPERATURE = 0.4
 

@@ -1,12 +1,27 @@
 import logging
 import re
 
+from psych_support_bot.ai.safety.llm_classifier import classify_risk_llm
 from psych_support_bot.ai.safety.rules import classify_message_risk
 from psych_support_bot.ai.schemas.messages import RiskResult
 from psych_support_bot.ai.schemas.state import GraphState
 from psych_support_bot.infra.telemetry.tracing import trace_span, update_span_output
 
 logger = logging.getLogger(__name__)
+
+_SEVERITY = {"low": 0, "elevated": 1, "high": 2, "critical": 3}
+
+
+def _merge_upgrade(rule: RiskResult, llm: RiskResult) -> RiskResult:
+    """单向升级阀门：取 max(规则, LLM)，LLM 永远不能把规则判定拉回。"""
+    if _SEVERITY[llm.risk_level] <= _SEVERITY[rule.risk_level]:
+        return rule
+    return RiskResult(
+        risk_level=llm.risk_level,
+        risk_types=[*dict.fromkeys([*rule.risk_types, *llm.risk_types])],
+        needs_crisis_mode=rule.needs_crisis_mode or llm.needs_crisis_mode,
+        reason=f"{llm.reason} (rule verdict kept in types: {rule.reason})",
+    )
 
 # Patterns to detect previous elevated risk in memory_summary.
 # Memory snapshot contains recent messages and risk info; we look for
@@ -38,6 +53,36 @@ def classify_risk(state: GraphState) -> GraphState:
     ) as obs:
         risk_result = classify_message_risk(state["user_message"])
         state["risk_result"] = RiskResult(**risk_result.model_dump())
+
+        # LLM 语义兜底：规则判 low/elevated 时二次分类。实验（71 条标注语料）
+        # 显示 68% 的危机表述被规则判 low——隐喻（想消失/长眠/遗书）、
+        # 变体插入（看不到任何希望）、英文习语；另有死亡委婉表述
+        # （"死了才能解脱/没有我会更好"）卡在规则 elevated 词表盲区，
+        # 故 elevated 也过 LLM。high/critical 直通（规则升级信号可信）。
+        # 单向升级：LLM 只能往上抬；LLM 不可用时维持规则判定
+        # （fail-safe，不放大不缩小）。
+        llm_semantic_used = False
+        if risk_result.risk_level in {"low", "elevated"}:
+            try:
+                llm_risk = classify_risk_llm(
+                    state["user_message"], state.get("expected_language", "")
+                )
+            except Exception:
+                logger.warning(
+                    "LLM risk classifier unavailable; keeping rule verdict.",
+                    exc_info=True,
+                )
+            else:
+                llm_semantic_used = True
+                merged = _merge_upgrade(risk_result, llm_risk)
+                if merged.risk_level != risk_result.risk_level:
+                    logger.info(
+                        "LLM semantic upgrade: %s -> %s (%s)",
+                        risk_result.risk_level,
+                        merged.risk_level,
+                        merged.reason,
+                    )
+                state["risk_result"] = merged
 
         # B2.2: Cross-turn risk tracking
         # If the current turn is elevated AND the previous turn was also elevated,
@@ -91,5 +136,6 @@ def classify_risk(state: GraphState) -> GraphState:
             "risk_types": state["risk_result"].risk_types,
             "needs_crisis_mode": state["risk_result"].needs_crisis_mode,
             "mode": state["mode"],
+            "llm_semantic_used": llm_semantic_used,
         })
     return state

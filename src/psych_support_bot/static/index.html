@@ -1800,6 +1800,9 @@
       document.getElementById('sendBtn').disabled = true;
       input.value = '';
       addMessage('user', message);
+      // 即时回声气泡：覆盖 LLM 风险分类 + 生成阶段的等待（首感知 <300ms），
+      // 文案如实传达"收到、正在回应"，避免机器状态词与"请用户配合"式语气。
+      showTyping();
       clearStaleChips();
       try {
         const res = await fetch(API_BASE + '/v1/conversations/respond', {
@@ -1901,7 +1904,7 @@
       const d = document.createElement('div');
       d.className = 'msg bot';
       d.id = 'typingBubble';
-      d.innerHTML = '<div class="bubble" style="color:#94a3b8;font-style:italic">正在输入…</div>';
+      d.innerHTML = '<div class="bubble" style="color:#94a3b8">嗯，我听到了，也在认真想怎么回你</div>';
       chatArea.appendChild(d);
       chatArea.scrollTop = chatArea.scrollHeight;
     }
