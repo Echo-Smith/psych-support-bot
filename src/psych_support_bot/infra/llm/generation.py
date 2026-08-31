@@ -400,6 +400,36 @@ def generate_assessment_history_analysis(
     )
 
 
+def generate_checkin_trend_analysis(
+    *,
+    trend_text: str,
+    expected_language: str,
+    fallback: Callable[[], str] | None = None,
+) -> str:
+    """打卡数据趋势解读（M2）。
+
+    输入只含数值序列（日期/心情/焦虑/睡眠/精力），不含打卡备注文字——
+    伦理边界：AI 分析基于数值规律（睡眠-心情关联、周内波动），
+    不做情绪叙述内容画像。
+    """
+    system_prompt = (
+        "You are a warm, safety-first assistant summarizing a user's daily mood check-in "
+        "data. Each line has date, mood (0-10), anxiety (0-10), sleep hours, energy (0-10). "
+        "Rules: speak in the user's language; at most 3 short sentences; point out one "
+        "concrete pattern (e.g. sleep-mood relationship, weekday vs weekend shifts, overall "
+        "direction) with numbers; keep it validating, never diagnose, never promise "
+        "treatment; if mood is persistently low or anxiety persistently high, gently "
+        "mention that professional support can help."
+    )
+    return _invoke(
+        system_prompt,
+        trend_text,
+        expected_language,
+        mode="support",
+        fallback=fallback,
+    )
+
+
 def generate_questionnaire_reply(
     *,
     user_message: str,

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 import logging
-from datetime import date
+from datetime import date, timedelta
 from uuid import uuid4
 
 from sqlalchemy import desc, select
@@ -415,6 +415,7 @@ def save_checkin(session: Session, user_id: str, checkin: DailyCheckin) -> Check
         note=checkin.note or "",
     )
     session.add(record)
+    record_usage_event(session, user_id, "checkin_created")
     session.commit()
     session.refresh(record)
     return record
@@ -426,6 +427,19 @@ def get_recent_checkins(session: Session, user_id: str, limit: int = 7) -> list[
         .where(CheckinRecord.user_id == user_id)
         .order_by(desc(CheckinRecord.checkin_date), desc(CheckinRecord.created_at))
         .limit(limit)
+    )
+    return list(session.execute(stmt).scalars())
+
+
+def get_checkins_since(session: Session, user_id: str, *, days: int = 30) -> list[CheckinRecord]:
+    """近 N 天打卡记录，按日期倒序（记录查看用，笔记只返回给用户本人）。"""
+    cutoff = date.today() - timedelta(days=days)  # noqa: DTZ011
+    stmt = (
+        select(CheckinRecord)
+        .where(CheckinRecord.user_id == user_id)
+        .where(CheckinRecord.checkin_date >= cutoff)
+        .order_by(desc(CheckinRecord.checkin_date), desc(CheckinRecord.created_at))
+        .limit(days)
     )
     return list(session.execute(stmt).scalars())
 

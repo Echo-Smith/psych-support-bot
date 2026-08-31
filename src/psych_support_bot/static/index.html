@@ -1796,6 +1796,30 @@
           <div class="empty-history">暂无历史记录，提交第一次打卡后即可查看趋势。</div>
         </div>
       </div>
+
+      <div class="record-section" id="checkinSvgSection">
+        <div class="trend-title"><span>30 天趋势图</span><span class="paywall-tag">MOOD / ANXIETY</span></div>
+        <div id="checkinSvgBody">
+          <div class="empty-history">加载中…</div>
+        </div>
+      </div>
+
+      <div class="record-section" id="checkinHistorySection">
+        <div class="trend-title"><span>打卡记录</span></div>
+        <div id="checkinHistoryBody">
+          <div class="empty-history">加载中…</div>
+        </div>
+      </div>
+
+      <div class="record-section" id="checkinAnalysisSection">
+        <div class="trend-title"><span>AI 趋势解读</span><span class="paywall-tag">AI ANALYSIS</span></div>
+        <div id="checkinAnalysisBody">
+          <div class="empty-history">点击下方按钮，基于近 30 天打卡数据发现规律（睡眠-心情关联、周内波动等）。</div>
+        </div>
+        <div class="actions-row" style="margin-top:12px;">
+          <button class="btn btn-secondary" id="checkinAnalysisBtn" onclick="generateCheckinAnalysis()">生成解读</button>
+        </div>
+      </div>
     </section>
 
   </div>
@@ -1897,8 +1921,7 @@
           tab.classList.add('active');
           document.getElementById('panel-' + tab.dataset.tab).classList.add('active');
           if (tab.dataset.tab === 'checkin') renderCheckinStatus();
-          if (tab.dataset.tab === 'assessments') loadAssessHistory();
-        });
+          if (tab.dataset.tab === 'assessments') loadAssessHistory();        });
       });
     }
 
@@ -2811,6 +2834,95 @@
       }
     }
 
+    // ========== Records & Insights (M2) ==========
+    async function loadCheckinHistory() {
+      const histBody = document.getElementById('checkinHistoryBody');
+      const svgBody = document.getElementById('checkinSvgBody');
+      try {
+        const res = await fetch(API_BASE + '/v1/checkins?user_id=' + encodeURIComponent(USER_ID) + '&days=30');
+        if (!res.ok) throw new Error('HTTP ' + res.status);
+        const records = await res.json(); // 日期倒序
+        renderCheckinHistoryList(histBody, records);
+        renderCheckinSvg(svgBody, [...records].reverse()); // 折线用升序
+      } catch (err) {
+        histBody.innerHTML = '<div class="empty-history">记录加载失败：' + escapeHtml(err.message) + '</div>';
+        svgBody.innerHTML = '<div class="empty-history">趋势图加载失败：' + escapeHtml(err.message) + '</div>';
+      }
+    }
+
+    function renderCheckinHistoryList(body, records) {
+      if (!records || !records.length) {
+        body.innerHTML = '<div class="empty-history">近 30 天暂无服务端记录，提交打卡后自动同步。</div>';
+        return;
+      }
+      const rows = records.map(r => {
+        const noteHtml = r.note
+          ? '<div class="cl-note" style="font-size:12px;color:var(--muted);padding:0 2px 6px;">「' + escapeHtml(r.note) + '」</div>'
+          : '';
+        return '<div class="history-row">' +
+          '<span class="h-date">' + escapeHtml(r.date) + '</span>' +
+          '<span>心情 ' + r.mood_score + '</span>' +
+          '<span>焦虑 ' + r.anxiety_score + '</span>' +
+          '<span>睡眠 ' + (typeof r.sleep_hours === 'number' ? r.sleep_hours.toFixed(1) : r.sleep_hours) + 'h</span>' +
+          '<span>精力 ' + r.energy_score + '</span>' +
+          '<span class="h-src">打卡</span>' +
+          '</div>' + noteHtml;
+      }).join('');
+      body.innerHTML = '<div class="history-table">' + rows + '</div>';
+    }
+
+    // 手写 SVG 折线：心情为主轴（实线），焦虑为对比线（虚线），不引图表库。
+    function renderCheckinSvg(body, points) {
+      if (!points || !points.length) {
+        body.innerHTML = '<div class="empty-history">暂无数据，提交第一次打卡后即可查看趋势图。</div>';
+        return;
+      }
+      const W = 640, H = 170, PAD_L = 30, PAD_R = 12, PAD_T = 12, PAD_B = 24;
+      const n = points.length;
+      const x = i => PAD_L + (n === 1 ? (W - PAD_L - PAD_R) / 2 : i * (W - PAD_L - PAD_R) / (n - 1));
+      const y = v => PAD_T + (10 - Math.max(0, Math.min(10, v))) * (H - PAD_T - PAD_B) / 10;
+      const path = key => points.map((p, i) => (i ? 'L' : 'M') + x(i).toFixed(1) + ',' + y(p[key]).toFixed(1)).join(' ');
+      const gridLines = [0, 5, 10].map(v =>
+        '<line x1="' + PAD_L + '" y1="' + y(v) + '" x2="' + (W - PAD_R) + '" y2="' + y(v) + '" stroke="#eeeeee" stroke-width="1"/>' +
+        '<text x="4" y="' + (y(v) + 3) + '" font-size="9" fill="#666666" font-family="Courier New">' + v + '</text>'
+      ).join('');
+      const labelEvery = Math.max(1, Math.ceil(n / 6));
+      const xLabels = points.map((p, i) => i % labelEvery === 0
+        ? '<text x="' + x(i) + '" y="' + (H - 6) + '" font-size="9" fill="#666666" text-anchor="middle" font-family="Courier New">' + escapeHtml(p.date.slice(5)) + '</text>'
+        : '').join('');
+      const dots = key => points.map((p, i) => '<circle cx="' + x(i).toFixed(1) + '" cy="' + y(p[key]).toFixed(1) + '" r="2.2" fill="#111111"/>').join('');
+      body.innerHTML =
+        '<svg viewBox="0 0 ' + W + ' ' + H + '" style="width:100%;height:auto;display:block;">' +
+        gridLines +
+        '<path d="' + path('mood_score') + '" fill="none" stroke="#111111" stroke-width="2"/>' +
+        '<path d="' + path('anxiety_score') + '" fill="none" stroke="#666666" stroke-width="1.5" stroke-dasharray="4 3"/>' +
+        dots('mood_score') +
+        xLabels +
+        '</svg>' +
+        '<div class="analysis-meta">— 心情（实线） · - - 焦虑（虚线） · 共 ' + n + ' 天</div>';
+    }
+
+    async function generateCheckinAnalysis() {
+      const body = document.getElementById('checkinAnalysisBody');
+      const btn = document.getElementById('checkinAnalysisBtn');
+      btn.disabled = true;
+      body.innerHTML = '<div class="analysis-waiting"><span class="typing-dots"><span>.</span><span>.</span><span>.</span></span>正在分析近 30 天的打卡规律…</div>';
+      try {
+        const res = await fetch(API_BASE + '/v1/checkins/analysis?user_id=' + encodeURIComponent(USER_ID) + '&expected_language=zh&days=30');
+        if (!res.ok) throw new Error('HTTP ' + res.status);
+        const data = await res.json();
+        const meta = data.generated_by === 'llm'
+          ? 'AI 生成 · 仅供参考，不构成诊断'
+          : '离线统计（AI 暂不可用，已切换确定性摘要）';
+        body.innerHTML = '<div class="analysis-card">' + renderMarkdown(data.analysis) +
+          '<div class="analysis-meta">' + escapeHtml(meta) + ' · 共 ' + data.count + ' 条打卡</div></div>';
+      } catch (err) {
+        body.innerHTML = '<div class="empty-history">解读生成失败：' + escapeHtml(err.message) + '</div>';
+      } finally {
+        btn.disabled = false;
+      }
+    }
+
     function getCheckins() {
       try { return JSON.parse(localStorage.getItem(STORE_KEYS.CK) || '[]'); }
       catch { return []; }
@@ -2862,6 +2974,7 @@
         resetCheckinForm();
       }
       renderTrend();
+      loadCheckinHistory();
     }
     function resetCheckinForm() {
       if (hasCheckedInToday()) {
