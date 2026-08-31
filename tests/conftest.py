@@ -14,6 +14,11 @@ from psych_support_bot.infra.config.settings import get_settings
 
 def pytest_sessionstart(session) -> None:  # type: ignore[no-untyped-def]
     get_settings.cache_clear()
+    # 与应用启动（app._run_migrations）保持一致：测试库也走 Alembic 迁移，
+    # 否则旧 schema 的 sqlite 文件缺新列会让涉及新列的用例全部失败。
+    from psych_support_bot.app import _run_migrations
+
+    _run_migrations()
 
 
 @pytest.fixture(autouse=True)

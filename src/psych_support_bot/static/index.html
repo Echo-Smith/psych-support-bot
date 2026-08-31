@@ -1430,6 +1430,100 @@
       border: 1px dashed var(--soft);
     }
 
+    /* ========== Records & Insights (M1/M2/M3) ========== */
+    .record-section {
+      margin-top: 16px;
+      padding: 18px;
+      border: 1px solid var(--rule);
+      background: #fff;
+    }
+
+    .record-section .trend-title {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+
+    .paywall-tag {
+      font-size: 10px;
+      font-family: "Courier New", monospace;
+      letter-spacing: 1px;
+      border: 1px solid var(--rule);
+      padding: 1px 6px;
+      color: var(--muted);
+    }
+
+    .history-table {
+      width: 100%;
+      font-size: 13px;
+    }
+
+    .history-row {
+      display: flex;
+      align-items: baseline;
+      gap: 10px;
+      padding: 7px 2px;
+      border-bottom: 1px dotted var(--soft);
+      font-family: "Courier New", monospace;
+    }
+
+    .history-row:last-child { border-bottom: none; }
+
+    .history-row .h-date { color: var(--muted); flex: 0 0 auto; }
+
+    .history-row .h-type {
+      font-weight: 700;
+      text-transform: uppercase;
+      flex: 0 0 auto;
+    }
+
+    .history-row .h-band { color: var(--muted); }
+
+    .history-row .h-src {
+      margin-left: auto;
+      font-size: 10px;
+      color: var(--muted);
+      border: 1px solid var(--soft);
+      padding: 0 5px;
+    }
+
+    .history-row .h-flag { color: var(--danger); font-weight: 700; }
+
+    .trend-line {
+      font-family: "Courier New", monospace;
+      font-size: 13px;
+      padding: 8px 2px;
+      border-bottom: 1px dotted var(--soft);
+    }
+
+    .trend-line .tl-delta-up { font-weight: 700; }
+    .trend-line .tl-delta-down { font-weight: 700; }
+
+    .analysis-card {
+      font-size: 14px;
+      line-height: 1.8;
+      padding: 12px;
+      border: 1px solid var(--soft);
+      background: #fff;
+    }
+
+    .analysis-meta {
+      margin-top: 8px;
+      font-size: 11px;
+      font-family: "Courier New", monospace;
+      color: var(--muted);
+    }
+
+    .analysis-waiting {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 12px;
+      color: var(--muted);
+      font-size: 13px;
+      font-style: italic;
+    }
+
     .no-data {
       text-align: center;
       padding: 8px;
@@ -1613,6 +1707,23 @@
         <div class="scale-list" id="scaleList"></div>
       </div>
 
+      <div class="record-section" id="assessHistorySection">
+        <div class="trend-title"><span>测评历史与趋势</span></div>
+        <div id="assessHistoryBody">
+          <div class="empty-history">加载中…</div>
+        </div>
+      </div>
+
+      <div class="record-section" id="assessAnalysisSection">
+        <div class="trend-title"><span>AI 趋势解读</span><span class="paywall-tag">AI ANALYSIS</span></div>
+        <div id="assessAnalysisBody">
+          <div class="empty-history">点击下方按钮，基于你的历次测评分数生成三句内的趋势解读。</div>
+        </div>
+        <div class="actions-row" style="margin-top:12px;">
+          <button class="btn btn-secondary" id="assessAnalysisBtn" onclick="generateAssessAnalysis()">生成解读</button>
+        </div>
+      </div>
+
       <div id="assessViewer" style="display:none;">
         <div class="back-row"><button class="link-btn" onclick="showAssessList()">← 返回量表列表</button></div>
         <div class="assess-viewer" id="assessViewBox"></div>
@@ -1773,6 +1884,7 @@
       renderExerciseGrid();
       renderScaleList();
       renderTrend();
+      loadAssessHistory();
       document.getElementById('messageInput').focus();
     }
 
@@ -1785,6 +1897,7 @@
           tab.classList.add('active');
           document.getElementById('panel-' + tab.dataset.tab).classList.add('active');
           if (tab.dataset.tab === 'checkin') renderCheckinStatus();
+          if (tab.dataset.tab === 'assessments') loadAssessHistory();
         });
       });
     }
@@ -2616,6 +2729,88 @@
     }
 
     // ========== Checkin (C3) ==========
+    // ========== Records & Insights (M1) ==========
+    const BAND_LABELS = {
+      minimal: '极低', mild: '轻度', moderate: '中度', moderately_severe: '中-重度',
+      severe: '重度', none: '无', subthreshold: '阈下'
+    };
+    const SRC_LABELS = { chat: '对话', panel: '页面' };
+    const TYPE_LABELS = { phq9: 'PHQ-9 抑郁', gad7: 'GAD-7 焦虑' };
+
+    function typeLabel(t) { return TYPE_LABELS[t] || String(t).toUpperCase(); }
+
+    async function loadAssessHistory() {
+      const body = document.getElementById('assessHistoryBody');
+      try {
+        const res = await fetch(API_BASE + '/v1/assessments?user_id=' + encodeURIComponent(USER_ID) + '&limit=20');
+        if (!res.ok) throw new Error('HTTP ' + res.status);
+        renderAssessHistory(await res.json());
+      } catch (err) {
+        body.innerHTML = '<div class="empty-history">历史加载失败：' + escapeHtml(err.message) + '</div>';
+      }
+    }
+
+    // 与对话内 format_trend_line 口径一致：较上次 ±N 分 + 间隔天数。
+    function trendLineFor(records) {
+      if (records.length < 2) return '';
+      const first = records[records.length - 1], last = records[0];
+      const delta = last.score - first.score;
+      const days = Math.max(1, Math.round((new Date(last.created_at) - new Date(first.created_at)) / 86400000));
+      const arrow = delta < 0 ? '↓' : (delta > 0 ? '↑' : '→');
+      const cls = delta < 0 ? 'tl-delta-down' : 'tl-delta-up';
+      const verdict = delta < 0 ? '整体有所缓解' : (delta > 0 ? '分数有所上升' : '基本持平');
+      return '<div class="trend-line">' + escapeHtml(typeLabel(last.assessment_type)) +
+        '：' + first.score + ' → ' + last.score + ' 分 <span class="' + cls + '">' + arrow + ' ' + Math.abs(delta) +
+        '</span> / ' + days + ' 天（' + verdict + '）</div>';
+    }
+
+    function renderAssessHistory(records) {
+      const body = document.getElementById('assessHistoryBody');
+      if (!records || !records.length) {
+        body.innerHTML = '<div class="empty-history">暂无测评记录，完成一次量表后即可在这里看到历史与趋势。</div>';
+        return;
+      }
+      // 趋势线按量表分组，各取最近序列（接口按时间倒序返回）。
+      const byType = {};
+      records.forEach(r => { (byType[r.assessment_type] = byType[r.assessment_type] || []).push(r); });
+      const trendHtml = Object.values(byType).map(trendLineFor).join('');
+      const rows = records.map(r => {
+        const d = new Date(r.created_at);
+        const dateStr = d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
+        return '<div class="history-row">' +
+          '<span class="h-date">' + dateStr + '</span>' +
+          '<span class="h-type">' + escapeHtml(typeLabel(r.assessment_type)) + '</span>' +
+          '<span>' + r.score + ' 分</span>' +
+          '<span class="h-band">' + escapeHtml(BAND_LABELS[r.severity_band] || r.severity_band) + '</span>' +
+          (r.needs_safety_followup ? '<span class="h-flag">⚠ 安全关注</span>' : '') +
+          '<span class="h-src">' + escapeHtml(SRC_LABELS[r.source] || r.source) + '</span>' +
+          '</div>';
+      }).join('');
+      body.innerHTML = trendHtml + '<div class="history-table">' + rows + '</div>';
+    }
+
+    async function generateAssessAnalysis() {
+      const body = document.getElementById('assessAnalysisBody');
+      const btn = document.getElementById('assessAnalysisBtn');
+      btn.disabled = true;
+      // 回声气泡等待模式：与聊天发送后的等待体验一致。
+      body.innerHTML = '<div class="analysis-waiting"><span class="typing-dots"><span>.</span><span>.</span><span>.</span></span>正在结合你的历次分数生成解读…</div>';
+      try {
+        const res = await fetch(API_BASE + '/v1/assessments/analysis?user_id=' + encodeURIComponent(USER_ID) + '&expected_language=zh&limit=10');
+        if (!res.ok) throw new Error('HTTP ' + res.status);
+        const data = await res.json();
+        const meta = data.generated_by === 'llm'
+          ? 'AI 生成 · 仅供参考，不构成诊断'
+          : '离线统计（AI 暂不可用，已切换确定性摘要）';
+        body.innerHTML = '<div class="analysis-card">' + renderMarkdown(data.analysis) +
+          '<div class="analysis-meta">' + escapeHtml(meta) + ' · 共 ' + data.history_count + ' 次测评</div></div>';
+      } catch (err) {
+        body.innerHTML = '<div class="empty-history">解读生成失败：' + escapeHtml(err.message) + '</div>';
+      } finally {
+        btn.disabled = false;
+      }
+    }
+
     function getCheckins() {
       try { return JSON.parse(localStorage.getItem(STORE_KEYS.CK) || '[]'); }
       catch { return []; }

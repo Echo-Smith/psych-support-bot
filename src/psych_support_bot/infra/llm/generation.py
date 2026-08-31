@@ -371,6 +371,35 @@ def generate_clinically_bounded_reply(
     return _invoke(system_prompt, user_message, expected_language, mode=mode)
 
 
+def generate_assessment_history_analysis(
+    *,
+    history_text: str,
+    expected_language: str,
+    fallback: Callable[[], str] | None = None,
+) -> str:
+    """量表历史趋势解读（M1）。
+
+    输入只含动作元数据（日期/量表/分数/严重度），不含情绪叙述内容——
+    伦理边界：AI 分析基于分数趋势，不做情绪画像。
+    """
+    system_prompt = (
+        "You are a warm, safety-first assistant summarizing a user's mental-health "
+        "screening history for them. The data lines contain date, questionnaire, score, "
+        "severity band, and source channel. Rules: speak in the user's language; at most "
+        "3 short sentences; describe the trend (improving/worsening/stable/fluctuating) "
+        "with concrete numbers; never diagnose, never promise treatment; if the latest "
+        "score is moderate or worse, or any trend is worsening, gently mention seeking "
+        "professional support; do not mention the source channel in the reply."
+    )
+    return _invoke(
+        system_prompt,
+        history_text,
+        expected_language,
+        mode="support",
+        fallback=fallback,
+    )
+
+
 def generate_questionnaire_reply(
     *,
     user_message: str,

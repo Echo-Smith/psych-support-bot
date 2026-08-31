@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 from datetime import date
 from uuid import uuid4
 
@@ -22,11 +23,14 @@ from psych_support_bot.infra.db.models import (
     Message,
     QuestionnaireSessionRecord,
     RiskEvent,
+    UsageEvent,
     User,
     UserProfile,
     WeeklyReportRecord,
     utcnow,
 )
+
+logger = logging.getLogger(__name__)
 
 
 def _safe(text: str) -> str:
@@ -238,13 +242,16 @@ def save_conversation_result(
     session.commit()
 
 
-def save_assessment(session: Session, user_id: str, assessment: AssessmentScore) -> AssessmentRecord:
+def save_assessment(
+    session: Session, user_id: str, assessment: AssessmentScore, *, source: str = "chat"
+) -> AssessmentRecord:
     ensure_user(session, user_id)
     record = AssessmentRecord(
         user_id=user_id,
         assessment_type=assessment.assessment_type,
         score=assessment.score,
         severity_band=assessment.severity_band,
+        source=source,
     )
     if isinstance(assessment, AssessmentResult) and assessment.interpretation:
         interp = assessment.interpretation
@@ -254,9 +261,40 @@ def save_assessment(session: Session, user_id: str, assessment: AssessmentScore)
         record.disclaimer = interp.disclaimer
         record.needs_safety_followup = interp.needs_safety_followup
     session.add(record)
+    record_usage_event(session, user_id, "assessment_submitted")
     session.commit()
     session.refresh(record)
     return record
+
+
+_ALLOWED_USAGE_EVENTS = {
+    "exercise_completed",
+    "assessment_submitted",
+    "checkin_created",
+    "ai_analysis_requested",
+    "ai_analysis_served",
+}
+
+
+def record_usage_event(session: Session, user_id: str, event_type: str, **metadata: object) -> None:
+    """商业化计量埋点：只记动作元数据，绝不写情绪内容（伦理边界见 UsageEvent 注释）。
+
+    埋点失败不阻断主流程——用 savepoint 隔离，失败只丢弃这一条事件，
+    不回滚外层事务里正在进行的正常写入。
+    """
+    if event_type not in _ALLOWED_USAGE_EVENTS:
+        raise ValueError(f"Unknown usage event type: {event_type!r}")
+    try:
+        with session.begin_nested():
+            session.add(
+                UsageEvent(
+                    user_id=user_id,
+                    event_type=event_type,
+                    metadata_json=json.dumps(metadata or {}, ensure_ascii=False, default=str),
+                )
+            )
+    except Exception:
+        logger.warning("Usage event recording failed (non-blocking): %s", event_type, exc_info=True)
 
 
 def create_questionnaire_session(

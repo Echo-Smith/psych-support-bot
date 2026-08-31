@@ -64,6 +64,9 @@ class AssessmentRecord(Base):
     care_consideration: Mapped[str] = mapped_column(Text, default="")
     disclaimer: Mapped[str] = mapped_column(Text, default="")
     needs_safety_followup: Mapped[bool] = mapped_column(Boolean, default=False)
+    # 来源渠道（chat=对话图内完成 / panel=页面直接提交）——仅用于来源分析，
+    # 历史记录不分渠道存储，两个入口共享同一条趋势线。
+    source: Mapped[str] = mapped_column(String(16), default="chat", server_default="chat")
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
 
 
@@ -76,6 +79,8 @@ class QuestionnaireSessionRecord(Base):
     answers_json: Mapped[str] = mapped_column(Text, default="[]")
     status: Mapped[str] = mapped_column(String(32), default="in_progress")
     current_index: Mapped[int] = mapped_column(Integer, default=0)
+    # 来源渠道，语义同 assessments.source
+    source: Mapped[str] = mapped_column(String(16), default="chat", server_default="chat")
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
     completed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, onupdate=utcnow)
@@ -126,3 +131,21 @@ class PlanEnrollment(Base):
     current_day: Mapped[int] = mapped_column(Integer, default=1)
     status: Mapped[str] = mapped_column(String(32), default="active")
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, onupdate=utcnow)
+
+
+class UsageEvent(Base):
+    """商业化计量埋点（动作元数据）。
+
+    伦理边界：只记动作类型/时间/次数，绝不记录情绪内容
+    （mood 分数、note、练习反思）——那些只属于用户自己的趋势功能。
+    事件类型固定枚举：exercise_completed / assessment_submitted /
+    checkin_created / ai_analysis_requested / ai_analysis_served。
+    """
+
+    __tablename__ = "usage_events"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    user_id: Mapped[str] = mapped_column(String(64), index=True)
+    event_type: Mapped[str] = mapped_column(String(48), index=True)
+    metadata_json: Mapped[str] = mapped_column(Text, default="{}")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, index=True)
