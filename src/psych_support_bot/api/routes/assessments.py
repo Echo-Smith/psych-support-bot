@@ -31,8 +31,7 @@ from psych_support_bot.infra.db.repositories import (
     save_assessment,
 )
 from psych_support_bot.infra.db.session import get_db_session
-from psych_support_bot.infra.llm.generation import generate_assessment_history_analysis
-from psych_support_bot.infra.llm.generation import LLMUnavailableError
+from psych_support_bot.infra.llm.generation import LLMUnavailableError, generate_assessment_history_analysis
 
 router = APIRouter(prefix="/v1/assessments", tags=["assessments"])
 

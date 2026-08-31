@@ -11,13 +11,13 @@ from types import SimpleNamespace
 from uuid import uuid4
 
 import openai
+from fastapi.testclient import TestClient
 
 from psych_support_bot.api.routes import checkins as checkins_routes
 from psych_support_bot.app import app
 from psych_support_bot.infra.db.init_db import init_db
 from psych_support_bot.infra.db.models import UsageEvent
 from psych_support_bot.infra.db.session import SessionLocal
-from fastapi.testclient import TestClient
 
 client = TestClient(app)
 

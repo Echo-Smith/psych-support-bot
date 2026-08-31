@@ -140,7 +140,7 @@ def get_checkin_analysis(
 
     def deterministic_fallback() -> str:
         n = len(chronological)
-        avg = lambda key: sum(getattr(r, key) for r in chronological) / n  # noqa: E731
+        avg = lambda key: sum(getattr(r, key) for r in chronological) / n
         half = max(1, n // 2)
         first_half = sum(r.mood_score for r in chronological[:half]) / half
         second_half = sum(r.mood_score for r in chronological[-half:]) / half

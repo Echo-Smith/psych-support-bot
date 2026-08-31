@@ -13,19 +13,16 @@ from types import SimpleNamespace
 from uuid import uuid4
 
 import openai
-
-from psych_support_bot.api.routes import assessments as assessments_routes
-from psych_support_bot.ai.schemas.messages import ConversationRequest
 from fastapi.testclient import TestClient
 
-from psych_support_bot.api.routes import assessments as assessments_routes
 from psych_support_bot.ai.schemas.messages import ConversationRequest
+from psych_support_bot.api.routes import assessments as assessments_routes
+from psych_support_bot.app import app
 from psych_support_bot.infra.db.init_db import init_db
 from psych_support_bot.infra.db.models import UsageEvent
 from psych_support_bot.infra.db.session import SessionLocal
 from psych_support_bot.infra.llm import generation as llm_generation
 from psych_support_bot.services.conversation import conversation_service
-from psych_support_bot.app import app
 
 client = TestClient(app)
 
