@@ -430,6 +430,34 @@ def generate_checkin_trend_analysis(
     )
 
 
+def generate_exercise_history_analysis(
+    *,
+    records_text: str,
+    expected_language: str,
+    fallback: Callable[[], str] | None = None,
+) -> str:
+    """练习历史简要分析（M3）。
+
+    输入只含动作元数据（日期/练习类型/来源）——反思笔记内容不进 LLM：
+    伦理边界同 M1/M2，AI 分析基于完成频率与类型分布，不做情绪画像。
+    """
+    system_prompt = (
+        "You are a warm, safety-first assistant summarizing a user's self-help exercise "
+        "practice history. Each line has date, exercise tag, and source channel. Rules: "
+        "speak in the user's language; at most 3 short sentences; note the frequency and "
+        "which exercise types they gravitate toward, then suggest one concrete next step "
+        "(a different exercise or a repeat of what helped); never diagnose, never promise "
+        "treatment; do not mention the source channel in the reply."
+    )
+    return _invoke(
+        system_prompt,
+        records_text,
+        expected_language,
+        mode="support",
+        fallback=fallback,
+    )
+
+
 def generate_questionnaire_reply(
     *,
     user_message: str,

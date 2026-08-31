@@ -87,6 +87,15 @@ bash deploy.sh              # 构建 Dockerfile.server 镜像并启动容器栈
 - 栈定义：`Dockerfile.server` + `docker-compose.server.yml`（宿主端口映射见该文件，当前 `9958 → 容器 8000`；数据与日志落持久卷）
 - 分步说明、防火墙放行、systemd 开机自启等见《服务器部署说明.md》
 
+## 隐私与数据边界（商业化埋点的伦理约束）
+
+记录与洞察功能线（测评历史 / 打卡趋势 / 练习记录）遵循以下硬边界：
+
+- **埋点只记动作元数据**：`usage_events` 表只写事件类型（`exercise_completed` / `assessment_submitted` / `checkin_created` / `ai_analysis_requested` / `ai_analysis_served`）、时间与来源渠道，用于将来商业化配额计量。
+- **情绪内容不进埋点、不做画像**：mood 分数、打卡备注、测评分数与 band、练习反思笔记，一律不进入埋点表，也不进入任何商业化分析。
+- **AI 解读的最小输入**：三个 `/analysis` 端点喂给 LLM 的只有数值序列与动作元数据；打卡备注与练习反思的文字内容不进 prompt。
+- **记录查看永久免费**：付费锚点只设在 AI 解读（`/analysis` 独立端点，将来挂配额中间件），记录本身是留存抓手，不设墙。
+
 ## 协作方式
 
 云端 `main` 由 redmaplewww 维护并通过 PR 收口；协作侧在 fork 上按阶段分支迭代（如 `pr1/langfuse-collab-infra`、`pr3/p1-*`），完成后 PR 合入。贡献细节见 [CONTRIBUTING.md](CONTRIBUTING.md)。

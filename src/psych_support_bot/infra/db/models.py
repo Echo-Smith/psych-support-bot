@@ -149,3 +149,21 @@ class UsageEvent(Base):
     event_type: Mapped[str] = mapped_column(String(48), index=True)
     metadata_json: Mapped[str] = mapped_column(Text, default="{}")
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, index=True)
+
+
+class ExerciseRecord(Base):
+    """练习完成记录（M3 之前练习完全不落库）。
+
+    source 语义同 assessments.source：chat=对话图内完成 / panel=页面练习面板完成。
+    reflection_note 是用户自己的反思内容——只用于本人记录展示与本人 AI 分析输入，
+    不进商业化埋点（UsageEvent 伦理边界）。
+    """
+
+    __tablename__ = "exercise_records"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    user_id: Mapped[str] = mapped_column(String(64), index=True)
+    exercise_tag: Mapped[str] = mapped_column(String(64))
+    source: Mapped[str] = mapped_column(String(16), default="chat", server_default="chat")
+    reflection_note: Mapped[str] = mapped_column(Text, default="")
+    completed_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)

@@ -1696,6 +1696,23 @@
         <div class="back-row"><button class="link-btn" onclick="showExerciseList()">← 返回练习列表</button></div>
         <div class="exercise-viewer" id="exerciseViewer"></div>
       </div>
+
+      <div class="record-section" id="exerciseHistorySection">
+        <div class="trend-title"><span>练习记录</span></div>
+        <div id="exerciseHistoryBody">
+          <div class="empty-history">加载中…</div>
+        </div>
+      </div>
+
+      <div class="record-section" id="exerciseAnalysisSection">
+        <div class="trend-title"><span>AI 练习分析</span><span class="paywall-tag">AI ANALYSIS</span></div>
+        <div id="exerciseAnalysisBody">
+          <div class="empty-history">点击下方按钮，基于你的练习记录得到简要分析与下一步建议。</div>
+        </div>
+        <div class="actions-row" style="margin-top:12px;">
+          <button class="btn btn-secondary" id="exerciseAnalysisBtn" onclick="generateExerciseAnalysis()">生成分析</button>
+        </div>
+      </div>
     </section>
 
     <!-- ========== ASSESSMENTS PANEL (C2) ========== -->
@@ -1909,6 +1926,7 @@
       renderScaleList();
       renderTrend();
       loadAssessHistory();
+      loadExerciseRecords();
       document.getElementById('messageInput').focus();
     }
 
@@ -1921,7 +1939,8 @@
           tab.classList.add('active');
           document.getElementById('panel-' + tab.dataset.tab).classList.add('active');
           if (tab.dataset.tab === 'checkin') renderCheckinStatus();
-          if (tab.dataset.tab === 'assessments') loadAssessHistory();        });
+          if (tab.dataset.tab === 'assessments') loadAssessHistory();
+          if (tab.dataset.tab === 'exercises') loadExerciseRecords();        });
       });
     }
 
@@ -2275,7 +2294,8 @@
       document.getElementById('exList').style.display = 'none';
       document.getElementById('exViewer').style.display = '';
       try {
-        const res = await fetch(API_BASE + '/v1/exercises/' + tag);
+        // 中文化（M3）：按语言出单版本，lang=zh 命中中文 overlay 时返回中文内容
+        const res = await fetch(API_BASE + '/v1/exercises/' + tag + '?lang=zh');
         if (!res.ok) throw new Error('HTTP ' + res.status);
         const data = await res.json();
         curExercise = { key, tag, data, currentStep: 0, done: new Set(), responses: [] };
@@ -2549,7 +2569,22 @@
         paintExercise();
       } else {
         paintExercise();
+        reportExerciseComplete();
       }
+    }
+    // M3：页面练习完成 → 服务端落库（source=panel）。失败静默，本地记录仍在。
+    async function reportExerciseComplete() {
+      if (!curExercise || curExercise.reported) return;
+      curExercise.reported = true;
+      const note = ((curExercise.responses || []).slice().reverse().find(x => (x || '').trim()) || '');
+      try {
+        await fetch(API_BASE + '/v1/exercises/' + curExercise.tag + '/complete?user_id=' +
+          encodeURIComponent(USER_ID) + '&source=panel', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ reflection_note: note.slice(0, 500) })
+        });
+      } catch (err) { /* 服务端不可达时不上报 */ }
     }
     function markStepDone() {
       saveAndAdvance();
@@ -2918,6 +2953,62 @@
           '<div class="analysis-meta">' + escapeHtml(meta) + ' · 共 ' + data.count + ' 条打卡</div></div>';
       } catch (err) {
         body.innerHTML = '<div class="empty-history">解读生成失败：' + escapeHtml(err.message) + '</div>';
+      } finally {
+        btn.disabled = false;
+      }
+    }
+
+    // ========== Records & Insights (M3) ==========
+    function exerciseLabel(tag) {
+      const entry = EXERCISE_ENTRIES.find(e => e.tag === tag);
+      if (entry) return entry.label;
+      return String(tag).replace(/_/g, ' ').toUpperCase();
+    }
+
+    async function loadExerciseRecords() {
+      const body = document.getElementById('exerciseHistoryBody');
+      try {
+        const res = await fetch(API_BASE + '/v1/exercises/records?user_id=' + encodeURIComponent(USER_ID) + '&limit=20');
+        if (!res.ok) throw new Error('HTTP ' + res.status);
+        const records = await res.json();
+        if (!records.length) {
+          body.innerHTML = '<div class="empty-history">还没有练习记录——完成一次练习（对话里或页面里）后会出现在这里。</div>';
+          return;
+        }
+        const rows = records.map(r => {
+          const d = new Date(r.completed_at);
+          const dateStr = d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
+          const noteHtml = r.reflection_note
+            ? '<div class="cl-note" style="font-size:12px;color:var(--muted);padding:0 2px 6px;">「' + escapeHtml(r.reflection_note) + '」</div>'
+            : '';
+          return '<div class="history-row">' +
+            '<span class="h-date">' + dateStr + '</span>' +
+            '<span class="h-type">' + escapeHtml(exerciseLabel(r.exercise_tag)) + '</span>' +
+            '<span class="h-src">' + escapeHtml(SRC_LABELS[r.source] || r.source) + '</span>' +
+            '</div>' + noteHtml;
+        }).join('');
+        body.innerHTML = '<div class="history-table">' + rows + '</div>';
+      } catch (err) {
+        body.innerHTML = '<div class="empty-history">练习记录加载失败：' + escapeHtml(err.message) + '</div>';
+      }
+    }
+
+    async function generateExerciseAnalysis() {
+      const body = document.getElementById('exerciseAnalysisBody');
+      const btn = document.getElementById('exerciseAnalysisBtn');
+      btn.disabled = true;
+      body.innerHTML = '<div class="analysis-waiting"><span class="typing-dots"><span>.</span><span>.</span><span>.</span></span>正在结合你的练习记录生成分析…</div>';
+      try {
+        const res = await fetch(API_BASE + '/v1/exercises/records/analysis?user_id=' + encodeURIComponent(USER_ID) + '&expected_language=zh&limit=10');
+        if (!res.ok) throw new Error('HTTP ' + res.status);
+        const data = await res.json();
+        const meta = data.generated_by === 'llm'
+          ? 'AI 生成 · 仅供参考，不构成诊断'
+          : '离线统计（AI 暂不可用，已切换确定性摘要）';
+        body.innerHTML = '<div class="analysis-card">' + renderMarkdown(data.analysis) +
+          '<div class="analysis-meta">' + escapeHtml(meta) + ' · 共 ' + data.count + ' 次练习</div></div>';
+      } catch (err) {
+        body.innerHTML = '<div class="empty-history">分析生成失败：' + escapeHtml(err.message) + '</div>';
       } finally {
         btn.disabled = false;
       }

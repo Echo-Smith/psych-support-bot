@@ -15,6 +15,7 @@ from psych_support_bot.ai.schemas.messages import (
     RiskResult,
 )
 from psych_support_bot.ai.schemas.state import GraphState
+from psych_support_bot.ai.tools.exercises import detect_completed_exercise
 from psych_support_bot.domain.assessments.schemas import AssessmentAnswerSet
 from psych_support_bot.domain.assessments.service import (
     build_assessment_followup_reply,
@@ -30,6 +31,7 @@ from psych_support_bot.domain.assessments.service import (
     parse_questionnaire_answer,
     questionnaire_guide,
 )
+from psych_support_bot.infra.db.exercise_repositories import save_exercise_record
 from psych_support_bot.infra.db.repositories import (
     append_questionnaire_answer,
     build_memory_snapshot,
@@ -766,6 +768,11 @@ class ConversationService:
             user_message=payload.message,
             user_id=payload.user_id,
         )
+        # M3 对话图联动：对话中完成练习时自动落库（exercise_history 之前只
+        # 存在于图状态的内存字段，现在持久化）。识别不到不记，宁漏不误。
+        completed_tag = detect_completed_exercise(payload.message)
+        if completed_tag:
+            save_exercise_record(session, payload.user_id, completed_tag, source="chat")
         return response
 
 
