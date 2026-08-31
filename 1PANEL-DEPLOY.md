@@ -57,10 +57,19 @@ vi .env   # 填入真实密钥
 ### 4. 验证
 
 ```bash
-curl http://127.0.0.1:9958/api/system/info   # 返回应用信息即正常
+curl http://127.0.0.1:9958/health          # {"status":"ok"} 即健康
+curl http://127.0.0.1:9958/system/info     # 返回应用信息即正常
 ```
 
 浏览器访问 `http://<服务器IP>:9958` 即可进入对话界面。
+
+M1-M3 记录与洞察接口（同进程一并生效）：
+
+```bash
+curl "http://127.0.0.1:9958/v1/assessments?user_id=demo"        # 问卷历史
+curl "http://127.0.0.1:9958/v1/checkins?user_id=demo&days=30"   # 打卡历史
+curl "http://127.0.0.1:9958/v1/exercises/records?user_id=demo"  # 练习历史
+```
 
 ## 常量与数据
 

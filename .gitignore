@@ -43,3 +43,4 @@ test_report/
 .claude/skills/
 skills-lock.json
 .mimosa/
+dist/
