@@ -100,6 +100,7 @@ def trace_span(
         input=input,
         metadata=metadata,
     )
+    started = perf_counter()
     try:
         obs = cm.__enter__()
         _attach_trace_fields(obs, session_id=session_id, user_id=user_id)
@@ -108,7 +109,21 @@ def trace_span(
         cm.__exit__(type(exc), exc, exc.__traceback__)
         raise
     else:
+        _record_span_elapsed(obs, metadata, (perf_counter() - started) * 1000)
         cm.__exit__(None, None, None)
+
+
+def _record_span_elapsed(obs, metadata: dict[str, object] | None, elapsed_ms: float) -> None:
+    """Best-effort elapsed_ms onto span metadata — per-node/per-call latency
+    is the basis for latency optimization analysis (see docs/technical)."""
+    if obs is None:
+        return
+    try:
+        merged = dict(metadata or {})
+        merged.setdefault("elapsed_ms", round(elapsed_ms, 2))
+        obs.update(metadata=merged)
+    except Exception:
+        logger.debug("Failed to record span elapsed_ms", exc_info=True)
 
 
 def _attach_trace_fields(obs, *, session_id: str | None, user_id: str | None) -> None:

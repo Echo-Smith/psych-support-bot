@@ -99,7 +99,7 @@ def _invoke(
     mode: str = "support",
     fallback: Callable[[], str] | None = None,
 ) -> str:
-    model = build_chat_model(temperature=get_temperature_for_mode(mode))
+    model = build_chat_model(temperature=get_temperature_for_mode(mode), mode=mode)
     messages = [
         SystemMessage(content=system_prompt),
         HumanMessage(content=user_message),
@@ -297,6 +297,7 @@ def generate_multidisciplinary_consultation(
         expected_language=expected_language,
         no_question_mode=no_question_mode,
     )
+
     # Synthesis failure degrades to the raw opinions instead of crashing the
     # whole consultation — the per-agent calls above already succeeded.
     def _synthesis_fallback() -> str:
