@@ -199,16 +199,7 @@ class ConversationService:
         ) -> str:
             zh = expected_language == "zh"
 
-            # 上游 LLM 不可用（限流/内容安全拦截/网络故障）时的确定性降级，
-            # 经 _invoke 咽喉层声明调用——问卷流程不允许崩给用户。
-            # Langfuse 巡检（2026-08-23）发现该路径 LLM 403 会直接 500。
-            def deterministic_fallback() -> str:
-                if phase == "completed":
-                    return completion_context or (
-                        f"{guide.title}已完成，感谢你的作答。"
-                        if zh
-                        else f"{guide.title} is complete. Thank you for answering."
-                    )
+            def _deterministic_question_body() -> str:
                 options_text = (
                     "，".join(f"{value}={label}" for value, label in options)
                     if zh
@@ -219,7 +210,33 @@ class ConversationService:
                     body += f"（{options_text}）" if zh else f" ({options_text})"
                 if error_hint:
                     body += f" {error_hint}"
-                return build_progress_prefix(guide.title, current_index, total_items, expected_language) + body
+                return body
+
+            # 上游 LLM 不可用（限流/内容安全拦截/网络故障）时的确定性降级，
+            # 经 _invoke 咽喉层声明调用——问卷流程不允许崩给用户。
+            # Langfuse 巡检（2026-08-23）发现该路径 LLM 403 会直接 500。
+            def deterministic_fallback() -> str:
+                if phase == "completed":
+                    return completion_context or (
+                        f"{guide.title}已完成，感谢你的作答。"
+                        if zh
+                        else f"{guide.title} is complete. Thank you for answering."
+                    )
+                return (
+                    build_progress_prefix(guide.title, current_index, total_items, expected_language)
+                    + _deterministic_question_body()
+                )
+
+            # 题目呈现完全确定性（start/progress/invalid_answer/resumed）：题干、
+            # 选项、进度全部来自状态机，LLM 不参与。此前这些轮次正文由 LLM 生成
+            # 且无输出校验——ISI 第 7/7 题事故（2026-09-01）：LLM 在 progress 轮
+            # 幻觉出「完成总结 + 编造分数」，题干缺失、选项悬空。临床工具的问卷
+            # 完整性不允许交给采样。LLM 仅用于 completed 轮的结果转述（有兜底）。
+            if phase != "completed":
+                return _deterministic_question_body()
+            if phase == "completed" and not next_question and options:
+                # 防御：completed 轮不应携带题目数据
+                options = []
 
             return generate_questionnaire_reply(
                 user_message=user_message,
@@ -301,27 +318,24 @@ class ConversationService:
                 skip_exit = detect_skip_or_exit(payload.message)
                 if skip_exit:
                     completed = complete_questionnaire_session(session, active_session)
+                    zh_skip = expected_language == "zh"
+                    exit_reply = (
+                        f"好，{guide.title}就先到这里，这次作答不计入结果。"
+                        "想重新测的时候说一声就行；或者直接跟我聊聊现在的感受也可以。"
+                        if zh_skip
+                        else (
+                            f"Sure, we'll leave the {guide.title} here — this attempt won't be scored. "
+                            "Say the word whenever you want to restart, or just tell me how you're feeling."
+                        )
+                    )
                     return self._build_response(
                         session_id=completed.id,
                         mode="assessment",
-                        reply_text=_questionnaire_reply(
-                            user_message=payload.message,
-                            expected_language=expected_language,
-                            guide=guide,
-                            phase="skipped",
-                            current_index=view.current_index,
-                            total_items=view.total_items,
-                            next_question=(view.next_item.text if view.next_item is not None else None),
-                            options=[
-                                (option.value, option.label)
-                                for option in (view.next_item.options if view.next_item else [])
-                            ],
-                            answers_so_far=answers,
-                        ),
+                        reply_text=exit_reply,
                         summary=f"Questionnaire {assessment_type} skipped by user.",
                         debug={
                             "source": "questionnaire_skip",
-                            "llm_used": True,
+                            "llm_used": False,
                             "fallback_used": False,
                             "assessment_type": assessment_type,
                         },
@@ -365,7 +379,7 @@ class ConversationService:
                     question_options=_options_payload(view.next_item.options if view.next_item else []),
                     debug={
                         "source": "questionnaire_progress",
-                        "llm_used": True,
+                        "llm_used": False,
                         "fallback_used": False,
                         "assessment_type": assessment_type,
                     },
@@ -406,7 +420,7 @@ class ConversationService:
                     question_options=_options_payload(updated_view.next_item.options),
                     debug={
                         "source": "questionnaire_progress",
-                        "llm_used": True,
+                        "llm_used": False,
                         "fallback_used": False,
                         "assessment_type": assessment_type,
                     },
@@ -511,7 +525,7 @@ class ConversationService:
                 question_options=_options_payload(view.next_item.options if view.next_item else []),
                 debug={
                     "source": "assessment_resumed",
-                    "llm_used": True,
+                    "llm_used": False,
                     "fallback_used": False,
                     "assessment_type": requested,
                 },
@@ -575,7 +589,7 @@ class ConversationService:
             question_options=_options_payload(view.next_item.options if view.next_item else []),
             debug={
                 "source": "assessment_start",
-                "llm_used": True,
+                "llm_used": False,
                 "fallback_used": False,
                 "assessment_type": requested,
             },

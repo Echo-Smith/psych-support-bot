@@ -61,6 +61,61 @@ def test_non_crisis_support_reply_is_not_treatment_heavy() -> None:
     assert "治疗" not in result.reply.text
 
 
+def test_questionnaire_progress_reply_always_contains_question_text() -> None:
+    """回归（2026-09-01 ISI 第 7/7 题事故）：progress 轮正文改确定性生成后，
+
+    每一题的题干+选项必须完整出现，且不得出现 LLM 幻觉的「完成总结/编造分数」。
+    """
+    user_id = f"assessment-deterministic-{uuid4()}"
+    replies = []
+    with SessionLocal() as session:
+        current = conversation_service.respond(
+            ConversationRequest(user_id=user_id, message="我想做 GAD-7"),
+            session=session,
+        )
+        replies.append(current.reply.text)
+        for _ in range(6):  # 停在第 7/7 题之前，逐轮检查题干呈现
+            current = conversation_service.respond(
+                ConversationRequest(user_id=user_id, message="1"),
+                session=session,
+            )
+            if current.debug.get("source") != "questionnaire_progress":
+                break
+            replies.append(current.reply.text)
+
+    assert len(replies) >= 6
+    for i, text in enumerate(replies, start=1):
+        assert f"{i} / 7" in text or f"第 {i}" in text  # 进度前缀
+        # 题干+选项完整：确定性正文 = 题目文本 + （0=… 选项串）
+        assert "（0=" in text or "(0=" in text
+        # 幻觉完成总结的标志（编造总分/宣告完成）不得出现在进行中的轮次
+        assert "总分" not in text
+        assert "已完成" not in text
+
+
+def test_questionnaire_skip_reply_is_exit_not_question() -> None:
+    """中途退出：回复是告别文案，不是下一题题干。"""
+    user_id = f"assessment-skip-{uuid4()}"
+    with SessionLocal() as session:
+        conversation_service.respond(
+            ConversationRequest(user_id=user_id, message="我想做 GAD-7"),
+            session=session,
+        )
+        conversation_service.respond(
+            ConversationRequest(user_id=user_id, message="1"),
+            session=session,
+        )
+        exit_resp = conversation_service.respond(
+            ConversationRequest(user_id=user_id, message="不想做了"),
+            session=session,
+        )
+    assert exit_resp.debug["source"] == "questionnaire_skip"
+    assert exit_resp.debug["llm_used"] is False
+    assert "先到这里" in exit_resp.reply.text
+    # 退出文案不携带下一题的选项串
+    assert "（0=" not in exit_resp.reply.text
+
+
 def test_conversation_can_start_and_complete_questionnaire() -> None:
     user_id = f"assessment-user-llm-flow-{uuid4()}"
     with SessionLocal() as session:
@@ -79,7 +134,9 @@ def test_conversation_can_start_and_complete_questionnaire() -> None:
     assert start.mode == "assessment"
     assert start.reply.text
     assert start.debug["source"] == "assessment_start"
-    assert start.debug["llm_used"] is True
+    # 题目呈现全确定性（问卷完整性不交给采样），仅 completed 轮走 LLM
+    assert start.debug["llm_used"] is False
+    assert "GAD-7" in start.reply.text or "1 / 7" in start.reply.text
 
     assert final.mode == "assessment"
     assert final.debug["source"] == "assessment_result"
