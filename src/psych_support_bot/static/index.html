@@ -1724,26 +1724,27 @@
         <div class="scale-list" id="scaleList"></div>
       </div>
 
-      <div class="record-section" id="assessHistorySection">
-        <div class="trend-title"><span>测评历史与趋势</span></div>
-        <div id="assessHistoryBody">
-          <div class="empty-history">加载中…</div>
-        </div>
-      </div>
-
-      <div class="record-section" id="assessAnalysisSection">
-        <div class="trend-title"><span>AI 趋势解读</span><span class="paywall-tag">AI ANALYSIS</span></div>
-        <div id="assessAnalysisBody">
-          <div class="empty-history">点击下方按钮，基于你的历次测评分数生成三句内的趋势解读。</div>
-        </div>
-        <div class="actions-row" style="margin-top:12px;">
-          <button class="btn btn-secondary" id="assessAnalysisBtn" onclick="generateAssessAnalysis()">生成解读</button>
-        </div>
-      </div>
-
       <div id="assessViewer" style="display:none;">
         <div class="back-row"><button class="link-btn" onclick="showAssessList()">← 返回量表列表</button></div>
         <div class="assess-viewer" id="assessViewBox"></div>
+
+        <!-- 结果页附属：仅在测评完成出结果后展示；答题过程中隐藏（不在测试时添堵） -->
+        <div class="record-section" id="assessHistorySection" style="display:none;">
+          <div class="trend-title"><span>测评历史与趋势</span></div>
+          <div id="assessHistoryBody">
+            <div class="empty-history">加载中…</div>
+          </div>
+        </div>
+
+        <div class="record-section" id="assessAnalysisSection" style="display:none;">
+          <div class="trend-title"><span>AI 趋势解读</span><span class="paywall-tag">AI ANALYSIS</span></div>
+          <div id="assessAnalysisBody">
+            <div class="empty-history">点击下方按钮，基于你的历次分数生成三句内的趋势解读。</div>
+          </div>
+          <div class="actions-row" style="margin-top:12px;">
+            <button class="btn btn-secondary" id="assessAnalysisBtn" onclick="generateAssessAnalysis()">生成解读</button>
+          </div>
+        </div>
       </div>
     </section>
 
@@ -1925,7 +1926,6 @@
       renderExerciseGrid();
       renderScaleList();
       renderTrend();
-      loadAssessHistory();
       loadExerciseRecords();
       document.getElementById('messageInput').focus();
     }
@@ -1939,7 +1939,6 @@
           tab.classList.add('active');
           document.getElementById('panel-' + tab.dataset.tab).classList.add('active');
           if (tab.dataset.tab === 'checkin') renderCheckinStatus();
-          if (tab.dataset.tab === 'assessments') loadAssessHistory();
           if (tab.dataset.tab === 'exercises') loadExerciseRecords();        });
       });
     }
@@ -2627,6 +2626,7 @@
       document.getElementById('assessList').style.display = '';
       document.getElementById('assessViewer').style.display = 'none';
       curAssess = null;
+      assessContext.type = null; // 清除量表过滤，避免残留到下次结果页
       renderScaleList();
     }
     async function startAssess(code) {
@@ -2634,6 +2634,9 @@
       box.innerHTML = '<div class="empty-tip"><span class="loader"></span>开始会话…</div>';
       document.getElementById('assessList').style.display = 'none';
       document.getElementById('assessViewer').style.display = '';
+      // 答题过程中隐藏历史与 AI 解读——不在测试时添堵（出结果后随详情页展示）
+      document.getElementById('assessHistorySection').style.display = 'none';
+      document.getElementById('assessAnalysisSection').style.display = 'none';
       try {
         const res = await fetch(API_BASE + '/v1/assessments/sessions', {
           method: 'POST',
@@ -2721,7 +2724,7 @@
         });
         if (!res.ok) throw new Error('HTTP ' + res.status);
         curAssess.resultData = await res.json();
-        paintAssessResult(curAssess.resultData);
+        paintAssessResult(curAssess.resultData, curAssess.type);
       } catch (err) {
         box.innerHTML = '<div class="empty-tip">失败：' + escapeHtml(err.message) +
           '<br><br><button class="btn btn-secondary" onclick="showAssessList()">返回列表</button></div>';
@@ -2749,7 +2752,7 @@
               }
             }
           };
-          paintAssessResult(fakeR);
+          paintAssessResult(fakeR, a.assessment_type);
           return;
         }
         throw new Error('无历史结果');
@@ -2759,7 +2762,7 @@
           '<br><br><button class="btn btn-secondary" onclick="showAssessList()">返回列表</button></div>';
       }
     }
-    function paintAssessResult(data) {
+    function paintAssessResult(data, assessType) {
       const r = data.result || data;
       const interp = r.interpretation || {};
       const bands = {
@@ -2784,6 +2787,9 @@
         '<button class="btn btn-secondary" onclick="showAssessList()">返回量表列表</button>' +
         '</div>' +
         '</div>';
+      // 结果页附属：该量表的历史趋势 + AI 解读（答题过程不可见，此时才出现）
+      assessContext.type = assessType || null;
+      showAssessSidePanels();
     }
 
     // ========== Checkin (C3) ==========
@@ -2797,12 +2803,48 @@
 
     function typeLabel(t) { return TYPE_LABELS[t] || String(t).toUpperCase(); }
 
+    // fetch 非 2xx 时读响应体 detail 转成可读文案——"还没有数据"的业务空态
+    // 不能显示成"HTTP 404"这种部署故障观感。
+    const DETAIL_I18N = {
+      'No check-in history yet.': '暂无服务端打卡记录',
+      'No assessment history yet.': '暂无测评记录',
+      'No exercise history yet.': '暂无练习记录'
+    };
+    async function fetchOrThrow(url, options) {
+      const res = await fetch(url, options);
+      if (res.ok) return res;
+      let detail = '';
+      try {
+        const data = await res.json();
+        detail = (data && data.detail) ? String(data.detail) : '';
+      } catch (e) { /* 非 JSON 响应体，忽略 */ }
+      detail = DETAIL_I18N[detail] || detail;
+      throw new Error(detail || ('HTTP ' + res.status));
+    }
+
+    // 测评历史 + AI 解读：挂在结果详情页内，按当前量表类型过滤。
+    // assessContext.type 为 null 时退回全量表视图（保持旧行为兜底）。
+    let assessContext = { type: null };
+
+    function showAssessSidePanels() {
+      document.getElementById('assessHistorySection').style.display = '';
+      document.getElementById('assessAnalysisSection').style.display = '';
+      loadAssessHistory();
+      // 重置解读区为初始提示（生成由用户点击触发）
+      document.getElementById('assessAnalysisBody').innerHTML =
+        '<div class="empty-history">点击下方按钮，基于你的历次分数生成三句内的趋势解读。</div>';
+    }
+
     async function loadAssessHistory() {
       const body = document.getElementById('assessHistoryBody');
       try {
         const res = await fetch(API_BASE + '/v1/assessments?user_id=' + encodeURIComponent(USER_ID) + '&limit=20');
         if (!res.ok) throw new Error('HTTP ' + res.status);
-        renderAssessHistory(await res.json());
+        const all = await res.json();
+        const records = assessContext.type
+          ? all.filter(r => r.assessment_type === assessContext.type)
+          : all;
+        renderAssessHistory(records);
       } catch (err) {
         body.innerHTML = '<div class="empty-history">历史加载失败：' + escapeHtml(err.message) + '</div>';
       }
@@ -2824,11 +2866,12 @@
 
     function renderAssessHistory(records) {
       const body = document.getElementById('assessHistoryBody');
+      const scopeLabel = assessContext.type ? '（' + escapeHtml(typeLabel(assessContext.type)) + '）' : '';
       if (!records || !records.length) {
-        body.innerHTML = '<div class="empty-history">暂无测评记录，完成一次量表后即可在这里看到历史与趋势。</div>';
+        body.innerHTML = '<div class="empty-history">暂无' + scopeLabel.replace(/[（）]/g, '') + '测评记录，完成一次量表后即可在这里看到历史与趋势。</div>';
         return;
       }
-      // 趋势线按量表分组，各取最近序列（接口按时间倒序返回）。
+      // 趋势线按量表分组（详情页视图下通常只有一种量表）。
       const byType = {};
       records.forEach(r => { (byType[r.assessment_type] = byType[r.assessment_type] || []).push(r); });
       const trendHtml = Object.values(byType).map(trendLineFor).join('');
@@ -2854,8 +2897,8 @@
       // 回声气泡等待模式：与聊天发送后的等待体验一致。
       body.innerHTML = '<div class="analysis-waiting"><span class="typing-dots"><span>.</span><span>.</span><span>.</span></span>正在结合你的历次分数生成解读…</div>';
       try {
-        const res = await fetch(API_BASE + '/v1/assessments/analysis?user_id=' + encodeURIComponent(USER_ID) + '&expected_language=zh&limit=10');
-        if (!res.ok) throw new Error('HTTP ' + res.status);
+        const typeParam = assessContext.type ? '&assessment_type=' + encodeURIComponent(assessContext.type) : '';
+        const res = await fetchOrThrow(API_BASE + '/v1/assessments/analysis?user_id=' + encodeURIComponent(USER_ID) + '&expected_language=zh&limit=10' + typeParam);
         const data = await res.json();
         const meta = data.generated_by === 'llm'
           ? 'AI 生成 · 仅供参考，不构成诊断'
@@ -2863,7 +2906,9 @@
         body.innerHTML = '<div class="analysis-card">' + renderMarkdown(data.analysis) +
           '<div class="analysis-meta">' + escapeHtml(meta) + ' · 共 ' + data.history_count + ' 次测评</div></div>';
       } catch (err) {
-        body.innerHTML = '<div class="empty-history">解读生成失败：' + escapeHtml(err.message) + '</div>';
+        body.innerHTML = /暂无测评记录/.test(err.message)
+          ? '<div class="empty-history">还没有测评记录——完成一次量表后，这里就能生成趋势解读。</div>'
+          : '<div class="empty-history">解读生成失败：' + escapeHtml(err.message) + '</div>';
       } finally {
         btn.disabled = false;
       }
@@ -2874,14 +2919,15 @@
       const histBody = document.getElementById('checkinHistoryBody');
       const svgBody = document.getElementById('checkinSvgBody');
       try {
-        const res = await fetch(API_BASE + '/v1/checkins?user_id=' + encodeURIComponent(USER_ID) + '&days=30');
-        if (!res.ok) throw new Error('HTTP ' + res.status);
+        const res = await fetchOrThrow(API_BASE + '/v1/checkins?user_id=' + encodeURIComponent(USER_ID) + '&days=30');
         const records = await res.json(); // 日期倒序
         renderCheckinHistoryList(histBody, records);
         renderCheckinSvg(svgBody, [...records].reverse()); // 折线用升序
       } catch (err) {
-        histBody.innerHTML = '<div class="empty-history">记录加载失败：' + escapeHtml(err.message) + '</div>';
-        svgBody.innerHTML = '<div class="empty-history">趋势图加载失败：' + escapeHtml(err.message) + '</div>';
+        const empty = /暂无服务端打卡记录/.test(err.message);
+        const msg = empty ? '近 30 天暂无服务端记录，提交打卡后自动同步。' : ('记录加载失败：' + err.message);
+        histBody.innerHTML = '<div class="empty-history">' + escapeHtml(msg) + '</div>';
+        svgBody.innerHTML = '<div class="empty-history">' + escapeHtml(msg) + '</div>';
       }
     }
 
@@ -2943,8 +2989,7 @@
       btn.disabled = true;
       body.innerHTML = '<div class="analysis-waiting"><span class="typing-dots"><span>.</span><span>.</span><span>.</span></span>正在分析近 30 天的打卡规律…</div>';
       try {
-        const res = await fetch(API_BASE + '/v1/checkins/analysis?user_id=' + encodeURIComponent(USER_ID) + '&expected_language=zh&days=30');
-        if (!res.ok) throw new Error('HTTP ' + res.status);
+        const res = await fetchOrThrow(API_BASE + '/v1/checkins/analysis?user_id=' + encodeURIComponent(USER_ID) + '&expected_language=zh&days=30');
         const data = await res.json();
         const meta = data.generated_by === 'llm'
           ? 'AI 生成 · 仅供参考，不构成诊断'
@@ -2952,7 +2997,9 @@
         body.innerHTML = '<div class="analysis-card">' + renderMarkdown(data.analysis) +
           '<div class="analysis-meta">' + escapeHtml(meta) + ' · 共 ' + data.count + ' 条打卡</div></div>';
       } catch (err) {
-        body.innerHTML = '<div class="empty-history">解读生成失败：' + escapeHtml(err.message) + '</div>';
+        body.innerHTML = /暂无服务端打卡记录/.test(err.message)
+          ? '<div class="empty-history">还没有同步到服务端的打卡记录——先完成一次打卡（或等待下方本地记录补传），再生成解读。</div>'
+          : '<div class="empty-history">解读生成失败：' + escapeHtml(err.message) + '</div>';
       } finally {
         btn.disabled = false;
       }
@@ -2968,8 +3015,7 @@
     async function loadExerciseRecords() {
       const body = document.getElementById('exerciseHistoryBody');
       try {
-        const res = await fetch(API_BASE + '/v1/exercises/records?user_id=' + encodeURIComponent(USER_ID) + '&limit=20');
-        if (!res.ok) throw new Error('HTTP ' + res.status);
+        const res = await fetchOrThrow(API_BASE + '/v1/exercises/records?user_id=' + encodeURIComponent(USER_ID) + '&limit=20');
         const records = await res.json();
         if (!records.length) {
           body.innerHTML = '<div class="empty-history">还没有练习记录——完成一次练习（对话里或页面里）后会出现在这里。</div>';
@@ -2999,8 +3045,7 @@
       btn.disabled = true;
       body.innerHTML = '<div class="analysis-waiting"><span class="typing-dots"><span>.</span><span>.</span><span>.</span></span>正在结合你的练习记录生成分析…</div>';
       try {
-        const res = await fetch(API_BASE + '/v1/exercises/records/analysis?user_id=' + encodeURIComponent(USER_ID) + '&expected_language=zh&limit=10');
-        if (!res.ok) throw new Error('HTTP ' + res.status);
+        const res = await fetchOrThrow(API_BASE + '/v1/exercises/records/analysis?user_id=' + encodeURIComponent(USER_ID) + '&expected_language=zh&limit=10');
         const data = await res.json();
         const meta = data.generated_by === 'llm'
           ? 'AI 生成 · 仅供参考，不构成诊断'
@@ -3008,7 +3053,9 @@
         body.innerHTML = '<div class="analysis-card">' + renderMarkdown(data.analysis) +
           '<div class="analysis-meta">' + escapeHtml(meta) + ' · 共 ' + data.count + ' 次练习</div></div>';
       } catch (err) {
-        body.innerHTML = '<div class="empty-history">分析生成失败：' + escapeHtml(err.message) + '</div>';
+        body.innerHTML = /暂无练习记录/.test(err.message)
+          ? '<div class="empty-history">还没有练习记录——完成一次练习（对话里或页面里）后，这里就能生成分析。</div>'
+          : '<div class="empty-history">分析生成失败：' + escapeHtml(err.message) + '</div>';
       } finally {
         btn.disabled = false;
       }
@@ -3035,6 +3082,47 @@
       const today = todayKey();
       return arr.find(x => x.date === today) || null;
     }
+    function markLocalSynced(dateKey) {
+      const arr = getCheckins();
+      let changed = false;
+      arr.forEach(x => {
+        if (x.date === dateKey && !x.saved_to_cloud) { x.saved_to_cloud = true; changed = true; }
+      });
+      if (changed) saveCheckins(arr);
+    }
+
+    // 本地未同步打卡补传：服务端按 (user_id, checkin_date) 幂等 upsert，
+    // 重复补传只覆盖同日记录、不虚增条目；成功后置位 saved_to_cloud 并刷新视图。
+    let _backfillInFlight = false;
+    async function backfillLocalCheckins() {
+      if (_backfillInFlight) return;
+      const pending = getCheckins().filter(x => !x.saved_to_cloud && x.date);
+      if (!pending.length) return;
+      _backfillInFlight = true;
+      try {
+        for (const rec of pending) {
+          await fetchOrThrow(API_BASE + '/v1/checkins?user_id=' + encodeURIComponent(USER_ID), {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              mood_score: rec.mood_score,
+              anxiety_score: rec.anxiety_score,
+              sleep_hours: rec.sleep_hours,
+              energy_score: rec.energy_score,
+              note: rec.note || null,
+              checkin_date: rec.date
+            })
+          });
+          markLocalSynced(rec.date);
+        }
+        renderCheckinStatus(); // 补传完成后刷新：此刻 pending 已清空，不会再触发补传
+      } catch (err) {
+        // 静默失败：保持 saved_to_cloud=false，下次进入打卡页自动重试
+      } finally {
+        _backfillInFlight = false;
+      }
+    }
+
     function renderCheckinStatus() {
       const locked = document.getElementById('checkinReadonly');
       const form = document.getElementById('checkinForm');
@@ -3066,6 +3154,7 @@
       }
       renderTrend();
       loadCheckinHistory();
+      backfillLocalCheckins();
     }
     function resetCheckinForm() {
       if (hasCheckedInToday()) {
@@ -3100,12 +3189,11 @@
 
       let savedToCloud = false, errMsg = '';
       try {
-        const r = await fetch(API_BASE + '/v1/checkins?user_id=' + encodeURIComponent(USER_ID), {
+        await fetchOrThrow(API_BASE + '/v1/checkins?user_id=' + encodeURIComponent(USER_ID), {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(payload)
         });
-        if (!r.ok) throw new Error('HTTP ' + r.status);
         savedToCloud = true;
       } catch (err) {
         errMsg = err.message;

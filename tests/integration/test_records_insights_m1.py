@@ -129,12 +129,7 @@ def test_usage_events_recorded_without_mood_content() -> None:
     client.get("/v1/assessments/analysis", params={"user_id": user_id})
 
     with SessionLocal() as session:
-        events = (
-            session.query(UsageEvent)
-            .filter(UsageEvent.user_id == user_id)
-            .order_by(UsageEvent.id)
-            .all()
-        )
+        events = session.query(UsageEvent).filter(UsageEvent.user_id == user_id).order_by(UsageEvent.id).all()
     types = [e.event_type for e in events]
     assert "assessment_submitted" in types
     assert "ai_analysis_requested" in types
@@ -167,3 +162,35 @@ def test_chat_questionnaire_completion_marks_source_chat() -> None:
     records = resp.json()
     assert records, "chat 侧完成的问卷应出现在历史列表"
     assert all(r["source"] == "chat" for r in records)
+
+
+def test_assessment_analysis_filters_by_assessment_type() -> None:
+    """assessment_type 过滤：只统计指定量表的记录（结果详情页按量表出解读）。"""
+    user_id = f"m1-analysis-filter-{uuid4().hex[:8]}"
+    _seed_assessments(user_id)  # 2 条 gad7
+    other = client.post(
+        "/v1/assessments",
+        json={"user_id": user_id, "assessment_type": "phq9", "score": 3},
+    )
+    assert other.status_code == 200
+
+    # 无过滤：3 条
+    resp = client.get("/v1/assessments/analysis", params={"user_id": user_id})
+    assert resp.status_code == 200
+    assert resp.json()["history_count"] == 3
+
+    # gad7 过滤：2 条
+    resp = client.get(
+        "/v1/assessments/analysis",
+        params={"user_id": user_id, "assessment_type": "gad7"},
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["history_count"] == 2
+
+    # 过滤后无记录的量表 → 404 空态
+    resp = client.get(
+        "/v1/assessments/analysis",
+        params={"user_id": user_id, "assessment_type": "isi"},
+    )
+    assert resp.status_code == 404

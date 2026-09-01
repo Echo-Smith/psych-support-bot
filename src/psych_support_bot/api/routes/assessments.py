@@ -84,6 +84,7 @@ def get_assessment_analysis(
     user_id: str = Query(..., min_length=1),
     expected_language: str = Query("zh", pattern="^(zh|en)$"),
     limit: int = Query(10, ge=1, le=50),
+    assessment_type: str | None = Query(None, description="按量表过滤（phq9/gad7/isi）；缺省=全部量表"),
     session: Session = Depends(get_db_session),
 ) -> AssessmentAnalysisResponse:
     """AI 趋势解读（独立端点 = 将来的付费墙锚点）。
@@ -91,6 +92,8 @@ def get_assessment_analysis(
     LLM 不可用时确定性统计文本兜底——功能永不 500。
     """
     records = get_user_assessments(session, user_id, limit=limit)
+    if assessment_type:
+        records = [r for r in records if r.assessment_type == assessment_type]
     if not records:
         raise HTTPException(status_code=404, detail="No assessment history yet.")
     record_usage_event(session, user_id, "ai_analysis_requested", target="assessments")
@@ -116,15 +119,20 @@ def get_assessment_analysis(
         zh = expected_language == "zh"
         delta = last.score - first.score
         direction = (
-            ("下降" if delta < 0 else "上升") if delta else "持平"
-        ) if zh else ("improved" if delta < 0 else ("worsened" if delta > 0 else "stable"))
+            (("下降" if delta < 0 else "上升") if delta else "持平")
+            if zh
+            else ("improved" if delta < 0 else ("worsened" if delta > 0 else "stable"))
+        )
         if zh:
             return (
                 f"你共完成 {len(chronological)} 次测评（{bands_text}）。"
                 f"从 {first.created_at.date()} 的 {first.score} 分到 "
                 f"{last.created_at.date()} 的 {last.score} 分，整体{direction} {abs(delta)} 分。"
-                + ("最近一次提示需要关注安全信号，建议聊聊。"
-                   if any(r.needs_safety_followup for r in chronological) else "")
+                + (
+                    "最近一次提示需要关注安全信号，建议聊聊。"
+                    if any(r.needs_safety_followup for r in chronological)
+                    else ""
+                )
             )
         return (
             f"You completed {len(chronological)} screenings ({bands_text}). "
@@ -145,13 +153,9 @@ def get_assessment_analysis(
         analysis = fallback_text
         generated_by = "fallback"
 
-    record_usage_event(
-        session, user_id, "ai_analysis_served", target="assessments", generated_by=generated_by
-    )
+    record_usage_event(session, user_id, "ai_analysis_served", target="assessments", generated_by=generated_by)
     session.commit()
-    return AssessmentAnalysisResponse(
-        analysis=analysis, history_count=len(records), generated_by=generated_by
-    )
+    return AssessmentAnalysisResponse(analysis=analysis, history_count=len(records), generated_by=generated_by)
 
 
 @router.get("/questionnaires", response_model=list[QuestionnaireGuide])
