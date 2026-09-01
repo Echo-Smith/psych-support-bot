@@ -28,6 +28,10 @@ class Settings(BaseSettings):
     judge_api_key: str = Field(default="", alias="JUDGE_API_KEY")
     judge_base_url: str = Field(default="", alias="JUDGE_BASE_URL")
     judge_model: str = Field(default="DeepSeek-V4-Flash", alias="JUDGE_MODEL")
+    # M2 首答延迟优化：规则判 low/elevated 且支持模式时，风险 LLM 分类与回复
+    # 生成并行投机；风险升级 high/critical 则丢弃投机回复走危机路径。
+    # 测试环境由 conftest 置 false，避免单测触发真实回复生成。
+    speculative_reply_enabled: bool = Field(default=True, alias="SPECULATIVE_REPLY_ENABLED")
 
     @model_validator(mode="after")
     def apply_dashscope_fallbacks(self) -> "Settings":

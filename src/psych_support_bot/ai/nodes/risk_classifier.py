@@ -1,5 +1,7 @@
+import contextvars
 import logging
 import re
+from concurrent.futures import ThreadPoolExecutor
 
 from psych_support_bot.ai.safety.llm_classifier import classify_risk_llm
 from psych_support_bot.ai.safety.rules import classify_message_risk
@@ -22,6 +24,7 @@ def _merge_upgrade(rule: RiskResult, llm: RiskResult) -> RiskResult:
         needs_crisis_mode=rule.needs_crisis_mode or llm.needs_crisis_mode,
         reason=f"{llm.reason} (rule verdict kept in types: {rule.reason})",
     )
+
 
 # Patterns to detect previous elevated risk in memory_summary.
 # Memory snapshot contains recent messages and risk info; we look for
@@ -46,6 +49,84 @@ def _has_previous_elevated(memory_summary: str) -> bool:
     return any(pattern.search(memory_summary) for pattern in _PREV_ELEVATED_REGEX)
 
 
+def _speculation_enabled() -> bool:
+    from psych_support_bot.infra.config.settings import get_settings
+
+    return get_settings().speculative_reply_enabled
+
+
+def _prepare_speculative_args(state: GraphState) -> dict | None:
+    """投机回复入参准备（仅 support 模式——最常见路径）。
+
+    所有参数来自确定性输入：detect_mode 关键词检测、determine_interview_process
+    规则面试进程、get_knowledge_context 关键词查找。回复统一按 elevated 口径
+    生成（加温备注）——风险 LLM 升级 elevated 时语气恰好正确，low 用户回复
+    偏暖（安全偏软方向，产品已确认）。关键约束：**不修改 state**——投机被
+    丢弃时，后续节点用真实风险等级重算并注入，不能出现重复注入或提前污染。
+
+    返回 None 表示本条消息不可投机（非 support 模式 / 会诊触发 / 开关关闭）。
+    """
+    if not _speculation_enabled():
+        return None
+    from psych_support_bot.ai.consultation import should_trigger_multidisciplinary_consultation
+    from psych_support_bot.ai.interview import determine_interview_process
+    from psych_support_bot.ai.routers.intent import detect_mode
+    from psych_support_bot.ai.tools.knowledge_base import get_knowledge_context
+
+    user_message = state["user_message"]
+    if detect_mode(user_message) != "support":
+        return None
+    # 诊断类关键词在 support 模式也会触发会诊（6 调用路径），投机回复必被
+    # 丢弃——直接不投机，省一份 token。
+    if should_trigger_multidisciplinary_consultation(user_message=user_message, mode="support", risk_level="elevated"):
+        return None
+
+    interview_process = determine_interview_process(
+        user_message=user_message,
+        mode="support",
+        risk_level="elevated",
+        turn_count=int(state.get("turn_count") or 0),
+    )
+    loop_hint = str(interview_process["loop_hint"])
+    # 复刻 plan_consultation 的跨轮矛盾提示注入（投机线程内局部拼接，不动 state）
+    from psych_support_bot.ai.nodes.consultation_planner import _detect_cross_turn_contradiction
+
+    contradiction = _detect_cross_turn_contradiction(state.get("memory_summary", ""), user_message)
+    if contradiction:
+        loop_hint = contradiction + " " + loop_hint
+    # 复刻 response_generator._inject_refusal_context 的注入语义（局部拼接）
+    from psych_support_bot.ai.nodes.response_generator import _refusal_context_note
+
+    refusal_note = _refusal_context_note(list(state.get("refusal_history") or []))
+    if refusal_note:
+        loop_hint = refusal_note + " " + loop_hint if loop_hint else refusal_note
+
+    return {
+        "user_message": user_message,
+        "memory_summary": state.get("memory_summary", ""),
+        "knowledge_context": get_knowledge_context(mode="support", risk_level="elevated", user_message=user_message),
+        "interview_stage": str(interview_process["interview_stage"]),
+        "question_strategy": str(interview_process["question_strategy"]),
+        "challenge_allowed": bool(interview_process["challenge_allowed"]),
+        "loop_hint": loop_hint,
+        "expected_language": state.get("expected_language", ""),
+        "no_question_mode": bool(state.get("no_question_mode", False)),
+    }
+
+
+def _generate_speculative_reply(args: dict) -> str:
+    from psych_support_bot.infra.llm.generation import generate_clinically_bounded_reply
+
+    return generate_clinically_bounded_reply(
+        mode="support",
+        risk_level="elevated",
+        consultation_required=False,
+        consultation_agents=[],
+        consultation_framework="",
+        **args,
+    )
+
+
 def classify_risk(state: GraphState) -> GraphState:
     with trace_span(
         "node.risk_classifier",
@@ -61,18 +142,45 @@ def classify_risk(state: GraphState) -> GraphState:
         # 故 elevated 也过 LLM。high/critical 直通（规则升级信号可信）。
         # 单向升级：LLM 只能往上抬；LLM 不可用时维持规则判定
         # （fail-safe，不放大不缩小）。
+        #
+        # M2 首答延迟优化：风险 LLM 分类与 support 回复生成并行投机。
+        # 两个 LLM 调用同时发起（ThreadPoolExecutor + contextvars 快照，
+        # 会话轨迹附着复用会诊线程池的既有模式），节点总耗时从
+        # risk_llm + reply_llm 串行和降为 max(risk_llm, reply_llm)。
+        # 裁决权完整保留：投机回复是否采纳在全部升级逻辑（合并/跨轮/
+        # 安全地板）之后决定，升级 high/critical 必然丢弃走危机路径。
         llm_semantic_used = False
+        speculative_reply: str | None = None
         if risk_result.risk_level in {"low", "elevated"}:
-            try:
-                llm_risk = classify_risk_llm(
-                    state["user_message"], state.get("expected_language", "")
-                )
-            except Exception:
-                logger.warning(
-                    "LLM risk classifier unavailable; keeping rule verdict.",
-                    exc_info=True,
-                )
-            else:
+            spec_args = _prepare_speculative_args(state)
+
+            def _run_risk_llm() -> RiskResult:
+                return classify_risk_llm(state["user_message"], state.get("expected_language", ""))
+
+            jobs = [(contextvars.copy_context(), _run_risk_llm)]
+            if spec_args is not None:
+                jobs.append((contextvars.copy_context(), lambda: _generate_speculative_reply(spec_args)))
+            with ThreadPoolExecutor(max_workers=len(jobs)) as executor:
+                futures = [executor.submit(job_ctx.run, fn) for job_ctx, fn in jobs]
+                try:
+                    llm_risk = futures[0].result()
+                except Exception:
+                    logger.warning(
+                        "LLM risk classifier unavailable; keeping rule verdict.",
+                        exc_info=True,
+                    )
+                    llm_risk = None
+                if len(futures) > 1:
+                    try:
+                        speculative_reply = futures[1].result()
+                    except Exception:
+                        logger.warning(
+                            "Speculative reply generation failed; serial path will regenerate.",
+                            exc_info=True,
+                        )
+                        speculative_reply = None
+
+            if llm_risk is not None:
                 llm_semantic_used = True
                 merged = _merge_upgrade(risk_result, llm_risk)
                 if merged.risk_level != risk_result.risk_level:
@@ -118,8 +226,7 @@ def classify_risk(state: GraphState) -> GraphState:
                     risk_types=[*current.risk_types, "recent_screening_flag"],
                     needs_crisis_mode=current.needs_crisis_mode or severity[floor] >= 2,
                     reason=(
-                        "Safety floor applied: recent screening flagged safety follow-up. "
-                        "Original: " + current.reason
+                        "Safety floor applied: recent screening flagged safety follow-up. Original: " + current.reason
                     ),
                 )
                 logger.info(
@@ -131,11 +238,27 @@ def classify_risk(state: GraphState) -> GraphState:
         if state["risk_result"].needs_crisis_mode:
             state["mode"] = "crisis"
 
-        update_span_output(obs, {
-            "risk_level": state["risk_result"].risk_level,
-            "risk_types": state["risk_result"].risk_types,
-            "needs_crisis_mode": state["risk_result"].needs_crisis_mode,
-            "mode": state["mode"],
-            "llm_semantic_used": llm_semantic_used,
-        })
+        # M2 投机采纳裁决：合并升级/跨轮升级/安全地板全部走完后，最终风险
+        # 仍 ≤ elevated 且未进入危机模式才采用投机回复；否则丢弃置 None，
+        # response_generator 按原路径（危机模板 / crisis 软着陆 LLM）生成。
+        final_risk = state["risk_result"]
+        speculative_adopted = (
+            speculative_reply is not None
+            and final_risk.risk_level in {"low", "elevated"}
+            and not final_risk.needs_crisis_mode
+            and state.get("mode") != "crisis"
+        )
+        state["speculative_reply"] = speculative_reply if speculative_adopted else None
+
+        update_span_output(
+            obs,
+            {
+                "risk_level": state["risk_result"].risk_level,
+                "risk_types": state["risk_result"].risk_types,
+                "needs_crisis_mode": state["risk_result"].needs_crisis_mode,
+                "mode": state["mode"],
+                "llm_semantic_used": llm_semantic_used,
+                "speculative_reply_adopted": speculative_adopted,
+            },
+        )
     return state

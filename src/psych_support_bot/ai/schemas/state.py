@@ -44,3 +44,8 @@ class GraphState(TypedDict):
     # Most recent bot reply in this session ("" when none). The response
     # generator uses it to avoid serving a verbatim-identical reply twice.
     last_bot_reply: str
+    # M2 首答延迟优化：risk_classifier 在规则判 low/elevated 且 support 模式时
+    # 与风险 LLM 分类并行投机生成的回复（带 elevated 加温备注）。最终风险
+    # 裁决仍 ≤ elevated 时 response_generator 直接采用，跳过自己的 LLM 调用；
+    # 升级 high/critical 则丢弃走危机路径。投机失败为 None。
+    speculative_reply: str | None

@@ -19,9 +19,7 @@ logger = logging.getLogger(__name__)
 # 完全相同的回复), append a differentiated follow-up so consecutive turns
 # never read as a copied message. Template (critical) replies are exempt —
 # they are intentionally fixed.
-_ZH_REPEAT_FOLLOWUP = (
-    "\n\n换个角度说——此刻你的身体有什么感觉？是紧绷、发沉，还是别样的感受？"
-)
+_ZH_REPEAT_FOLLOWUP = "\n\n换个角度说——此刻你的身体有什么感觉？是紧绷、发沉，还是别样的感受？"
 _EN_REPEAT_FOLLOWUP = (
     "\n\nLet's take a different angle — what do you notice in your body right "
     "now: tension, heaviness, or something else?"
@@ -51,22 +49,32 @@ def _split_reply_messages(text: str) -> list[str]:
     return parts
 
 
+def _refusal_context_note(refusal_history: list[str]) -> str:
+    """B3.3 refusal note. Empty string when nothing was refused.
+
+    抽成纯函数：投机并行路径（risk_classifier）需要在不改 state 的前提下
+    为投机回复复刻同样的注入语义。
+    """
+    if not refusal_history:
+        return ""
+    refused_topics = ", ".join(refusal_history)
+    return (
+        f"User has previously declined exercises related to: {refused_topics}. "
+        "Do not recommend the same types of exercises again. "
+        "Offer a different approach or explore why the previous suggestion did not fit."
+    )
+
+
 def _inject_refusal_context(state: GraphState) -> None:
     """B3.3: If user has refused exercises before, inject context into loop_hint.
 
     This tells the LLM not to repeat recommendations for topics the user
     has already declined, improving personalization.
     """
-    refusal_history = state.get("refusal_history", [])
-    if not refusal_history:
+    refusal_note = _refusal_context_note(state.get("refusal_history", []))
+    if not refusal_note:
         return
-    refused_topics = ", ".join(refusal_history)
     existing_hint = state.get("loop_hint", "")
-    refusal_note = (
-        f"User has previously declined exercises related to: {refused_topics}. "
-        "Do not recommend the same types of exercises again. "
-        "Offer a different approach or explore why the previous suggestion did not fit."
-    )
     state["loop_hint"] = refusal_note + " " + existing_hint if existing_hint else refusal_note
 
 
@@ -89,10 +97,23 @@ def generate_response(state: GraphState) -> GraphState:
         # B3.3: Inject refusal history into loop_hint before LLM generation
         _inject_refusal_context(state)
 
+        # M2 首答延迟优化：规则判 low/elevated 的 support 消息已在 risk_classifier
+        # 与风险 LLM 分类并行投机生成回复；最终裁决未升级（仍 ≤ elevated）时
+        # 直接采用，跳过本次 LLM 调用（2 次串行 → 1 次往返）。
+        speculative = state.get("speculative_reply")
+        if speculative and risk_level in {"low", "elevated"} and state["mode"] == "support":
+            reply_text = speculative
+            state["consultation_opinions"] = []
+            state["speculative_reply"] = None
+            update_span_output(gen_obs, {"speculative_reply_used": True})
         # Only critical risk uses pure template reply (imminent danger)
         # High risk now goes through LLM with crisis safety prompt injected
-        if risk_level == "critical":
-            reply_text = build_crisis_reply(state["risk_result"], user_message=state["user_message"], expected_language=state.get("expected_language", ""))
+        elif risk_level == "critical":
+            reply_text = build_crisis_reply(
+                state["risk_result"],
+                user_message=state["user_message"],
+                expected_language=state.get("expected_language", ""),
+            )
             state["consultation_opinions"] = []
         elif state["mode"] == "crisis" and risk_level == "high":
             # High-risk crisis: use LLM with crisis safety guidance
@@ -116,7 +137,11 @@ def generate_response(state: GraphState) -> GraphState:
             except Exception:
                 logger.exception("LLM generation failed for high-risk; using crisis template fallback.")
                 state["fallback_used"] = True
-                reply_text = build_crisis_reply(state["risk_result"], user_message=state["user_message"], expected_language=state.get("expected_language", ""))
+                reply_text = build_crisis_reply(
+                    state["risk_result"],
+                    user_message=state["user_message"],
+                    expected_language=state.get("expected_language", ""),
+                )
         else:
             try:
                 if state.get("consultation_required", False):
@@ -192,9 +217,12 @@ def generate_response(state: GraphState) -> GraphState:
             if state.get("consultation_required")
             else f"single response path; stage={state.get('interview_stage', 'engagement')}; question={state.get('question_strategy', 'open')}"
         )
-        update_span_output(gen_obs, {
-            "reply_text": reply_text[:200],
-            "fallback_used": state["fallback_used"],
-            "consultation_notes": state["consultation_notes"],
-        })
+        update_span_output(
+            gen_obs,
+            {
+                "reply_text": reply_text[:200],
+                "fallback_used": state["fallback_used"],
+                "consultation_notes": state["consultation_notes"],
+            },
+        )
     return state

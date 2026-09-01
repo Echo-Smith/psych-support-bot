@@ -338,7 +338,7 @@ class ConversationService:
                         error_hint += " 如果暂时不想测了，回复「暂停」可以保存进度稍后再来；有其他想聊的也直接说。"
                     else:
                         error_hint += (
-                            " If you'd rather stop for now, reply \"pause\" and your progress will be saved; "
+                            ' If you\'d rather stop for now, reply "pause" and your progress will be saved; '
                             "you can also just tell me what's on your mind."
                         )
                 reply_text = build_progress_prefix(
@@ -530,7 +530,7 @@ class ConversationService:
                     else (
                         f"You completed the {guide.title} {days_since} day(s) ago, scoring {recent.score} "
                         f"({recent.severity_band}). Retaking within a week tends to produce unstable scores. "
-                        "If you'd still like to redo it now, just say \"retake\"; otherwise feel free to "
+                        'If you\'d still like to redo it now, just say "retake"; otherwise feel free to '
                         "tell me how you've been lately."
                     )
                 )
@@ -646,8 +646,7 @@ class ConversationService:
             "safety_floor_risk_level": (
                 "elevated"
                 if (
-                    (recent_screening := get_latest_assessment(session, payload.user_id, "phq9"))
-                    is not None
+                    (recent_screening := get_latest_assessment(session, payload.user_id, "phq9")) is not None
                     and recent_screening.needs_safety_followup
                     and _days_since(recent_screening.created_at) <= SAFETY_FLOOR_WINDOW_DAYS
                 )
@@ -656,13 +655,11 @@ class ConversationService:
             "expected_language": expected_language,
             # 最近一条 bot 回复：response_generator 用它做逐字重复检测。
             "last_bot_reply": next(
-                (
-                    m.content
-                    for m in reversed(prior_messages)
-                    if getattr(m, "role", "") == "assistant"
-                ),
+                (m.content for m in reversed(prior_messages) if getattr(m, "role", "") == "assistant"),
                 "",
             ),
+            # M2 投机并行：risk_classifier 决定是否填充（None=无投机）。
+            "speculative_reply": None,
         }
         with trace_span(
             "conversation_graph.invoke",
