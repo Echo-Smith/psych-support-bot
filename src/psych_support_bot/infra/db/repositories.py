@@ -169,9 +169,7 @@ def build_memory_snapshot(session: Session, user_id: str) -> str:
     # Last five turns with speaker labels — thin excerpts were the root cause
     # of the bot forgetting events like "we just finished a breathing exercise"
     # and re-asking the user whether they wanted to start one.
-    recent_excerpt = "\n".join(
-        _safe(msg) for msg in reversed(recent_messages[-5:])
-    ) if recent_messages else ""
+    recent_excerpt = "\n".join(_safe(msg) for msg in reversed(recent_messages[-5:])) if recent_messages else ""
     profile_summary = ""
     if profile is not None:
         profile_summary = " || ".join(
@@ -271,6 +269,7 @@ _ALLOWED_USAGE_EVENTS = {
     "exercise_completed",
     "assessment_submitted",
     "checkin_created",
+    "checkin_backfilled",
     "ai_analysis_requested",
     "ai_analysis_served",
 }
@@ -390,9 +389,7 @@ def get_paused_questionnaire_session(
     return session.execute(stmt).scalar_one_or_none()
 
 
-def get_latest_assessment(
-    session: Session, user_id: str, assessment_type: str
-) -> AssessmentRecord | None:
+def get_latest_assessment(session: Session, user_id: str, assessment_type: str) -> AssessmentRecord | None:
     stmt = (
         select(AssessmentRecord)
         .where(AssessmentRecord.user_id == user_id)
@@ -403,19 +400,47 @@ def get_latest_assessment(
     return session.execute(stmt).scalar_one_or_none()
 
 
-def save_checkin(session: Session, user_id: str, checkin: DailyCheckin) -> CheckinRecord:
-    ensure_user(session, user_id)
-    record = CheckinRecord(
-        user_id=user_id,
-        checkin_date=date.today(),  # noqa: DTZ011
-        mood_score=checkin.mood_score,
-        anxiety_score=checkin.anxiety_score,
-        sleep_hours=checkin.sleep_hours,
-        energy_score=checkin.energy_score,
-        note=checkin.note or "",
+def get_checkin_on_date(session: Session, user_id: str, checkin_date: date) -> CheckinRecord | None:
+    return (
+        session.query(CheckinRecord)  # type: ignore[attr-defined]
+        .filter(CheckinRecord.user_id == user_id)  # 绑定参数，非字符串拼接
+        .filter(CheckinRecord.checkin_date == checkin_date)
+        .order_by(CheckinRecord.created_at.desc())
+        .first()
     )
-    session.add(record)
-    record_usage_event(session, user_id, "checkin_created")
+
+
+def save_checkin(session: Session, user_id: str, checkin: DailyCheckin) -> CheckinRecord:
+    """按 (user_id, checkin_date) 幂等 upsert。
+
+    未带 checkin_date 时视为"今天打卡"（同日已存在则覆盖）；
+    携带日期时用于本地历史补传——覆盖四维与备注，不虚增埋点。
+    """
+    ensure_user(session, user_id)
+    target_date = checkin.checkin_date or date.today()  # noqa: DTZ011
+    record = get_checkin_on_date(session, user_id, target_date)
+    is_new = record is None
+    if is_new:
+        record = CheckinRecord(
+            user_id=user_id,
+            checkin_date=target_date,
+            mood_score=checkin.mood_score,
+            anxiety_score=checkin.anxiety_score,
+            sleep_hours=checkin.sleep_hours,
+            energy_score=checkin.energy_score,
+            note=checkin.note or "",
+        )
+        session.add(record)
+    else:
+        record.mood_score = checkin.mood_score
+        record.anxiety_score = checkin.anxiety_score
+        record.sleep_hours = checkin.sleep_hours
+        record.energy_score = checkin.energy_score
+        record.note = checkin.note or ""
+    # 埋点放在构造完整之后：record_usage_event 内部 flush，半成品对象会触发 NOT NULL
+    if is_new:
+        event_type = "checkin_backfilled" if checkin.checkin_date else "checkin_created"
+        record_usage_event(session, user_id, event_type)
     session.commit()
     session.refresh(record)
     return record

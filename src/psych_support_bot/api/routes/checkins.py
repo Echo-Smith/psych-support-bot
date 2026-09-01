@@ -1,3 +1,5 @@
+from datetime import date
+
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
@@ -23,6 +25,12 @@ def create_checkin(
     user_id: str,
     session: Session = Depends(get_db_session),
 ) -> DailyCheckin:
+    """打卡落库（幂等 upsert）。
+
+    携带 checkin_date 时为历史补传（本地未同步记录回传），不接受未来日期。
+    """
+    if payload.checkin_date and payload.checkin_date > date.today():  # noqa: DTZ011
+        raise HTTPException(status_code=400, detail="checkin_date cannot be in the future.")
     save_checkin(session, user_id, payload)
     return payload
 
@@ -172,10 +180,6 @@ def get_checkin_analysis(
         analysis = fallback_text
         generated_by = "fallback"
 
-    record_usage_event(
-        session, user_id, "ai_analysis_served", target="checkins", generated_by=generated_by
-    )
+    record_usage_event(session, user_id, "ai_analysis_served", target="checkins", generated_by=generated_by)
     session.commit()
-    return CheckinAnalysisResponse(
-        analysis=analysis, count=len(records), generated_by=generated_by
-    )
+    return CheckinAnalysisResponse(analysis=analysis, count=len(records), generated_by=generated_by)
