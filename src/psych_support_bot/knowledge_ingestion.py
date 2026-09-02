@@ -20,6 +20,10 @@ except Exception:  # pragma: no cover - optional at import time
 
 USER_AGENT = "psych-support-bot-knowledge-ingestor/0.2"
 LOCAL_IMPORT_EXTENSIONS = {".txt", ".md", ".json", ".pdf"}
+# 语料规模治理（红线执行机制）：语料文件是唯一能绕过代码评审增长
+# 知识索引的入口，单来源超过上限的部分直接丢弃，防全站抓取挤占
+# 索引与检索信噪比。策展内容（代码内置知识）不受此限制。
+MAX_CHUNKS_PER_SOURCE = 200
 TOPIC_HINTS = {
     "anxiety": ["anxiety", "gad", "worry", "fear", "phobia"],
     "panic": ["panic"],
@@ -258,7 +262,23 @@ def load_learning_notes() -> list[LearningNote]:
 
 
 def load_all_corpora() -> list[CorpusChunk]:
-    return [*load_public_corpus(), *load_local_corpus(), *load_ingested_corpus()]
+    """加载全部语料并做规模治理：entry_id 去重 + 单来源上限（MAX_CHUNKS_PER_SOURCE）。"""
+    seen: set[str] = set()
+    deduped: list[CorpusChunk] = []
+    for chunk in [*load_public_corpus(), *load_local_corpus(), *load_ingested_corpus()]:
+        if chunk.entry_id in seen:
+            continue
+        seen.add(chunk.entry_id)
+        deduped.append(chunk)
+    per_source: dict[str, int] = {}
+    capped: list[CorpusChunk] = []
+    for chunk in deduped:
+        count = per_source.get(chunk.publisher, 0)
+        if count >= MAX_CHUNKS_PER_SOURCE:
+            continue
+        per_source[chunk.publisher] = count + 1
+        capped.append(chunk)
+    return capped
 
 
 def _assert_public_http_url(url: str) -> None:

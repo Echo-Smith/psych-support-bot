@@ -41,6 +41,7 @@ from psych_support_bot.infra.db.repositories import (
     get_active_questionnaire_session,
     get_latest_assessment,
     get_paused_questionnaire_session,
+    get_recent_risk_level,
     get_session_messages,
     get_user_sessions,
     pause_questionnaire_session,
@@ -623,6 +624,8 @@ class ConversationService:
         )
         # 情绪扫描专用通道：用户原话 + 会话摘要，不含记录层渲染文本。
         user_history_text = payload.memory_summary or build_user_history_text(session, payload.user_id)
+        # 结构化风险通道：近 7 天最近一次 high/critical RiskEvent（跨轮升级主来源）。
+        recent_risk_level = get_recent_risk_level(session, payload.user_id)
 
         state: GraphState = {
             "user_id": payload.user_id,
@@ -630,6 +633,7 @@ class ConversationService:
             "user_message": payload.message,
             "memory_summary": memory_summary,
             "user_history_text": user_history_text,
+            "recent_risk_level": recent_risk_level,
             "knowledge_context": "",
             "mode": "support",
             "risk_result": RiskResult(

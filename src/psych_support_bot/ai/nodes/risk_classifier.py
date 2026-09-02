@@ -204,9 +204,13 @@ def classify_risk(state: GraphState) -> GraphState:
         # If the current turn is elevated AND the previous turn was also elevated,
         # automatically upgrade to high risk. Persistent elevated distress across
         # consecutive turns signals accumulating risk that warrants closer attention.
+        # 双源判定：结构化主来源 = RiskEvent 表窗口内最近等级（recent_risk_level，
+        # high/critical 直接视为"此前已 elevated"）；文本兜底 = 摘要/用户原话里的
+        # elevated 标记（结构化通道历史数据不足时仍可用）。
         if risk_result.risk_level == "elevated":
+            recent_structured = str(state.get("recent_risk_level") or "").strip()
             user_history_text = state.get("user_history_text", "")
-            if _has_previous_elevated(user_history_text):
+            if recent_structured in {"high", "critical"} or _has_previous_elevated(user_history_text):
                 state["risk_result"] = RiskResult(
                     risk_level="high",
                     risk_types=[*risk_result.risk_types, "cumulative_elevated"],

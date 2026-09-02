@@ -38,6 +38,10 @@ class Settings(BaseSettings):
     memory_module_assessments: bool = Field(default=True, alias="MEMORY_MODULE_ASSESSMENTS")
     memory_module_checkins: bool = Field(default=True, alias="MEMORY_MODULE_CHECKINS")
     memory_module_exercises: bool = Field(default=True, alias="MEMORY_MODULE_EXERCISES")
+    # JWT 认证：默认关闭（面板登录 UI 尚未上线，开启即拦截全部 /v1 数据端点）。
+    # 商业化部署置 AUTH_ENABLED=true 并显式配置 JWT_SECRET_KEY。
+    auth_enabled: bool = Field(default=False, alias="AUTH_ENABLED")
+    jwt_secret_key: str = Field(default="", alias="JWT_SECRET_KEY")
 
     @model_validator(mode="after")
     def apply_dashscope_fallbacks(self) -> "Settings":
@@ -47,6 +51,13 @@ class Settings(BaseSettings):
             self.openai_base_url = os.getenv("DASHSCOPE_BASE_URL", "")
         if self.openai_model in {"", "gpt-4.1-mini"}:
             self.openai_model = os.getenv("DASHSCOPE_MODEL", self.openai_model)
+        if not self.jwt_secret_key:
+            # 未显式配置时生成随机临时密钥（注册/登录端点始终可用，需可签发）：
+            # AUTH_ENABLED=true 的部署重启后所有已签发 token 失效——
+            # 生产必须显式配置 JWT_SECRET_KEY。
+            import secrets
+
+            self.jwt_secret_key = secrets.token_urlsafe(48)
         return self
 
 

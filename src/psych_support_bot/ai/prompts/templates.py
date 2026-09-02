@@ -140,7 +140,14 @@ def build_context_prompt(memory_summary: str, knowledge_context: str) -> str:
         "4) Safety check: if distress indicators are present, gently assess risk. "
         "Keep the response focused, empathetic, and grounded in evidence-based principles."
     )
-    return f"Known user memory summary: {memory_summary or 'No prior memory.'} Relevant practice context: {context}"
+    # 分段标签装配（替代旧的单行平铺）：记忆区与知识区显式隔开，
+    # 便于模型区分"用户是谁/经历过什么"与"此刻该怎么回应"。
+    return (
+        "[User Memory]\n"
+        f"{memory_summary or 'No prior memory.'}\n"
+        "[Practice Context]\n"
+        f"{context}"
+    )
 
 
 def build_output_prompt(

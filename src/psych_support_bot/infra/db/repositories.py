@@ -136,6 +136,29 @@ def get_user_risk_events(session: Session, user_id: str, limit: int = 20) -> lis
     return list(session.execute(stmt).scalars())
 
 
+RISK_EVENT_WINDOW_DAYS = 7
+
+
+def get_recent_risk_level(session: Session, user_id: str, *, days: int = RISK_EVENT_WINDOW_DAYS) -> str:
+    """窗口期内最近一次 high/critical RiskEvent 的等级，无则空串。
+
+    结构化升级通道：跨轮升级判定优先读本函数（RiskEvent 表），
+    摘要文本 risk=elevated 标记降级为兜底来源——结构化数据不依赖
+    摘要生成质量，也不会随摘要滚动丢失。
+    """
+    cutoff = utcnow() - timedelta(days=days)
+    row = (
+        session.query(RiskEvent.risk_level)  # type: ignore[attr-defined]
+        .filter(RiskEvent.user_id == user_id)  # 绑定参数，非字符串拼接
+        .filter(RiskEvent.created_at >= cutoff)
+        .filter(RiskEvent.risk_level.in_(["high", "critical"]))  # 绑定参数，非字符串拼接
+        .order_by(RiskEvent.created_at.desc())
+        .limit(1)
+        .first()
+    )
+    return row[0] if row else ""
+
+
 def get_recent_user_messages(session: Session, user_id: str, limit: int = 10) -> list[str]:
     """用户本人最近发言（跨最近 3 个会话，时间倒序，不含 Bot 侧文本）。
 
@@ -300,6 +323,9 @@ _ALLOWED_USAGE_EVENTS = {
     "checkin_backfilled",
     "ai_analysis_requested",
     "ai_analysis_served",
+    "auth_register",
+    "auth_login",
+    "auth_login_failed",
 }
 
 

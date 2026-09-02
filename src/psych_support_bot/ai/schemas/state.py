@@ -17,6 +17,9 @@ class GraphState(TypedDict):
     # _detect_cross_turn_contradiction / _has_previous_elevated 误读为
     # 用户情绪；summary 里的 risk=elevated 标记由此进入升级判定。
     user_history_text: str
+    # 结构化风险通道：窗口期内最近一次 high/critical RiskEvent 等级
+    # （RiskEvent 表，7 天窗口，""=无）。跨轮升级判定的主来源。
+    recent_risk_level: str
     knowledge_context: str
     mode: ConversationMode
     risk_result: RiskResult

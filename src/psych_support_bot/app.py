@@ -4,11 +4,11 @@ from pathlib import Path
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
 
 from psych_support_bot.api.routes.analytics import router as analytics_router
 from psych_support_bot.api.routes.assessments import router as assessments_router
+from psych_support_bot.api.routes.auth import router as auth_router
 from psych_support_bot.api.routes.checkins import router as checkins_router
 from psych_support_bot.api.routes.conversation import router as conversation_router
 from psych_support_bot.api.routes.exercises import router as exercises_router
@@ -90,14 +90,27 @@ def create_app() -> FastAPI:
 
     app.include_router(health_router)
     app.include_router(system_router)
-    app.include_router(conversation_router)
-    app.include_router(assessments_router)
-    app.include_router(checkins_router)
-    app.include_router(plans_router)
-    app.include_router(reports_router)
-    app.include_router(users_router)
-    app.include_router(analytics_router)
-    app.include_router(exercises_router)
+    app.include_router(auth_router)
+
+    # JWT 认证守卫：数据端点统一挂载（api/auth.py）。AUTH_ENABLED=false 时
+    # 守卫为 no-op（本地开发 / 既有测试），true 时无/坏 token 一律 401。
+    # 注意只挂一次——重复 include 会先注册无守卫路由，守卫形同虚设。
+    from fastapi import Depends
+
+    from psych_support_bot.api.auth import require_auth
+
+    data_router_guard = [Depends(require_auth)]
+    for guarded in (
+        conversation_router,
+        assessments_router,
+        checkins_router,
+        plans_router,
+        reports_router,
+        users_router,
+        analytics_router,
+        exercises_router,
+    ):
+        app.include_router(guarded, dependencies=data_router_guard)
 
     @app.get("/")
     async def serve_index():

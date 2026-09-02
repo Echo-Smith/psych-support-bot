@@ -584,7 +584,9 @@ def build_knowledge_index() -> list[KnowledgeEntry]:
                 topics=chunk.topics,
                 modes=chunk.modes,
                 keywords=tuple(dict.fromkeys([*chunk.keywords, *_topic_keywords(chunk.topics)])),
-                content=chunk.content,
+                # 语料条目与策展条目同口径截断（_entry 内部再截 summary）：
+                # 全站抓取的长文整段进 prompt 会挤占回复预算。
+                content=_clip(chunk.content, 1200),
                 action_hint=" | ".join(details),
             )
         )

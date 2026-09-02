@@ -17,6 +17,22 @@ class User(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
 
 
+class UserCredential(Base):
+    """登录凭据（JWT 认证）。
+
+    密码只存 pbkdf2_sha256 哈希（api/auth.py），绝不明文落库。
+    user_id 同时是 users.id / 全库数据关联键：注册即建同值 User，
+    既有客户端自报 user_id 的历史数据不受影响。
+    """
+
+    __tablename__ = "user_credentials"
+
+    user_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    username: Mapped[str] = mapped_column(String(64), unique=True, index=True)
+    password_hash: Mapped[str] = mapped_column(String(256))
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+
 class UserProfile(Base):
     __tablename__ = "user_profiles"
 
@@ -139,7 +155,8 @@ class UsageEvent(Base):
     伦理边界：只记动作类型/时间/次数，绝不记录情绪内容
     （mood 分数、note、练习反思）——那些只属于用户自己的趋势功能。
     事件类型固定枚举：exercise_completed / assessment_submitted /
-    checkin_created / ai_analysis_requested / ai_analysis_served。
+    checkin_created / ai_analysis_requested / ai_analysis_served /
+    auth_register / auth_login / auth_login_failed。
     """
 
     __tablename__ = "usage_events"
