@@ -228,7 +228,9 @@ def plan_consultation(state: GraphState) -> GraphState:
         # If the user's emotional direction has shifted between turns,
         # prepend a contradiction hint to the loop_hint so the LLM can
         # gently surface the tension rather than ignoring the shift.
-        contradiction_hint = _detect_cross_turn_contradiction(state.get("memory_summary", ""), state["user_message"])
+        # 扫描通道用 user_history_text（用户原话+会话摘要）：记录层渲染
+        # 文本里的临床词汇（"失眠严重程度量表"）不是用户情绪表达。
+        contradiction_hint = _detect_cross_turn_contradiction(state.get("user_history_text", ""), state["user_message"])
         if contradiction_hint:
             loop_hint = contradiction_hint + " " + loop_hint
             logger.info("Cross-turn contradiction detected; loop_hint updated.")

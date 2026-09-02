@@ -12,6 +12,11 @@ class GraphState(TypedDict):
     session_id: str
     user_message: str
     memory_summary: str
+    # 情绪扫描专用通道：用户原话（近 3 个会话）+ 会话摘要，不含记录层
+    # 渲染文本与 profile——"失眠严重程度量表"等临床词汇不能被
+    # _detect_cross_turn_contradiction / _has_previous_elevated 误读为
+    # 用户情绪；summary 里的 risk=elevated 标记由此进入升级判定。
+    user_history_text: str
     knowledge_context: str
     mode: ConversationMode
     risk_result: RiskResult

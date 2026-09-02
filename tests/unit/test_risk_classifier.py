@@ -17,6 +17,7 @@ def _build_state(
     *,
     user_message: str = "hello",
     memory_summary: str = "",
+    user_history_text: str = "",
 ) -> GraphState:
     return cast(
         GraphState,
@@ -25,6 +26,7 @@ def _build_state(
             "session_id": "session-1",
             "user_message": user_message,
             "memory_summary": memory_summary,
+            "user_history_text": user_history_text,
             "knowledge_context": "",
             "mode": "support",
             "risk_result": RiskResult(
@@ -88,7 +90,7 @@ def test_consecutive_elevated_upgrades_to_high() -> None:
     """Current elevated + previous elevated -> upgraded to high."""
     state = _build_state(
         user_message="我还是觉得没意义，撑不住了",
-        memory_summary="User (mode=support, risk=elevated): 我觉得很绝望，没有希望",
+        user_history_text="User (mode=support, risk=elevated): 我觉得很绝望，没有希望",
     )
     result = classify_risk(state)
     assert result["risk_result"].risk_level == "high"
@@ -97,11 +99,27 @@ def test_consecutive_elevated_upgrades_to_high() -> None:
     assert result["mode"] == "crisis"
 
 
+def test_record_layer_text_does_not_trigger_upgrade() -> None:
+    """记录层文本（量表标题等）只进 memory_summary 时不得触发跨轮升级。
+
+    "失眠严重程度量表"含"失眠"关键词——扫描通道隔离前会把这当成
+    用户上一轮的 elevated 表达，误升 high。
+    """
+    state = _build_state(
+        user_message="我还是觉得没意义，撑不住了",
+        memory_summary="评估记录：8月30日 失眠严重程度量表 20分（重度）",
+        user_history_text="User (mode=support, risk=low): 今天去散步了",
+    )
+    result = classify_risk(state)
+    assert result["risk_result"].risk_level == "elevated"
+    assert result["risk_result"].needs_crisis_mode is False
+
+
 def test_first_elevated_stays_elevated() -> None:
     """First-time elevated with no prior elevated in memory stays elevated."""
     state = _build_state(
         user_message="我觉得很绝望",
-        memory_summary="User (mode=support, risk=low): 今天还好",
+        user_history_text="User (mode=support, risk=low): 今天还好",
     )
     result = classify_risk(state)
     assert result["risk_result"].risk_level == "elevated"
@@ -112,7 +130,7 @@ def test_elevated_with_empty_memory_stays_elevated() -> None:
     """First message in session with elevated keywords stays elevated."""
     state = _build_state(
         user_message="我觉得没有希望",
-        memory_summary="",
+        user_history_text="",
     )
     result = classify_risk(state)
     assert result["risk_result"].risk_level == "elevated"
@@ -142,7 +160,7 @@ def test_english_consecutive_elevated_upgrades() -> None:
     """English: consecutive elevated should also upgrade."""
     state = _build_state(
         user_message="I still feel hopeless and worthless",
-        memory_summary="User (mode=support, risk=elevated): I feel hopeless",
+        user_history_text="User (mode=support, risk=elevated): I feel hopeless",
     )
     result = classify_risk(state)
     assert result["risk_result"].risk_level == "high"

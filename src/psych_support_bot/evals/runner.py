@@ -106,7 +106,8 @@ def _cleanup_eval_data(session: Session) -> None:
     Without this, build_memory_snapshot() picks up messages from previous
     eval runs, and the B2.2 cross-turn risk upgrade (elevated → high)
     fires incorrectly because _has_previous_elevated() matches keywords
-    like 'hopeless' in the residual message text.
+    like 'hopeless' in the residual user message text (the channel it
+    scans, user_history_text, includes prior user messages).
     """
     from sqlalchemy import delete, select
 

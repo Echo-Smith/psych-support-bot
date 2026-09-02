@@ -32,6 +32,12 @@ class Settings(BaseSettings):
     # 生成并行投机；风险升级 high/critical 则丢弃投机回复走危机路径。
     # 测试环境由 conftest 置 false，避免单测触发真实回复生成。
     speculative_reply_enabled: bool = Field(default=True, alias="SPECULATIVE_REPLY_ENABLED")
+    # 记忆层记录模块热插拔开关（ai/memory_modules.py 注册表）：
+    # 关闭的模块不渲染进 prompt，仅影响上下文参考信息——安全地板
+    # （safety_floor_risk_level）走独立通道，不受这些开关影响。
+    memory_module_assessments: bool = Field(default=True, alias="MEMORY_MODULE_ASSESSMENTS")
+    memory_module_checkins: bool = Field(default=True, alias="MEMORY_MODULE_CHECKINS")
+    memory_module_exercises: bool = Field(default=True, alias="MEMORY_MODULE_EXERCISES")
 
     @model_validator(mode="after")
     def apply_dashscope_fallbacks(self) -> "Settings":

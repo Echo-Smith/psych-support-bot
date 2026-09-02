@@ -136,11 +136,42 @@ def get_user_risk_events(session: Session, user_id: str, limit: int = 20) -> lis
     return list(session.execute(stmt).scalars())
 
 
-def get_recent_assessment_summary(session: Session, user_id: str) -> str:
-    records = get_user_assessments(session, user_id, limit=3)
-    if not records:
-        return ""
-    return "; ".join(f"{record.assessment_type}:{record.score}({record.severity_band})" for record in records)
+def get_recent_user_messages(session: Session, user_id: str, limit: int = 10) -> list[str]:
+    """用户本人最近发言（跨最近 3 个会话，时间倒序，不含 Bot 侧文本）。
+
+    供情绪扫描通道 user_history_text 使用：机器人回复与记录层渲染文本
+    都不能被当成用户情绪信号扫描。
+    """
+    session_ids = [
+        row[0]
+        for row in session.query(ConversationSession.id)  # type: ignore[attr-defined]
+        .filter(ConversationSession.user_id == user_id)  # 绑定参数，非字符串拼接
+        .order_by(desc(ConversationSession.created_at))
+        .limit(3)
+    ]
+    if not session_ids:
+        return []
+    rows = (
+        session.query(Message.content)  # type: ignore[attr-defined]
+        .filter(Message.session_id.in_(session_ids), Message.role == "user")  # 绑定参数，非字符串拼接
+        .order_by(desc(Message.created_at))
+        .limit(limit)
+        .all()
+    )
+    return [row[0] for row in rows]
+
+
+def build_user_history_text(session: Session, user_id: str) -> str:
+    """情绪扫描专用通道：用户原话 + 会话摘要，不含记录层渲染文本。
+
+    _detect_cross_turn_contradiction / _has_previous_elevated 只读本通道，
+    避免量表标题（如"失眠严重程度量表"）里的临床词汇被误读为用户情绪。
+    会话摘要里的 risk=elevated 标记同时是 _has_previous_elevated 的结构化来源。
+    """
+    latest_summary = get_latest_summary(session, user_id)
+    user_messages = get_recent_user_messages(session, user_id)
+    pieces = [latest_summary, "\n".join(reversed(user_messages))] if user_messages else [latest_summary]
+    return "\n".join(_safe(piece) for piece in pieces if piece)
 
 
 def get_user_assessments(session: Session, user_id: str, *, limit: int = 50) -> list[AssessmentRecord]:
@@ -153,18 +184,16 @@ def get_user_assessments(session: Session, user_id: str, *, limit: int = 50) -> 
     return list(session.execute(stmt).scalars())
 
 
-def build_memory_snapshot(session: Session, user_id: str) -> str:
+def build_memory_snapshot(session: Session, user_id: str, *, language: str = "") -> str:
     latest_summary = get_latest_summary(session, user_id)
     recent_messages = get_recent_messages(session, user_id)
-    assessment_summary = get_recent_assessment_summary(session, user_id)
-    recent_checkins = get_recent_checkins(session, user_id, limit=3)
     profile = get_user_profile(session, user_id)
 
-    checkin_summary = ""
-    if recent_checkins:
-        avg_mood = sum(item.mood_score for item in recent_checkins) / len(recent_checkins)
-        avg_anxiety = sum(item.anxiety_score for item in recent_checkins) / len(recent_checkins)
-        checkin_summary = f"recent check-ins mood={avg_mood:.1f}/10 anxiety={avg_anxiety:.1f}/10"
+    # 记录层（评估/打卡/练习）改为热插拔模块渲染（ai/memory_modules.py），
+    # 单层失败只跳过该层；MEMORY_MODULE_* 开关关闭时该层不出现在 prompt。
+    from psych_support_bot.ai.memory_modules import render_record_layers
+
+    record_layers = render_record_layers(session, user_id, language)
 
     # Last five turns with speaker labels — thin excerpts were the root cause
     # of the bot forgetting events like "we just finished a breathing exercise"
@@ -187,8 +216,7 @@ def build_memory_snapshot(session: Session, user_id: str) -> str:
         for piece in [
             profile_summary,
             latest_summary,
-            assessment_summary,
-            checkin_summary,
+            record_layers,
             recent_excerpt,
         ]
         if piece

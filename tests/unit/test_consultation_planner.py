@@ -20,6 +20,7 @@ def _build_state(
     mode: ConversationMode = "support",
     user_message: str = "I feel okay",
     memory_summary: str = "",
+    user_history_text: str = "",
     risk_level: str = "low",
 ) -> GraphState:
     return cast(
@@ -29,6 +30,7 @@ def _build_state(
             "session_id": "session-1",
             "user_message": user_message,
             "memory_summary": memory_summary,
+            "user_history_text": user_history_text,
             "knowledge_context": "",
             "mode": mode,
             "risk_result": RiskResult(
@@ -133,16 +135,30 @@ def test_english_negative_to_positive_detected() -> None:
 def test_plan_consultation_injects_contradiction_hint() -> None:
     state = _build_state(
         user_message="我好多了，完全不焦虑了",
-        memory_summary="我最近很焦虑，睡不着觉",
+        user_history_text="我最近很焦虑，睡不着觉",
     )
     result = plan_consultation(state)
     assert "contradiction" in result["loop_hint"].lower()
 
 
+def test_plan_consultation_ignores_record_layer_text() -> None:
+    """记录层文本只在 memory_summary 里时，不得被情绪扫描误读。
+
+    "失眠严重程度量表"等临床词汇与用户当前消息撞出矛盾提示，
+    会把 plan 带偏——这正是 user_history_text 通道隔离的目标场景。
+    """
+    state = _build_state(
+        user_message="我好多了，完全不焦虑了",
+        memory_summary="评估记录：8月30日 失眠严重程度量表 20分（重度）",
+    )
+    result = plan_consultation(state)
+    assert "contradiction" not in result["loop_hint"].lower()
+
+
 def test_plan_consultation_no_contradiction_without_memory() -> None:
     state = _build_state(
         user_message="我很焦虑",
-        memory_summary="",
+        user_history_text="",
     )
     result = plan_consultation(state)
     assert "contradiction" not in result["loop_hint"].lower()
@@ -151,7 +167,7 @@ def test_plan_consultation_no_contradiction_without_memory() -> None:
 def test_plan_consultation_keeps_original_hint_when_no_contradiction() -> None:
     state = _build_state(
         user_message="今天还是一样焦虑",
-        memory_summary="我最近很焦虑",
+        user_history_text="我最近很焦虑",
     )
     result = plan_consultation(state)
     # Should not contain contradiction prefix

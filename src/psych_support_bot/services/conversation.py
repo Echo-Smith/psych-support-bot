@@ -35,6 +35,7 @@ from psych_support_bot.infra.db.exercise_repositories import save_exercise_recor
 from psych_support_bot.infra.db.repositories import (
     append_questionnaire_answer,
     build_memory_snapshot,
+    build_user_history_text,
     complete_questionnaire_session,
     create_questionnaire_session,
     get_active_questionnaire_session,
@@ -611,19 +612,24 @@ class ConversationService:
             return questionnaire_response
 
         session_id = payload.session_id or str(uuid4())
-        memory_summary = payload.memory_summary or build_memory_snapshot(session, payload.user_id)
 
-        # Determine the expected language from the current message and,
-        # when the message is language-neutral (e.g. pure numbers), from
-        # prior conversation history so the language stays consistent.
+        # 语言检测前移：记录层记忆模块需按语言口径渲染，必须先于
+        # build_memory_snapshot 完成。
         prior_messages = get_session_messages(session, session_id) if payload.session_id else []
         expected_language = _detect_expected_language(payload.message, prior_messages)
+
+        memory_summary = payload.memory_summary or build_memory_snapshot(
+            session, payload.user_id, language=expected_language
+        )
+        # 情绪扫描专用通道：用户原话 + 会话摘要，不含记录层渲染文本。
+        user_history_text = payload.memory_summary or build_user_history_text(session, payload.user_id)
 
         state: GraphState = {
             "user_id": payload.user_id,
             "session_id": session_id,
             "user_message": payload.message,
             "memory_summary": memory_summary,
+            "user_history_text": user_history_text,
             "knowledge_context": "",
             "mode": "support",
             "risk_result": RiskResult(

@@ -26,9 +26,11 @@ def _merge_upgrade(rule: RiskResult, llm: RiskResult) -> RiskResult:
     )
 
 
-# Patterns to detect previous elevated risk in memory_summary.
-# Memory snapshot contains recent messages and risk info; we look for
-# signs that the previous turn was classified as elevated distress.
+# Patterns to detect previous elevated risk in user_history_text.
+# The user-history channel contains user messages and session summaries
+# (with risk=... markers); record-layer module text is deliberately kept
+# out so clinical wording in assessment titles is not misread as the
+# user's own distress.
 _PREV_ELEVATED_PATTERNS = [
     # Risk level markers in session summary format
     r"risk\s*=\s*elevated",
@@ -89,9 +91,11 @@ def _prepare_speculative_args(state: GraphState) -> dict | None:
     )
     loop_hint = str(interview_process["loop_hint"])
     # 复刻 plan_consultation 的跨轮矛盾提示注入（投机线程内局部拼接，不动 state）
+    # 情绪扫描只读用户原话通道 user_history_text——记录层渲染文本
+    # （如"失眠严重程度量表"）不能被当成用户情绪表达。
     from psych_support_bot.ai.nodes.consultation_planner import _detect_cross_turn_contradiction
 
-    contradiction = _detect_cross_turn_contradiction(state.get("memory_summary", ""), user_message)
+    contradiction = _detect_cross_turn_contradiction(state.get("user_history_text", ""), user_message)
     if contradiction:
         loop_hint = contradiction + " " + loop_hint
     # 复刻 response_generator._inject_refusal_context 的注入语义（局部拼接）
@@ -201,8 +205,8 @@ def classify_risk(state: GraphState) -> GraphState:
         # automatically upgrade to high risk. Persistent elevated distress across
         # consecutive turns signals accumulating risk that warrants closer attention.
         if risk_result.risk_level == "elevated":
-            memory_summary = state.get("memory_summary", "")
-            if _has_previous_elevated(memory_summary):
+            user_history_text = state.get("user_history_text", "")
+            if _has_previous_elevated(user_history_text):
                 state["risk_result"] = RiskResult(
                     risk_level="high",
                     risk_types=[*risk_result.risk_types, "cumulative_elevated"],

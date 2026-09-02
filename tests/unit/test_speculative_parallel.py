@@ -29,6 +29,7 @@ def _build_state(
     *,
     user_message: str = "今天有点累，想聊聊",
     memory_summary: str = "",
+    user_history_text: str = "",
     safety_floor: str = "",
     risk_level: str = "low",
 ) -> GraphState:
@@ -39,6 +40,7 @@ def _build_state(
             "session_id": "session-1",
             "user_message": user_message,
             "memory_summary": memory_summary,
+            "user_history_text": user_history_text,
             "knowledge_context": "",
             "mode": "support",
             "risk_result": RiskResult(
@@ -164,7 +166,7 @@ def test_speculative_discarded_by_cross_turn_upgrade(monkeypatch) -> None:
     _enable_speculation(monkeypatch)
     state = _build_state(
         user_message="我还是觉得没意义，撑不住了",
-        memory_summary="User (mode=support, risk=elevated): 我觉得很绝望，没有希望",
+        user_history_text="User (mode=support, risk=elevated): 我觉得很绝望，没有希望",
     )
 
     with (
