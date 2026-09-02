@@ -333,6 +333,7 @@ def generate_clinically_bounded_reply(
     loop_hint: str = "Start broad, then narrow.",
     expected_language: str = "",
     no_question_mode: bool = False,
+    anti_repeat_note: str = "",
 ) -> str:
     if not expected_language:
         expected_language = _expected_language(user_message)
@@ -366,6 +367,10 @@ def generate_clinically_bounded_reply(
             ),
         ]
     )
+    # Anti-repeat guard appended last so it sits closest to the output
+    # instruction (复读防线，response_generator 传入)。
+    if anti_repeat_note:
+        system_prompt = system_prompt + "\n\n" + anti_repeat_note
     # Inject diagnosis refusal prompt if user is asking for a diagnosis
     if _is_diagnosis_request(user_message):
         system_prompt = system_prompt + "\n\n" + build_diagnosis_refusal_prompt()

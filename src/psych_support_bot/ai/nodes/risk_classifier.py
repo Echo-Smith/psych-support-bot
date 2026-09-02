@@ -95,11 +95,15 @@ def _prepare_speculative_args(state: GraphState) -> dict | None:
     if contradiction:
         loop_hint = contradiction + " " + loop_hint
     # 复刻 response_generator._inject_refusal_context 的注入语义（局部拼接）
-    from psych_support_bot.ai.nodes.response_generator import _refusal_context_note
+    from psych_support_bot.ai.nodes.response_generator import _anti_repeat_note, _refusal_context_note
 
     refusal_note = _refusal_context_note(list(state.get("refusal_history") or []))
     if refusal_note:
         loop_hint = refusal_note + " " + loop_hint if loop_hint else refusal_note
+    # 复读防线（Langfuse 2026-09-02 c4fd09cc）：投机 prompt 的记忆区含上一轮
+    # 回复成品，模型可能整段照抄——提前告知禁止复述。
+    if str(state.get("last_bot_reply", "")).strip():
+        loop_hint = _anti_repeat_note() + (" " + loop_hint if loop_hint else "")
 
     return {
         "user_message": user_message,

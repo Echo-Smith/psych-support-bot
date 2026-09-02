@@ -9,7 +9,11 @@ def write_summary(state: GraphState) -> GraphState:
     ) as obs:
         mode = state["mode"]
         risk = state["risk_result"].risk_level
-        reply_text = state["generated_reply"].text[:200]
+        # 摘要只承载元数据与用户消息，不再内嵌 bot 回复原文（复读事故根因，
+        # Langfuse 2026-09-02 c4fd09cc：summary 与 recent_messages 双通道把
+        # 上一轮回复成品带进 prompt，模型照抄记忆区范例逐字复读）。回复全文
+        # 已由 Message 表持久化，build_memory_snapshot 的 recent_excerpt 才是
+        # 唯一进入上下文的原文通道；保留回复长度以便追踪长答/短答模式。
         topics = state.get("topics")
         user_msg = state["user_message"]
         consultation_required = state.get("consultation_required", False)
@@ -25,12 +29,12 @@ def write_summary(state: GraphState) -> GraphState:
         if topics:
             summary = (
                 f"User (mode={mode}, risk={risk}, topics={topics}{consultation_suffix}{process_suffix}): {user_msg[:100]}. "
-                f"Bot replied ({len(state['generated_reply'].text)} chars): {reply_text}"
+                f"Bot replied ({len(state['generated_reply'].text)} chars)."
             )
         else:
             summary = (
                 f"User (mode={mode}, risk={risk}{consultation_suffix}{process_suffix}): {user_msg[:100]}. "
-                f"Bot replied ({len(state['generated_reply'].text)} chars): {reply_text}"
+                f"Bot replied ({len(state['generated_reply'].text)} chars)."
             )
 
         # Layer 3 of disengagement handling: persist the quiet preference into
@@ -40,8 +44,10 @@ def write_summary(state: GraphState) -> GraphState:
 
         # Persist taught self-help steps (e.g. breathing exercise) into the
         # rolling summary so later turns don't ask the user to start over.
+        # 这 80 字是唯一保留的回复片段：教学步骤的"已教"凭证，防重复推荐。
         if mode == "intervention":
-            summary += f" [taught self-help step: {reply_text[:80]}]"
+            taught_step = state["generated_reply"].text[:80]
+            summary += f" [taught self-help step: {taught_step}]"
 
         state["session_summary"] = summary
         update_span_output(obs, {"session_summary": summary[:200]})

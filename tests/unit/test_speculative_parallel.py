@@ -276,3 +276,37 @@ def test_response_generator_ignores_speculative_after_upgrade(monkeypatch) -> No
     # critical 走纯模板：含热线/急救资源，不含投机文本
     assert result["generated_reply"].text != "投机回复（残留，必须忽略）"
     assert "120" in result["generated_reply"].text or "热线" in result["generated_reply"].text
+
+
+def test_response_generator_discards_speculative_verbatim_repeat(monkeypatch) -> None:
+    """投机回复与上一轮逐字相同 → 丢弃并回退正常生成，不交付复读。
+
+    复现 Langfuse 2026-09-02 c4fd09cc：第 3 轮投机输出 = 第 2 轮回复逐字拷贝。
+    """
+    canned = "听到你正在经历这样的事情，我感到非常难过和担心。这不是你的错。"
+    state = _build_state()
+    state["speculative_reply"] = canned
+    state["last_bot_reply"] = canned
+    # 正常生成路径 mock 成全新内容，验证投机被丢弃后走了生成
+    monkeypatch.setattr(
+        "psych_support_bot.ai.nodes.response_generator.generate_clinically_bounded_reply",
+        lambda **_: "全新生成：关于你想了解的资源，我们可以慢慢梳理。",
+    )
+    result = generate_response(state)
+    assert result["generated_reply"].text != canned
+    assert result["generated_reply"].text.startswith("全新生成")
+    assert result["speculative_reply"] is None
+
+
+def test_speculative_args_include_anti_repeat_note(monkeypatch) -> None:
+    """上一轮有回复时，投机 prompt 的 loop_hint 必须携带防复读指令。"""
+    from psych_support_bot.ai.nodes.risk_classifier import _prepare_speculative_args
+
+    _enable_speculation(monkeypatch)
+    state = _build_state()
+    state["last_bot_reply"] = "上一轮回复内容，非空即触发。"
+    args = _prepare_speculative_args(state)
+    assert args is not None
+    assert "Anti-repeat guard" in args["loop_hint"]
+    # 防复读指令不摘录上一轮原文（摘录会加重照抄倾向）
+    assert "上一轮回复内容" not in args["loop_hint"]

@@ -411,8 +411,12 @@ def test_really_cannot_take_it_is_elevated() -> None:
         assert risk.risk_level in {"elevated", "high"}, message
 
 
-def test_verbatim_repeat_appends_differentiated_followup() -> None:
-    """两轮不同输入产出逐字相同回复时，第二轮回补差异化追问而非复读。"""
+def test_verbatim_repeat_replaced_with_grounding_line() -> None:
+    """两轮不同输入产出逐字相同回复时，第二轮回退为落地句而非再次交付复读。
+
+    契约变更（Langfuse 2026-09-02 c4fd09cc）：旧实现是追加差异化追问，
+    但用户仍会再次收到整段复读原文——现改为直接替换。
+    """
     canned = "看到你现在的状态，我能感受到你正承受着巨大的压力。"
     monkeypatched_reply = canned
 
@@ -429,8 +433,30 @@ def test_verbatim_repeat_appends_differentiated_followup() -> None:
         rg.generate_clinically_bounded_reply = saved
 
     text = result["generated_reply"].text
-    assert text.startswith(canned)
-    assert text != canned  # 追加了差异化追问
+    # 复读原文不得出现在交付内容里
+    assert canned not in text
+    # 落地句接管，保留身体定向的延续性
+    assert "身体" in text
+
+
+def test_verbatim_repeat_ignores_punctuation_and_whitespace() -> None:
+    """仅标点/空白差异的近似复读同样触发替换（正则归一化判定）。"""
+    canned = "看到你现在的状态，我能感受到你正承受着巨大的压力。"
+    near_copy = "看到你现在的状态， 我能感受到你正承受着巨大的压力!  "
+    import psych_support_bot.ai.nodes.response_generator as rg
+
+    saved = rg.generate_clinically_bounded_reply
+    rg.generate_clinically_bounded_reply = lambda **_: near_copy
+    try:
+        state = _build_state(mode="support", user_message="我只想逃离这个世界", risk_level="low")
+        state["last_bot_reply"] = canned
+        state["expected_language"] = "zh"
+        result = generate_response(state)
+    finally:
+        rg.generate_clinically_bounded_reply = saved
+
+    text = result["generated_reply"].text
+    assert "巨大的压力" not in text
     assert "身体" in text
 
 
