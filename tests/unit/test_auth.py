@@ -164,8 +164,34 @@ def test_auth_enabled_blocks_missing_and_bad_tokens(monkeypatch) -> None:
             == 401
         )
         token = _register_via_api()
+        # 有效 token + 他人 user_id：403（绑定校验，详见 test_auth_enabled_binds_user_id_to_token_sub）
         resp = client.get("/v1/checkins", params={"user_id": "x"}, headers={"Authorization": f"Bearer {token}"})
-        assert resp.status_code == 200
+        assert resp.status_code == 403
+    finally:
+        get_settings.cache_clear()
+
+
+def test_auth_enabled_binds_user_id_to_token_sub(monkeypatch) -> None:
+    """授权闭环：认证开时数据归属只认 token sub——自报他人 user_id 一律 403，
+    自报 sub 本人才放行。这也是埋点归属可信的前提。"""
+    import time
+
+    get_settings.cache_clear()
+    monkeypatch.setenv("AUTH_ENABLED", "true")
+    get_settings.cache_clear()
+    try:
+        username = f"bt{int(time.time())}"
+        token = client.post(
+            "/v1/auth/register", json={"username": username, "password": _rand_password()}
+        ).json()["access_token"]
+        headers = {"Authorization": f"Bearer {token}"}
+        # 本人数据：放行（空历史 200）
+        assert client.get("/v1/checkins", params={"user_id": username}, headers=headers).status_code == 200
+        # 他人 user_id：403（区别于 401——身份有效但越权）
+        resp = client.get("/v1/checkins", params={"user_id": "victim-user"}, headers=headers)
+        assert resp.status_code == 403
+        # 省略 user_id（开模式可直接以 sub 查询）：放行
+        assert client.get("/v1/checkins", headers=headers).status_code == 200
     finally:
         get_settings.cache_clear()
 

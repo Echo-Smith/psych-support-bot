@@ -1845,11 +1845,46 @@
   <script>
     // ========== Globals ==========
     const API_BASE = window.location.origin;
-    const STORE_KEYS = { EX_HIST: 'np_ex_history', EX_DONE: 'np_ex_done', CK: 'np_checkins', UID: 'np_user_id' };
+    const STORE_KEYS = { EX_HIST: 'np_ex_history', EX_DONE: 'np_ex_done', CK: 'np_checkins', UID: 'np_user_id', TOKEN: 'np_auth_token' };
     let USER_ID = localStorage.getItem(STORE_KEYS.UID);
     if (!USER_ID) { USER_ID = 'u_' + Math.random().toString(36).slice(2, 10); localStorage.setItem(STORE_KEYS.UID, USER_ID); }
     let SESSION_ID = null;
     let isLoading = false;
+
+    // ========== 游客直进认证（AUTH_ENABLED=true 的服务端也零操作） ==========
+    // 游客身份：user_id 自动赋值；后端开启强制认证时，首次 401 后用游客
+    // user_id 作为 username 静默注册/登录拿 token，全程无感、无表单。
+    // AUTH_ENABLED=false（本地/内网）时首探即 200，直接进游客模式。
+    let AUTH_TOKEN = localStorage.getItem(STORE_KEYS.TOKEN) || null;
+    function authHeaders(extra) {
+      const h = Object.assign({ 'Content-Type': 'application/json' }, extra || {});
+      if (AUTH_TOKEN) h['Authorization'] = 'Bearer ' + AUTH_TOKEN;
+      return h;
+    }
+    async function ensureGuestAuth() {
+      try {
+        const probe = await fetch(API_BASE + '/v1/checkins?user_id=' + encodeURIComponent(USER_ID), { headers: authHeaders() });
+        if (probe.status !== 401) return;                       // 认证关闭或 token 有效
+        AUTH_TOKEN = null;
+        // 游客 username 需 3-64 位字母数字-_；user_id 已满足（u_ 前缀 + 随机串）
+        let reg = await fetch(API_BASE + '/v1/auth/register', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ username: USER_ID, password: 'guest-' + USER_ID + '-' + (Date.now() % 100000) })
+        });
+        if (reg.status === 409) {                               // 游客账号已存在（换设备/清缓存）
+          reg = await fetch(API_BASE + '/v1/auth/login', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ username: USER_ID, password: 'guest-' + USER_ID + '-' + (Date.now() % 100000) })
+          });
+        }
+        if (reg.ok) {
+          const data = await reg.json();
+          AUTH_TOKEN = data.access_token;
+          localStorage.setItem(STORE_KEYS.TOKEN, AUTH_TOKEN);
+          if (data.user_id) { USER_ID = data.user_id; localStorage.setItem(STORE_KEYS.UID, USER_ID); }
+        }
+      } catch (e) { /* 探测失败（后端未起等）不阻断页面 */ }
+    }
 
     // Current exercise state
     let curExercise = null; // { tag, data, currentStep, doneSteps:Set }
@@ -1920,14 +1955,16 @@
 
     // ========== Init ==========
     function init() {
-      bindTabs();
-      bindQuickChips();
-      loadSystemInfo();
-      renderExerciseGrid();
-      renderScaleList();
-      renderTrend();
-      loadExerciseRecords();
-      document.getElementById('messageInput').focus();
+      ensureGuestAuth().then(() => {
+        bindTabs();
+        bindQuickChips();
+        loadSystemInfo();
+        renderExerciseGrid();
+        renderScaleList();
+        renderTrend();
+        loadExerciseRecords();
+        document.getElementById('messageInput').focus();
+      });
     }
 
     // ========== Tabs (C4) ==========
@@ -1973,7 +2010,7 @@
       try {
         const res = await fetch(API_BASE + '/v1/conversations/respond', {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: authHeaders(),
           body: JSON.stringify({ user_id: USER_ID, session_id: SESSION_ID, message })
         });
         if (!res.ok) throw new Error('HTTP ' + res.status);
@@ -2294,7 +2331,7 @@
       document.getElementById('exViewer').style.display = '';
       try {
         // 中文化（M3）：按语言出单版本，lang=zh 命中中文 overlay 时返回中文内容
-        const res = await fetch(API_BASE + '/v1/exercises/' + tag + '?lang=zh');
+        const res = await fetch(API_BASE + '/v1/exercises/' + tag + '?lang=zh', { headers: authHeaders() });
         if (!res.ok) throw new Error('HTTP ' + res.status);
         const data = await res.json();
         curExercise = { key, tag, data, currentStep: 0, done: new Set(), responses: [] };
@@ -2580,7 +2617,7 @@
         await fetch(API_BASE + '/v1/exercises/' + curExercise.tag + '/complete?user_id=' +
           encodeURIComponent(USER_ID) + '&source=panel', {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: authHeaders(),
           body: JSON.stringify({ reflection_note: note.slice(0, 500) })
         });
       } catch (err) { /* 服务端不可达时不上报 */ }
@@ -2605,7 +2642,7 @@
     function renderScaleList() {
       const list = document.getElementById('scaleList');
       list.innerHTML = '<div class="empty-tip"><span class="loader"></span>加载量表列表…</div>';
-      fetch(API_BASE + '/v1/assessments/questionnaires').then(r => {
+      fetch(API_BASE + '/v1/assessments/questionnaires', { headers: authHeaders() }).then(r => {
         if (!r.ok) throw new Error('HTTP ' + r.status);
         return r.json();
       }).then(guides => {
@@ -2640,12 +2677,12 @@
       try {
         const res = await fetch(API_BASE + '/v1/assessments/sessions', {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: authHeaders(),
           body: JSON.stringify({ user_id: USER_ID, assessment_type: code })
         });
         if (!res.ok) throw new Error('HTTP ' + res.status);
         const view = await res.json();
-        const guide = (await (await fetch(API_BASE + '/v1/assessments/questionnaires/' + code)).json());
+        const guide = (await (await fetch(API_BASE + '/v1/assessments/questionnaires/' + code, { headers: authHeaders() })).json());
         curAssess = { session_id: view.session_id, user_id: USER_ID, type: code, view, guide };
         paintAssess();
       } catch (err) {
@@ -2701,7 +2738,7 @@
         const res = await fetch(API_BASE + '/v1/assessments/sessions/' + curAssess.session_id +
           '/answers?user_id=' + encodeURIComponent(USER_ID), {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: authHeaders(),
           body: JSON.stringify({ value })
         });
         if (!res.ok) throw new Error('HTTP ' + res.status);
@@ -2720,7 +2757,7 @@
         const res = await fetch(API_BASE + '/v1/assessments/sessions/' + curAssess.session_id +
           '/complete?user_id=' + encodeURIComponent(USER_ID), {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' }
+          headers: authHeaders()
         });
         if (!res.ok) throw new Error('HTTP ' + res.status);
         curAssess.resultData = await res.json();
@@ -2733,7 +2770,7 @@
     async function loadAssessResult() {
       // Use history instead
       try {
-        const res = await fetch(API_BASE + '/v1/assessments/users/' + encodeURIComponent(USER_ID) + '/history');
+        const res = await fetch(API_BASE + '/v1/assessments/users/' + encodeURIComponent(USER_ID) + '/history', { headers: authHeaders() });
         if (!res.ok) throw new Error('HTTP ' + res.status);
         const data = await res.json();
         if (data && data.assessments && data.assessments.length) {
@@ -2811,7 +2848,7 @@
       'No exercise history yet.': '暂无练习记录'
     };
     async function fetchOrThrow(url, options) {
-      const res = await fetch(url, options);
+      const res = await fetch(url, Object.assign({}, options || {}, { headers: authHeaders((options || {}).headers) }));
       if (res.ok) return res;
       let detail = '';
       try {
@@ -2838,7 +2875,7 @@
     async function loadAssessHistory() {
       const body = document.getElementById('assessHistoryBody');
       try {
-        const res = await fetch(API_BASE + '/v1/assessments?user_id=' + encodeURIComponent(USER_ID) + '&limit=20');
+        const res = await fetch(API_BASE + '/v1/assessments?user_id=' + encodeURIComponent(USER_ID) + '&limit=20', { headers: authHeaders() });
         if (!res.ok) throw new Error('HTTP ' + res.status);
         const all = await res.json();
         const records = assessContext.type

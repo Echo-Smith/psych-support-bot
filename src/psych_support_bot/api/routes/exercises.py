@@ -1,8 +1,9 @@
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from psych_support_bot.ai.tools.exercises import get_exercise_by_tag, list_all_exercises
+from psych_support_bot.api.auth import request_user_id
 from psych_support_bot.infra.db.exercise_repositories import (
     get_user_exercise_records,
     save_exercise_record,
@@ -43,11 +44,13 @@ class ExerciseAnalysisResponse(BaseModel):
 # 会被当作练习 tag 匹配走 404。
 @router.get("/records", response_model=list[ExerciseRecordItem])
 def list_exercise_records(
-    user_id: str = Query(..., min_length=1),
+    request: Request,
+    user_id: str = "",
     limit: int = Query(20, ge=1, le=100),
     session: Session = Depends(get_db_session),
 ) -> list[ExerciseRecordItem]:
     """练习历史（对话内与页面完成共用一张表，source 仅作来源标记）。"""
+    user_id = request_user_id(request, user_id)
     records = get_user_exercise_records(session, user_id, limit=limit)
     return [
         ExerciseRecordItem(
@@ -62,7 +65,8 @@ def list_exercise_records(
 
 @router.get("/records/analysis", response_model=ExerciseAnalysisResponse)
 def get_exercise_records_analysis(
-    user_id: str = Query(..., min_length=1),
+    request: Request,
+    user_id: str = "",
     expected_language: str = Query("zh", pattern="^(zh|en)$"),
     limit: int = Query(10, ge=1, le=50),
     session: Session = Depends(get_db_session),
@@ -71,6 +75,7 @@ def get_exercise_records_analysis(
 
     LLM 不可用时确定性统计文本兜底——功能永不 500。
     """
+    user_id = request_user_id(request, user_id)
     records = get_user_exercise_records(session, user_id, limit=limit)
     if not records:
         raise HTTPException(status_code=404, detail="No exercise history yet.")
@@ -127,12 +132,14 @@ def get_exercise_records_analysis(
 @router.post("/{exercise_tag}/complete", response_model=ExerciseRecordItem)
 def complete_exercise(
     exercise_tag: str,
+    request: Request,
     payload: ExerciseCompleteRequest | None = None,
-    user_id: str = Query(..., min_length=1),
+    user_id: str = "",
     source: str = Query("panel", pattern="^(chat|panel)$"),
     session: Session = Depends(get_db_session),
 ) -> ExerciseRecordItem:
     """练习完成上报（页面练习用，source=panel；对话内完成走图内联动落库）。"""
+    user_id = request_user_id(request, user_id)
     exercise = get_exercise_by_tag(exercise_tag)
     if exercise is None:
         raise HTTPException(status_code=404, detail="Exercise not found")

@@ -1,6 +1,7 @@
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
 
+from psych_support_bot.api.auth import request_user_id
 from psych_support_bot.domain.plans.service import (
     enroll_user,
     get_plan,
@@ -40,7 +41,8 @@ class EnrollRequest(BaseModel):
 
 
 @router.post("/{plan_id}/enroll")
-def enroll_in_plan(plan_id: str, req: EnrollRequest) -> dict[str, object]:
+def enroll_in_plan(plan_id: str, req: EnrollRequest, request: Request) -> dict[str, object]:
+    req.user_id = request_user_id(request, req.user_id)
     with SessionLocal() as session:
         try:
             enrollment = enroll_user(plan_id, req.user_id, session)
@@ -57,8 +59,10 @@ def enroll_in_plan(plan_id: str, req: EnrollRequest) -> dict[str, object]:
 @router.get("/{plan_id}/progress")
 def get_plan_progress(
     plan_id: str,
-    user_id: str = Query(..., description="User ID"),
+    request: Request,
+    user_id: str = "",
 ) -> dict[str, object]:
+    user_id = request_user_id(request, user_id)
     with SessionLocal() as session:
         try:
             return get_progress(plan_id, user_id, session)
@@ -75,7 +79,9 @@ def complete_day(
     plan_id: str,
     day: int,
     req: CompleteDayRequest,
+    request: Request,
 ) -> dict[str, object]:
+    req.user_id = request_user_id(request, req.user_id)
     with SessionLocal() as session:
         try:
             return mark_day_complete(plan_id, req.user_id, day, session)

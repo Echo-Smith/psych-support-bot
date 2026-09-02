@@ -1,6 +1,7 @@
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy.orm import Session
 
+from psych_support_bot.api.auth import request_user_id
 from psych_support_bot.domain.users.schemas import (
     UserProfilePayload,
     UserProfileResponse,
@@ -18,8 +19,10 @@ router = APIRouter(prefix="/v1/users", tags=["users"])
 @router.put("/profile", response_model=UserProfileResponse)
 def put_profile(
     payload: UserProfilePayload,
+    request: Request,
     session: Session = Depends(get_db_session),
 ) -> UserProfileResponse:
+    payload.user_id = request_user_id(request, payload.user_id)
     profile = upsert_user_profile(
         session=session,
         user_id=payload.user_id,
@@ -43,8 +46,10 @@ def put_profile(
 @router.get("/{user_id}/profile", response_model=UserProfileResponse)
 def read_profile(
     user_id: str,
+    request: Request,
     session: Session = Depends(get_db_session),
 ) -> UserProfileResponse:
+    user_id = request_user_id(request, user_id)
     profile = get_user_profile(session, user_id)
     if profile is None:
         raise HTTPException(status_code=404, detail="Profile not found")

@@ -1,9 +1,10 @@
 from datetime import date
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
+from psych_support_bot.api.auth import request_user_id
 from psych_support_bot.domain.checkins.schemas import DailyCheckin
 from psych_support_bot.infra.db.repositories import (
     get_checkins_since,
@@ -22,13 +23,16 @@ router = APIRouter(prefix="/v1/checkins", tags=["checkins"])
 @router.post("", response_model=DailyCheckin)
 def create_checkin(
     payload: DailyCheckin,
-    user_id: str,
+    request: Request,
+    user_id: str = "",
     session: Session = Depends(get_db_session),
 ) -> DailyCheckin:
     """打卡落库（幂等 upsert）。
 
     携带 checkin_date 时为历史补传（本地未同步记录回传），不接受未来日期。
+    user_id 经 request_user_id 判定：认证开=token sub 权威，关=游客自报。
     """
+    user_id = request_user_id(request, user_id)
     if payload.checkin_date and payload.checkin_date > date.today():  # noqa: DTZ011
         raise HTTPException(status_code=400, detail="checkin_date cannot be in the future.")
     save_checkin(session, user_id, payload)
@@ -67,11 +71,13 @@ class CheckinAnalysisResponse(BaseModel):
 
 @router.get("", response_model=list[CheckinRecordItem])
 def list_checkin_records(
-    user_id: str = Query(..., min_length=1),
+    request: Request,
+    user_id: str = "",
     days: int = Query(30, ge=1, le=365),
     session: Session = Depends(get_db_session),
 ) -> list[CheckinRecordItem]:
     """打卡历史（记录查看免费；笔记只返回给用户本人）。"""
+    user_id = request_user_id(request, user_id)
     records = get_checkins_since(session, user_id, days=days)
     return [
         CheckinRecordItem(
@@ -88,11 +94,13 @@ def list_checkin_records(
 
 @router.get("/trend", response_model=CheckinTrendResponse)
 def get_checkin_trend(
-    user_id: str = Query(..., min_length=1),
+    request: Request,
+    user_id: str = "",
     days: int = Query(30, ge=7, le=365),
     session: Session = Depends(get_db_session),
 ) -> CheckinTrendResponse:
     """结构化趋势序列（供前端画 SVG 折线）。"""
+    user_id = request_user_id(request, user_id)
     records = get_checkins_since(session, user_id, days=days)
     chronological = list(reversed(records))
     points = [
@@ -121,7 +129,8 @@ def get_checkin_trend(
 
 @router.get("/analysis", response_model=CheckinAnalysisResponse)
 def get_checkin_analysis(
-    user_id: str = Query(..., min_length=1),
+    request: Request,
+    user_id: str = "",
     expected_language: str = Query("zh", pattern="^(zh|en)$"),
     days: int = Query(30, ge=7, le=365),
     session: Session = Depends(get_db_session),
@@ -130,6 +139,7 @@ def get_checkin_analysis(
 
     LLM 不可用时确定性统计文本兜底——功能永不 500。
     """
+    user_id = request_user_id(request, user_id)
     records = get_checkins_since(session, user_id, days=days)
     if not records:
         raise HTTPException(status_code=404, detail="No check-in history yet.")

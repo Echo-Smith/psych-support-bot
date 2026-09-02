@@ -18,7 +18,7 @@ import secrets
 from datetime import UTC, datetime, timedelta
 
 import jwt as pyjwt
-from fastapi import Depends, HTTPException
+from fastapi import Depends, HTTPException, Request
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
 from psych_support_bot.infra.config.settings import get_settings
@@ -83,3 +83,29 @@ def require_auth(
     if credentials is None or not credentials.credentials:
         raise HTTPException(status_code=401, detail="Missing bearer token")
     return decode_access_token(credentials.credentials)
+
+
+def request_user_id(request: Request, declared: str | None = None) -> str:
+    """数据端点 user_id 的权威判定（认证 → 归属校验闭环）。
+
+    - AUTH_ENABLED=true：token sub 权威。declared（query/body 自报值）
+      缺失时直接用 sub；不一致返回 403（身份有效但无权访问他人数据），
+      防"登录用户 A 读写用户 B"的越权与伪造埋点归属。
+    - AUTH_ENABLED=false（游客直进模式）：declared 必填（缺失 422，
+      与原 Query 校验语义一致）并透传，本地开发/既有测试不受影响。
+
+    用法：GET 端点 ``user_id = request_user_id(request)``；
+    body 型端点 ``user_id = request_user_id(request, payload.user_id)``。
+    """
+    settings = get_settings()
+    if not settings.auth_enabled:
+        if not declared:
+            raise HTTPException(status_code=422, detail="user_id is required.")
+        return declared
+    auth_header = request.headers.get("Authorization", "")
+    if not auth_header.startswith("Bearer "):
+        raise HTTPException(status_code=401, detail="Missing bearer token")
+    current = decode_access_token(auth_header.removeprefix("Bearer ").strip())
+    if declared and declared != current:
+        raise HTTPException(status_code=403, detail="User ID does not match the authenticated identity.")
+    return current

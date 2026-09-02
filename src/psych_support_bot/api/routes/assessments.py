@@ -1,9 +1,10 @@
 import json
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
+from psych_support_bot.api.auth import request_user_id
 from psych_support_bot.domain.assessments.schemas import (
     AssessmentAnswerSet,
     AssessmentResult,
@@ -60,11 +61,13 @@ class AssessmentAnalysisResponse(BaseModel):
 
 @router.get("", response_model=list[AssessmentHistoryItem])
 def list_assessment_history(
-    user_id: str = Query(..., min_length=1),
+    request: Request,
+    user_id: str = "",
     limit: int = Query(20, ge=1, le=50),
     session: Session = Depends(get_db_session),
 ) -> list[AssessmentHistoryItem]:
     """问卷历史（对话内与页面提交合并存储，source 仅作来源标记）。"""
+    user_id = request_user_id(request, user_id)
     records = get_user_assessments(session, user_id, limit=limit)
     return [
         AssessmentHistoryItem(
@@ -81,7 +84,8 @@ def list_assessment_history(
 
 @router.get("/analysis", response_model=AssessmentAnalysisResponse)
 def get_assessment_analysis(
-    user_id: str = Query(..., min_length=1),
+    request: Request,
+    user_id: str = "",
     expected_language: str = Query("zh", pattern="^(zh|en)$"),
     limit: int = Query(10, ge=1, le=50),
     assessment_type: str | None = Query(None, description="按量表过滤（phq9/gad7/isi）；缺省=全部量表"),
@@ -91,6 +95,7 @@ def get_assessment_analysis(
 
     LLM 不可用时确定性统计文本兜底——功能永不 500。
     """
+    user_id = request_user_id(request, user_id)
     records = get_user_assessments(session, user_id, limit=limit)
     if assessment_type:
         records = [r for r in records if r.assessment_type == assessment_type]
@@ -171,8 +176,10 @@ def get_questionnaire(assessment_type: AssessmentType) -> QuestionnaireGuide:
 @router.post("", response_model=AssessmentResult)
 def create_assessment(
     payload: AssessmentRequest,
+    request: Request,
     session: Session = Depends(get_db_session),
 ) -> AssessmentResult:
+    payload.user_id = request_user_id(request, payload.user_id)
     answer_set = AssessmentAnswerSet(answers=payload.answers) if payload.answers is not None else None
     assessment = build_assessment_result(
         payload.assessment_type,
@@ -186,8 +193,10 @@ def create_assessment(
 @router.post("/sessions", response_model=QuestionnaireSessionView)
 def start_questionnaire_session(
     payload: QuestionnaireSessionStartRequest,
+    request: Request,
     session: Session = Depends(get_db_session),
 ) -> QuestionnaireSessionView:
+    payload.user_id = request_user_id(request, payload.user_id)
     record = create_questionnaire_session(session, payload.user_id, payload.assessment_type)
     return build_questionnaire_session_view(
         session_id=record.id,
@@ -201,9 +210,11 @@ def start_questionnaire_session(
 @router.get("/sessions/{session_id}", response_model=QuestionnaireSessionView)
 def get_questionnaire_session_view(
     session_id: str,
-    user_id: str = Query(..., min_length=1, description="User ID for ownership verification"),
+    request: Request,
+    user_id: str = "",
     session: Session = Depends(get_db_session),
 ) -> QuestionnaireSessionView:
+    user_id = request_user_id(request, user_id)
     record = get_questionnaire_session(session, session_id)
     if record is None:
         raise HTTPException(status_code=404, detail="Questionnaire session not found")
@@ -223,9 +234,11 @@ def get_questionnaire_session_view(
 def answer_questionnaire_session(
     session_id: str,
     payload: QuestionnaireSessionAnswerRequest,
-    user_id: str = Query(..., min_length=1, description="User ID for ownership verification"),
+    request: Request,
+    user_id: str = "",
     session: Session = Depends(get_db_session),
 ) -> QuestionnaireSessionView:
+    user_id = request_user_id(request, user_id)
     record = get_questionnaire_session(session, session_id)
     if record is None:
         raise HTTPException(status_code=404, detail="Questionnaire session not found")
@@ -260,9 +273,11 @@ def answer_questionnaire_session(
 @router.post("/sessions/{session_id}/complete", response_model=QuestionnaireSessionResult)
 def complete_questionnaire_session_route(
     session_id: str,
-    user_id: str = Query(..., min_length=1, description="User ID for ownership verification"),
+    request: Request,
+    user_id: str = "",
     session: Session = Depends(get_db_session),
 ) -> QuestionnaireSessionResult:
+    user_id = request_user_id(request, user_id)
     record = get_questionnaire_session(session, session_id)
     if record is None:
         raise HTTPException(status_code=404, detail="Questionnaire session not found")
@@ -296,8 +311,10 @@ class UserAssessmentsResponse(BaseModel):
 @router.get("/users/{user_id}/history", response_model=UserAssessmentsResponse)
 def get_assessment_history(
     user_id: str,
+    request: Request,
     session: Session = Depends(get_db_session),
 ) -> UserAssessmentsResponse:
+    user_id = request_user_id(request, user_id)
     records = get_user_assessments(session, user_id)
     return UserAssessmentsResponse(
         user_id=user_id,
