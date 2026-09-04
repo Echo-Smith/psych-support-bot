@@ -2026,7 +2026,7 @@
         '<div class="ev-title">开始前，请了解这几件事</div>' +
         '<div class="ev-desc" id="exIntroBody"><span class="loader"></span>加载须知…</div>' +
         '<div id="exIntroActions"></div>';
-      fetch(API_BASE + '/v1/exercises/' + tag + '/intro', { headers: authHeaders() })
+      fetch(API_BASE + '/v1/exercises/' + tag + '/intro?lang=zh', { headers: authHeaders() })
         .then(r => { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); })
         .then(intro => {
           const points = intro.disclaimer_points.map(p => '<li>' + escapeHtml(p) + '</li>').join('');

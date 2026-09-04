@@ -189,7 +189,8 @@ def complete_exercise(
     → 报告落库。对话内完成（chat source，无 step_responses）保持原语义。
     """
     user_id = request_user_id(request, user_id)
-    exercise = get_exercise_by_tag(exercise_tag)
+    # 面板反馈/引导均为 zh 出口——练习元数据取中文版（M3 单版本约定）
+    exercise = get_exercise_by_tag(exercise_tag, language="zh")
     if exercise is None:
         raise HTTPException(status_code=404, detail="Exercise not found")
     payload = payload or ExerciseCompleteRequest()
@@ -235,7 +236,11 @@ def complete_exercise(
 
 
 def _build_exercise_feedback(*, exercise: dict, step_responses: list[str], user_id: str) -> tuple[str, str, str]:
-    """风险筛查 + AI 反馈。返回 (feedback, generated_by, risk_level)。"""
+    """风险筛查 + AI 反馈。返回 (feedback, generated_by, risk_level)。
+
+    exercise 已按语言解析（中文请求传中文元数据——生成 prompt 的练习
+    名称/描述与用户语言一致）。
+    """
     from psych_support_bot.ai.exercise_ai import generate_exercise_feedback
 
     try:
@@ -287,9 +292,16 @@ def get_exercise_record_detail(
 
 
 @router.get("/{exercise_tag}/intro", response_model=ExerciseIntroResponse)
-def get_exercise_intro(exercise_tag: str) -> ExerciseIntroResponse:
-    """练习须知页数据（文本单一事实源在后端，法务调整不改前端）。"""
-    exercise = get_exercise_by_tag(exercise_tag)
+def get_exercise_intro(
+    exercise_tag: str,
+    lang: str = Query("zh", pattern="^(zh|en|)$"),
+) -> ExerciseIntroResponse:
+    """练习须知页数据（条款文本单一事实源在后端，法务调整不改前端）。
+
+    练习元数据（名称/描述）按 lang 出单版本——M3 中文化约定，无中文版
+    的 tag 原样回落英文。
+    """
+    exercise = get_exercise_by_tag(exercise_tag, language=lang)
     if exercise is None:
         raise HTTPException(status_code=404, detail="Exercise not found")
     steps = exercise.get("steps", []) or []
@@ -346,7 +358,8 @@ def exercise_guidance(
     求助资源（"即时引导用户寻求心理帮助"）。
     """
     user_id = request_user_id(request, user_id)
-    exercise = get_exercise_by_tag(exercise_tag)
+    # 练习元数据按引导语言出单版本（zh 引导喂中文练习名/描述）
+    exercise = get_exercise_by_tag(exercise_tag, language=payload.expected_language)
     if exercise is None:
         raise HTTPException(status_code=404, detail="Exercise not found")
     reply, status = generate_exercise_guidance(
