@@ -732,6 +732,16 @@ def get_knowledge_index(*, force_reload: bool = False) -> list[KnowledgeEntry]:
     return _KNOWLEDGE_INDEX_CACHE
 
 
+# 同源多样性上限与 doc 键规则（retrieve_knowledge_entries 使用）：
+# entry_id 形如 fetched:{doc}:chunkN / public:{doc}:{section}，前两段即册子键。
+_MAX_PER_SOURCE_DOC = 2
+
+
+def _source_doc_key(entry_id: str) -> str:
+    parts = entry_id.split(":")
+    return ":".join(parts[:2]) if len(parts) >= 2 else entry_id
+
+
 def retrieve_knowledge_entries(
     user_message: str,
     mode: str,
@@ -824,11 +834,20 @@ def retrieve_knowledge_entries(
 
     selected: list[KnowledgeEntry] = []
     seen_ids: set[str] = set()
+    # 同源多样性：168 条外部切片本就来自 15 个册子，同一手册的兄弟 chunk
+    # （如 nimh_social_anxiety_brochure 的 chunk 1/10/11/12）内容高度重叠，
+    # 不加控制会把 limit 名额刷成单册子专场。每册最多保留 2 条，其余名额
+    # 让给排序中后续的不同来源。
+    doc_counts: dict[str, int] = {}
     for _, entry in scored:
         if entry.entry_id in seen_ids:
             continue
+        doc_key = _source_doc_key(entry.entry_id)
+        if doc_counts.get(doc_key, 0) >= _MAX_PER_SOURCE_DOC:
+            continue
         selected.append(entry)
         seen_ids.add(entry.entry_id)
+        doc_counts[doc_key] = doc_counts.get(doc_key, 0) + 1
         if len(selected) >= limit:
             break
     return selected
