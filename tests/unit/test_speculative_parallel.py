@@ -20,6 +20,7 @@ from psych_support_bot.ai.nodes.risk_classifier import (
     _prepare_speculative_args,
     classify_risk,
 )
+from psych_support_bot.ai.safety.llm_classifier import SemanticRead
 from psych_support_bot.ai.schemas.messages import GeneratedReply, RiskResult
 from psych_support_bot.ai.schemas.state import GraphState
 from psych_support_bot.infra.config.settings import get_settings
@@ -124,7 +125,10 @@ def test_speculative_adopted_when_risk_stays_low(monkeypatch) -> None:
     with (
         patch(
             "psych_support_bot.ai.nodes.risk_classifier.classify_risk_llm",
-            return_value=RiskResult(risk_level="low", risk_types=[], needs_crisis_mode=False, reason="[llm] ok"),
+            return_value=(
+                RiskResult(risk_level="low", risk_types=[], needs_crisis_mode=False, reason="[llm] ok"),
+                SemanticRead(topics=[], emotional_state=""),
+            ),
         ),
         patch(
             "psych_support_bot.ai.nodes.risk_classifier._generate_speculative_reply",
@@ -145,8 +149,11 @@ def test_speculative_discarded_when_llm_upgrades_to_high(monkeypatch) -> None:
     with (
         patch(
             "psych_support_bot.ai.nodes.risk_classifier.classify_risk_llm",
-            return_value=RiskResult(
-                risk_level="high", risk_types=["safety"], needs_crisis_mode=True, reason="[llm] 隐喻死亡意愿"
+            return_value=(
+                RiskResult(
+                    risk_level="high", risk_types=["safety"], needs_crisis_mode=True, reason="[llm] 隐喻死亡意愿"
+                ),
+                SemanticRead(topics=[], emotional_state=""),
             ),
         ),
         patch(
@@ -172,8 +179,9 @@ def test_speculative_discarded_by_cross_turn_upgrade(monkeypatch) -> None:
     with (
         patch(
             "psych_support_bot.ai.nodes.risk_classifier.classify_risk_llm",
-            return_value=RiskResult(
-                risk_level="elevated", risk_types=["distress"], needs_crisis_mode=False, reason="[llm] ok"
+            return_value=(
+                RiskResult(risk_level="elevated", risk_types=["distress"], needs_crisis_mode=False, reason="[llm] ok"),
+                SemanticRead(topics=[], emotional_state=""),
             ),
         ),
         patch(
@@ -195,7 +203,10 @@ def test_speculative_discarded_by_safety_floor(monkeypatch) -> None:
     with (
         patch(
             "psych_support_bot.ai.nodes.risk_classifier.classify_risk_llm",
-            return_value=RiskResult(risk_level="low", risk_types=[], needs_crisis_mode=False, reason="[llm] ok"),
+            return_value=(
+                RiskResult(risk_level="low", risk_types=[], needs_crisis_mode=False, reason="[llm] ok"),
+                SemanticRead(topics=[], emotional_state=""),
+            ),
         ),
         patch(
             "psych_support_bot.ai.nodes.risk_classifier._generate_speculative_reply",
@@ -236,7 +247,10 @@ def test_speculative_failure_falls_back_to_serial(monkeypatch) -> None:
     with (
         patch(
             "psych_support_bot.ai.nodes.risk_classifier.classify_risk_llm",
-            return_value=RiskResult(risk_level="low", risk_types=[], needs_crisis_mode=False, reason="[llm] ok"),
+            return_value=(
+                RiskResult(risk_level="low", risk_types=[], needs_crisis_mode=False, reason="[llm] ok"),
+                SemanticRead(topics=[], emotional_state=""),
+            ),
         ),
         patch(
             "psych_support_bot.ai.nodes.risk_classifier._generate_speculative_reply",

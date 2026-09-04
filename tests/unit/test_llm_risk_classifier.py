@@ -7,8 +7,13 @@ import pytest
 from psych_support_bot.ai.nodes import risk_classifier as rc_mod
 from psych_support_bot.ai.nodes.risk_classifier import _merge_upgrade, classify_risk
 from psych_support_bot.ai.safety import llm_classifier as llm_mod
+from psych_support_bot.ai.safety.llm_classifier import SemanticRead
 from psych_support_bot.ai.schemas.messages import GeneratedReply, RiskResult
 from psych_support_bot.ai.schemas.state import GraphState
+
+
+def _semantic(topics: list[str] | None = None, emotional: str = "") -> SemanticRead:
+    return SemanticRead(topics=topics or [], emotional_state=emotional)
 
 
 def _build_state(user_message: str, **extra: object) -> GraphState:
@@ -83,13 +88,46 @@ def test_rule_low_message_triggers_llm_fallback(monkeypatch) -> None:
     monkeypatch.setattr(
         rc_mod,
         "classify_risk_llm",
-        lambda msg, lang: (calls.append(msg), _llm("high"))[1],
+        lambda msg, lang: (calls.append(msg), (_llm("high"), _semantic()))[1],
     )
     state = classify_risk(_build_state("我只想消失，永远地消失"))
     assert calls == ["我只想消失，永远地消失"]
     assert state["risk_result"].risk_level == "high"
     assert state["risk_result"].needs_crisis_mode is True
     assert state["mode"] == "crisis"
+
+
+def test_llm_topics_merge_into_state(monkeypatch) -> None:
+    """LLM 语义 topics 并进 state topics（词表外表达可达）；emotional_state 落 state。"""
+    monkeypatch.setattr(
+        rc_mod,
+        "classify_risk_llm",
+        lambda msg, lang: (
+            _llm("elevated"),
+            _semantic(topics=["depression", "motivation"], emotional="低落且失去动力"),
+        ),
+    )
+    state = _build_state("我心情一直很低落，什么都不想做")
+    state["topics"] = ["motivation"]  # 关键词层先检出的
+    result = classify_risk(state)
+    assert "depression" in result["topics"]  # 语义通道补上的
+    assert "motivation" in result["topics"]  # 原有关键词保留
+    assert result["emotional_state"] == "低落且失去动力"
+    assert result["llm_topics"] == ["depression", "motivation"]
+
+
+def test_llm_semantic_failure_keeps_keyword_topics(monkeypatch) -> None:
+    """LLM 挂掉时 topics/emotional_state 维持关键词层原样（fail-safe）。"""
+
+    def _boom(msg: str, lang: str) -> tuple:
+        raise RuntimeError("LLM unavailable")
+
+    monkeypatch.setattr(rc_mod, "classify_risk_llm", _boom)
+    state = _build_state("我心情一直很低落")
+    state["topics"] = ["motivation"]
+    result = classify_risk(state)
+    assert result["topics"] == ["motivation"]
+    assert result.get("emotional_state", "") == ""
 
 
 def test_rule_high_does_not_call_llm(monkeypatch) -> None:
@@ -106,6 +144,7 @@ def test_rule_high_does_not_call_llm(monkeypatch) -> None:
 
 def test_llm_failure_keeps_rule_verdict(monkeypatch) -> None:
     """LLM 挂掉时 fail-safe 到规则判定（low），不放大也不抛出。"""
+
     def _boom(msg: str, lang: str) -> RiskResult:
         raise RuntimeError("LLM unavailable")
 
@@ -130,7 +169,29 @@ def test_llm_output_forces_crisis_flag_consistency() -> None:
     original = m._invoke
     m._invoke = lambda *a, **k: monkeypatched  # type: ignore[assignment]
     try:
-        result = m.classify_risk_llm("测试", "zh")
+        result, semantic = m.classify_risk_llm("测试", "zh")
     finally:
         m._invoke = original  # type: ignore[assignment]
     assert result.needs_crisis_mode is True
+    # 新字段缺省容忍：JSON 没带 topics/emotional_state 时空值返回
+    assert semantic.topics == []
+    assert semantic.emotional_state == ""
+
+
+def test_llm_topics_closed_set_validation() -> None:
+    """topics 闭集校验：枚举外的值丢弃，最多保留 3 个。"""
+    monkeypatched = (
+        '{"risk_level": "elevated", "needs_crisis_mode": false, "reason": "x", '
+        '"topics": ["depression", "hallucinated_topic", "sleep", "anger"], '
+        '"emotional_state": "低落且失去动力"}'
+    )
+    import psych_support_bot.ai.safety.llm_classifier as m
+
+    original = m._invoke
+    m._invoke = lambda *a, **k: monkeypatched  # type: ignore[assignment]
+    try:
+        _, semantic = m.classify_risk_llm("测试", "zh")
+    finally:
+        m._invoke = original  # type: ignore[assignment]
+    assert semantic.topics == ["depression", "sleep", "anger"]
+    assert semantic.emotional_state == "低落且失去动力"

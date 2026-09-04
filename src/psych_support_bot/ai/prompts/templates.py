@@ -111,7 +111,7 @@ def build_role_prompt() -> str:
     )
 
 
-def build_boundary_prompt(risk_level: str) -> str:
+def build_boundary_prompt(risk_level: str, emotional_state: str = "") -> str:
     elevated_note = (
         " The user's language suggests significant distress. "
         "Lead with extra warmth and gentle validation; do not deflect or rush past their pain. "
@@ -119,11 +119,20 @@ def build_boundary_prompt(risk_level: str) -> str:
         if risk_level == "elevated"
         else ""
     )
+    # 情绪读数（LLM 语义层产出）：让回复直接镜像此刻状态与用户的用词，
+    # 而不是只依据 risk_level 代理值——这是"感知"通道的核心载荷。
+    emotional_note = (
+        f" The user's current emotional read: {emotional_state}. "
+        "Reflect THIS state in your own empathic words, using the user's own wording "
+        "or imagery where natural; do not name this read or sound clinical about it."
+        if emotional_state
+        else ""
+    )
     return (
         "Always prioritize safety, warmth, clarity, and brevity. "
         "Avoid overly clinical or treatment-heavy language for ordinary distress. "
         "If risk is high, redirect toward urgent real-world support."
-        f" Current assessed risk level: {risk_level}.{elevated_note}"
+        f" Current assessed risk level: {risk_level}.{elevated_note}{emotional_note}"
     )
 
 
@@ -142,12 +151,7 @@ def build_context_prompt(memory_summary: str, knowledge_context: str) -> str:
     )
     # 分段标签装配（替代旧的单行平铺）：记忆区与知识区显式隔开，
     # 便于模型区分"用户是谁/经历过什么"与"此刻该怎么回应"。
-    return (
-        "[User Memory]\n"
-        f"{memory_summary or 'No prior memory.'}\n"
-        "[Practice Context]\n"
-        f"{context}"
-    )
+    return f"[User Memory]\n{memory_summary or 'No prior memory.'}\n[Practice Context]\n{context}"
 
 
 def build_output_prompt(
@@ -171,16 +175,14 @@ def build_output_prompt(
     )
     if no_question_mode:
         return (
-            common
-            + "QUIET MODE OVERRIDE: the user has asked NOT to be questioned right now. "
+            common + "QUIET MODE OVERRIDE: the user has asked NOT to be questioned right now. "
             "Write ONE very short empathic message that mirrors their feeling, optionally followed by a brief "
             "presence line such as '我在，你不用说话也没关系' / 'I'm here — you don't have to talk'. "
             "Omit every question this turn: do not probe, do not suggest exercises, do not challenge. "
             "Resume normal conversation only when the user explicitly asks you something."
         )
     return (
-        common
-        + "Write the reply as EXACTLY three short conversational messages separated by one blank line. "
+        common + "Write the reply as EXACTLY three short conversational messages separated by one blank line. "
         "Message 1 briefly mirrors the user's core feeling or tension. "
         "Message 2 shares one tentative, plain-language, explicitly non-diagnostic impression framed as an educated guess you could be wrong about "
         "(e.g., '我有个感觉，不一定对'), never as a clinical analysis of the user. "
@@ -291,13 +293,14 @@ def build_consultation_synthesis_prompt(
     loop_hint: str,
     expected_language: str = "",
     no_question_mode: bool = False,
+    emotional_state: str = "",
 ) -> str:
     if not expected_language and user_message:
         expected_language = "zh" if any("\u4e00" <= char <= "\u9fff" for char in user_message) else "en"
     return "\n\n".join(
         [
             build_role_prompt(),
-            build_boundary_prompt(risk_level=risk_level),
+            build_boundary_prompt(risk_level=risk_level, emotional_state=emotional_state),
             (
                 "You are the lead synthesizer for a multidisciplinary consultation. "
                 "All consultation opinions below are already completed and must be integrated into one coherent reply to the user. "

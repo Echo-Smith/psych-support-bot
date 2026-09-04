@@ -113,7 +113,7 @@ def test_build_index_includes_active_learning_notes(monkeypatch) -> None:
 def test_context_surfaces_synthesized_takeaways(monkeypatch) -> None:
     monkeypatch.setattr(
         "psych_support_bot.ai.tools.knowledge_base.retrieve_knowledge_entries",
-        lambda user_message, mode, risk_level, limit=5: [
+        lambda user_message, mode, risk_level, limit=5, extra_topics=None: [
             KnowledgeEntry(
                 entry_id="learning:anxiety",
                 title="Active Learning Note: Anxiety",

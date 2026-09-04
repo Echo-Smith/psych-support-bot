@@ -162,8 +162,11 @@ def classify_risk(state: GraphState) -> GraphState:
         if risk_result.risk_level in {"low", "elevated"}:
             spec_args = _prepare_speculative_args(state)
 
-            def _run_risk_llm() -> RiskResult:
-                return classify_risk_llm(state["user_message"], state.get("expected_language", ""))
+            def _run_risk_llm() -> tuple:
+                from psych_support_bot.ai.safety.llm_classifier import SemanticRead
+
+                result, read = classify_risk_llm(state["user_message"], state.get("expected_language", ""))
+                return result, read or SemanticRead(topics=[], emotional_state="")
 
             jobs = [(contextvars.copy_context(), _run_risk_llm)]
             if spec_args is not None:
@@ -171,13 +174,15 @@ def classify_risk(state: GraphState) -> GraphState:
             with ThreadPoolExecutor(max_workers=len(jobs)) as executor:
                 futures = [executor.submit(job_ctx.run, fn) for job_ctx, fn in jobs]
                 try:
-                    llm_risk = futures[0].result()
+                    llm_result = futures[0].result()
+                    llm_risk, semantic_read = llm_result
                 except Exception:
                     logger.warning(
                         "LLM risk classifier unavailable; keeping rule verdict.",
                         exc_info=True,
                     )
                     llm_risk = None
+                    semantic_read = None
                 if len(futures) > 1:
                     try:
                         speculative_reply = futures[1].result()
@@ -199,6 +204,15 @@ def classify_risk(state: GraphState) -> GraphState:
                         merged.reason,
                     )
                 state["risk_result"] = merged
+                # 语义读数随 LLM 可用性落 state：topics 与关键词检测在
+                # knowledge_loader 前无并集点（该节点在 risk 之后才跑），
+                # 故此处直接合并进 topics；emotional_state 原样传递。
+                # LLM 失败时保持关键词 topics（fail-safe，不放大不缩小）。
+                if semantic_read is not None:
+                    if semantic_read.topics:
+                        state["topics"] = list(dict.fromkeys([*state.get("topics", []), *semantic_read.topics]))
+                    state["emotional_state"] = semantic_read.emotional_state
+                    state["llm_topics"] = list(semantic_read.topics)
 
         # B2.2: Cross-turn risk tracking
         # If the current turn is elevated AND the previous turn was also elevated,
@@ -271,6 +285,8 @@ def classify_risk(state: GraphState) -> GraphState:
                 "mode": state["mode"],
                 "llm_semantic_used": llm_semantic_used,
                 "speculative_reply_adopted": speculative_adopted,
+                "emotional_state": state.get("emotional_state", ""),
+                "llm_topics": state.get("llm_topics", []),
             },
         )
     return state

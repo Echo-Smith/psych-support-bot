@@ -748,8 +748,10 @@ def retrieve_knowledge_entries(
     risk_level: str,
     *,
     limit: int = 4,
+    extra_topics: list[str] | None = None,
 ) -> list[KnowledgeEntry]:
-    topics = detect_topics(user_message)
+    # LLM 语义 topics 排前（闭集校验过，精度更高），关键词 topics 兜底在后。
+    topics = list(dict.fromkeys([*(extra_topics or []), *detect_topics(user_message)]))
     normalized, compact = _normalize_text(user_message)
     scored: list[tuple[int, KnowledgeEntry]] = []
 

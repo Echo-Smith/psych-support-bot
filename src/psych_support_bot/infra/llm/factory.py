@@ -45,7 +45,7 @@ MODE_LIMITS: dict[str, "ModelCallLimits"] = {
     "support": ModelCallLimits(max_tokens=1024, timeout=30.0),
     "planning": ModelCallLimits(max_tokens=1024, timeout=30.0),
     "intervention": ModelCallLimits(max_tokens=1024, timeout=30.0),
-    "risk_classification": ModelCallLimits(max_tokens=256, timeout=15.0),
+    "risk_classification": ModelCallLimits(max_tokens=320, timeout=15.0),
 }
 
 

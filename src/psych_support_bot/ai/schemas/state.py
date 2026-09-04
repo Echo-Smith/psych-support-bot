@@ -57,3 +57,10 @@ class GraphState(TypedDict):
     # 裁决仍 ≤ elevated 时 response_generator 直接采用，跳过自己的 LLM 调用；
     # 升级 high/critical 则丢弃走危机路径。投机失败为 None。
     speculative_reply: str | None
+    # LLM 语义层输出的情绪读数（一句话，用户此刻的情绪状态；""=不可用）。
+    # 生成端经 build_boundary_prompt 注入，让回复直接镜像当前情绪而非只看
+    # risk_level 代理值。关键词层无此通道。
+    emotional_state: str
+    # LLM 语义层输出的知识主题（闭集枚举，≤3 个；[]=不可用）。knowledge_loader
+    # 与关键词 topics 取并集作检索通道——"心情很低落"这类词表外表达由此可达。
+    llm_topics: list[str]

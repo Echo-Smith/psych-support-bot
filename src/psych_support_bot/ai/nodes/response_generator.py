@@ -31,9 +31,7 @@ _EN_REPEAT_FALLBACK = (
 # only in whitespace, full/half-width punctuation, or quote style — normalize
 # all of those away so "same words, different punctuation" still counts as a
 # repeat (正则归一化修复), while genuinely reworded replies stay distinct.
-_REPEAT_NOISE_RE = re.compile(
-    r"[\s\u3000。，、；：！？（）【】《》“”‘’…·—\-–,.:;!?()\"'`~*]+"
-)
+_REPEAT_NOISE_RE = re.compile(r"[\s\u3000。，、；：！？（）【】《》“”‘’…·—\-–,.:;!?()\"'`~*]+")
 
 
 def _repeat_shape(text: str) -> str:
@@ -138,6 +136,7 @@ def _generate_normal_reply(state: GraphState, risk_level: str, no_question_mode:
                 challenge_allowed=False,
                 loop_hint="Prioritize safety, validation, and gentle redirection to support resources.",
                 expected_language=state.get("expected_language", ""),
+                emotional_state=state.get("emotional_state", ""),
             )
             state["consultation_opinions"] = []
         except Exception:
@@ -164,6 +163,7 @@ def _generate_normal_reply(state: GraphState, risk_level: str, no_question_mode:
                 loop_hint=state.get("loop_hint", "Start broad, reflect, then narrow."),
                 expected_language=state.get("expected_language", ""),
                 no_question_mode=no_question_mode,
+                emotional_state=state.get("emotional_state", ""),
             )
             state["consultation_opinions"] = opinions
         else:
@@ -185,6 +185,7 @@ def _generate_normal_reply(state: GraphState, risk_level: str, no_question_mode:
                 # 复读事故（Langfuse 2026-09-02 c4fd09cc）的第二道防线：
                 # 生成时就明确告知上一轮已交付过内容，不要复述。
                 anti_repeat_note=_anti_repeat_note(),
+                emotional_state=state.get("emotional_state", ""),
             )
             state["consultation_opinions"] = []
     except Exception:
@@ -196,8 +197,7 @@ def _generate_normal_reply(state: GraphState, risk_level: str, no_question_mode:
         )
         if is_zh:
             reply_text = (
-                "我在这里陪你。虽然我现在遇到了一些技术困难，"
-                "但我仍然想支持你。我们可以先慢下来，聊一聊你现在的感受。"
+                "我在这里陪你。虽然我现在遇到了一些技术困难，但我仍然想支持你。我们可以先慢下来，聊一聊你现在的感受。"
             )
         else:
             reply_text = (
@@ -246,9 +246,7 @@ def generate_response(state: GraphState) -> GraphState:
         else:
             if speculative:
                 # 丢弃重复投机回复；日志留痕供 Langfuse 巡检对照。
-                logger.warning(
-                    "Speculative reply repeated the previous turn; discarding and regenerating."
-                )
+                logger.warning("Speculative reply repeated the previous turn; discarding and regenerating.")
                 update_span_output(gen_obs, {"speculative_reply_discarded_as_repeat": True})
             state["speculative_reply"] = None
             reply_text = _generate_normal_reply(state, risk_level, no_question_mode)
@@ -257,15 +255,9 @@ def generate_response(state: GraphState) -> GraphState:
         # 还是危机 LLM 路径，与上一轮逐字（含标点/空白归一化后）相同的回复一律
         # 替换为落地句——追加差异化句会让用户再次收到整段复读原文。
         # Template (critical) replies are intentionally fixed.
-        if risk_level != "critical" and _is_verbatim_repeat(
-            reply_text, state.get("last_bot_reply", "")
-        ):
+        if risk_level != "critical" and _is_verbatim_repeat(reply_text, state.get("last_bot_reply", "")):
             logger.warning("Reply repeats previous turn verbatim; replacing with grounding line.")
-            reply_text = (
-                _ZH_REPEAT_FALLBACK
-                if state.get("expected_language", "") != "en"
-                else _EN_REPEAT_FALLBACK
-            )
+            reply_text = _ZH_REPEAT_FALLBACK if state.get("expected_language", "") != "en" else _EN_REPEAT_FALLBACK
 
         state["generated_reply"] = GeneratedReply(
             text=reply_text,

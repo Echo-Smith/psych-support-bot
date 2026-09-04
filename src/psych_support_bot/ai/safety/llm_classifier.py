@@ -7,13 +7,45 @@
   往上抬，不能把规则的 high/critical 拉回
 - 本模块内部不捕获 LLMUnavailableError：_invoke 失败时抛到节点层，
   节点层 catch 后维持规则判定（fail-safe 到规则，不放大不缩小）
+- 附带输出 topics（闭集枚举）与 emotional_state：topics 是关键词
+  topic 检测的语义兜底（"心情很低落"这类词表外表达），枚举自
+  knowledge.index.TOPIC_KEYWORDS 的键集，解析层丢弃未知值；
+  emotional_state 供生成端镜像情绪（批次2 共情化通道）。
 """
 
 import json
 import re
+from typing import NamedTuple
 
 from psych_support_bot.ai.schemas.messages import RiskResult
 from psych_support_bot.infra.llm.generation import _invoke
+
+# 闭集枚举从 TOPIC_KEYWORDS 键集派生（import 放函数内防循环依赖：
+# knowledge.index 不依赖本模块，但保持懒加载习惯与项目其他边界一致）。
+_TOPIC_ENUM: tuple[str, ...] | None = None
+
+
+def _topic_enum() -> tuple[str, ...]:
+    global _TOPIC_ENUM
+    if _TOPIC_ENUM is None:
+        from psych_support_bot.ai.knowledge.index import TOPIC_KEYWORDS
+
+        _TOPIC_ENUM = tuple(TOPIC_KEYWORDS.keys())
+    return _TOPIC_ENUM
+
+
+class SemanticRead(NamedTuple):
+    """风险判定之外 LLM 顺带产出的语义读数。
+
+    topics: 消息涉及的知识主题（闭集校验后），knowledge_loader 与
+    关键词 topics 取并集作检索通道；emotional_state: 一句话情绪读数，
+    生成端经 build_boundary_prompt 镜像。LLM 不可用时两者为空，
+    调用方 fail-safe 到关键词通道。
+    """
+
+    topics: list[str]
+    emotional_state: str
+
 
 _SYSTEM_PROMPT = """你是心理健康产品的风险分类器。根据用户消息判定当前风险等级。
 
@@ -32,14 +64,23 @@ _SYSTEM_PROMPT = """你是心理健康产品的风险分类器。根据用户消
 - 指向自身生命的消失/结束意图，无论多委婉，都判 high
 
 只输出 JSON，不要输出其他内容：
-{"risk_level": "critical|high|elevated|low", "needs_crisis_mode": true|false, "reason": "一句话"}
+{"risk_level": "critical|high|elevated|low", "needs_crisis_mode": true|false, "reason": "一句话", "topics": [], "emotional_state": "一句话"}
+
+字段说明：
+- topics: 从以下枚举值中选出消息涉及的主题（0-3 个，按相关度排序，没有就空数组）：
+  anxiety, panic, depression, sleep, ocd, burnout, grief, anger, procrastination, rumination,
+  self_worth, relationships, stress, motivation, social_anxiety, ptsd, eating_disorder, nssi,
+  substance_use, relaxation
+- emotional_state: 用一句话描述用户此刻的核心情绪状态（如"低落且失去动力"、"惊恐中渴望被接住"）；
+  用户没有明显情绪表达时给 "neutral"
 
 needs_crisis_mode 为 true 当且仅当 risk_level 是 high 或 critical。
 
 示例：
-用户：孩子气死我了 → {"risk_level": "low", "needs_crisis_mode": false, "reason": "对孩子的夸张抱怨，无死亡意念"}
-用户：我真想消失，永远地消失 → {"risk_level": "high", "needs_crisis_mode": true, "reason": "被动死亡意愿的隐喻表达"}
-用户：撑不住了，整个人要崩溃 → {"risk_level": "elevated", "needs_crisis_mode": false, "reason": "显著痛苦，无死亡信号"}"""
+用户：孩子气死我了 → {"risk_level": "low", "needs_crisis_mode": false, "reason": "对孩子的夸张抱怨，无死亡意念", "topics": ["anger"], "emotional_state": "neutral"}
+用户：我真想消失，永远地消失 → {"risk_level": "high", "needs_crisis_mode": true, "reason": "被动死亡意愿的隐喻表达", "topics": ["depression"], "emotional_state": "绝望且疲惫"}
+用户：撑不住了，整个人要崩溃 → {"risk_level": "elevated", "needs_crisis_mode": false, "reason": "显著痛苦，无死亡信号", "topics": ["stress"], "emotional_state": "濒临崩溃的紧绷感"}
+用户：我心情一直很低落，什么都不想做 → {"risk_level": "elevated", "needs_crisis_mode": false, "reason": "持续低落与动力丧失", "topics": ["depression", "motivation"], "emotional_state": "低落且失去动力"}"""
 
 
 def _parse_risk_json(raw: str) -> dict | None:
@@ -52,8 +93,12 @@ def _parse_risk_json(raw: str) -> dict | None:
         return None
 
 
-def classify_risk_llm(user_message: str, expected_language: str = "") -> RiskResult:
+def classify_risk_llm(user_message: str, expected_language: str = "") -> tuple[RiskResult, SemanticRead]:
     """LLM 语义风险判定（只用于规则判 low 的兜底）。
+
+    Returns:
+        (风险判定, 语义读数)。语义读数在 JSON 缺字段时为空值——
+        风险判定字段缺失仍按原契约抛错（风险通道不允许降级容忍）。
 
     Raises:
         LLMUnavailableError: LLM 不可用（调用方负责 fail-safe 到规则判定）。
@@ -80,6 +125,12 @@ def classify_risk_llm(user_message: str, expected_language: str = "") -> RiskRes
     if level in {"high", "critical"}:
         needs_crisis = True
 
+    # topics 闭集校验：枚举外的值直接丢弃（不生成新主题，不放过幻觉）。
+    # emotional_state 截断防异常长输出。
+    valid_topics = set(_topic_enum())
+    topics = [str(t) for t in (parsed.get("topics") or []) if t in valid_topics][:3]
+    emotional_state = str(parsed.get("emotional_state", "")).strip()[:120]
+
     risk_types: list[str] = []
     if level == "critical":
         risk_types = ["safety", "immediate_danger"]
@@ -88,9 +139,10 @@ def classify_risk_llm(user_message: str, expected_language: str = "") -> RiskRes
     elif level == "elevated":
         risk_types = ["distress"]
 
-    return RiskResult(
+    risk_result = RiskResult(
         risk_level=level,
         risk_types=risk_types,
         needs_crisis_mode=needs_crisis,
         reason=f"[llm] {parsed.get('reason', '')}",
     )
+    return risk_result, SemanticRead(topics=topics, emotional_state=emotional_state)

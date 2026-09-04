@@ -243,6 +243,7 @@ def generate_multidisciplinary_consultation(
     loop_hint: str,
     expected_language: str = "",
     no_question_mode: bool = False,
+    emotional_state: str = "",
 ) -> tuple[str, list[dict[str, str]]]:
     if not expected_language:
         expected_language = _expected_language(user_message)
@@ -296,6 +297,7 @@ def generate_multidisciplinary_consultation(
         loop_hint=loop_hint,
         expected_language=expected_language,
         no_question_mode=no_question_mode,
+        emotional_state=emotional_state,
     )
 
     # Synthesis failure degrades to the raw opinions instead of crashing the
@@ -334,13 +336,14 @@ def generate_clinically_bounded_reply(
     expected_language: str = "",
     no_question_mode: bool = False,
     anti_repeat_note: str = "",
+    emotional_state: str = "",
 ) -> str:
     if not expected_language:
         expected_language = _expected_language(user_message)
     system_prompt = "\n\n".join(
         [
             build_role_prompt(),
-            build_boundary_prompt(risk_level=risk_level),
+            build_boundary_prompt(risk_level=risk_level, emotional_state=emotional_state),
             build_consultation_prompt(
                 consultation_required=consultation_required,
                 consultation_agents=consultation_agents or [],

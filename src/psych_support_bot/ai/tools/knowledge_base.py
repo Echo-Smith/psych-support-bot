@@ -43,9 +43,7 @@ def _grouped_entries_text(entries: list) -> list[str]:
     learning_entries = [entry for entry in entries if entry.source == "active_learning"]
     # active_learning 已单独渲染进 Synthesized takeaways 时不再重复进
     # Psychoeducation notes——同一 entry 双区渲染既冗余又挤占预算。
-    psychoeducation_sources = {"psychoeducation", "foundation"} | (
-        set() if learning_entries else {"active_learning"}
-    )
+    psychoeducation_sources = {"psychoeducation", "foundation"} | (set() if learning_entries else {"active_learning"})
     psychoeducation_entries = [entry for entry in entries if entry.source in psychoeducation_sources]
     grounded_entries = [
         entry for entry in entries if entry.source not in {"active_learning", "psychoeducation", "foundation"}
@@ -76,9 +74,13 @@ def _grouped_entries_text(entries: list) -> list[str]:
     return sections
 
 
-def get_knowledge_context(mode: str, risk_level: str, user_message: str = "") -> str:
-    topics = detect_topics(user_message)
-    entries = retrieve_knowledge_entries(user_message, mode, risk_level, limit=5)
+def get_knowledge_context(
+    mode: str, risk_level: str, user_message: str = "", extra_topics: list[str] | None = None
+) -> str:
+    # LLM 语义 topics（闭集）与关键词 topics 并集：词表外表达（"心情很低落"）
+    # 由语义通道补齐。extra_topics 为空时行为与纯关键词通道完全一致。
+    topics = list(dict.fromkeys([*detect_topics(user_message), *(extra_topics or [])]))
+    entries = retrieve_knowledge_entries(user_message, mode, risk_level, limit=5, extra_topics=extra_topics)
     base_snippets = KNOWLEDGE_SNIPPETS.get(mode, [])
 
     sections = [
