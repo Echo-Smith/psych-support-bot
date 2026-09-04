@@ -39,7 +39,7 @@ def test_intervention_context_includes_indexed_knowledge() -> None:
     )
 
     assert "Detected topics:" in context
-    assert "Grounded references:" in context
+    assert "Background for you to weave into your own empathic wording" in context
     assert "DBT TIPP" in context
 
 
@@ -50,7 +50,7 @@ def test_crisis_context_includes_indexed_resources() -> None:
         user_message="I don't want to be here anymore.",
     )
 
-    assert "Grounded references:" in context
+    assert "Background for you to weave into your own empathic wording" in context
     assert "988 Suicide and Crisis Lifeline" in context
 
 

@@ -5,16 +5,29 @@ from psych_support_bot.ai.prompts.templates import (
 )
 
 
-def test_output_prompt_requires_three_unlabeled_messages() -> None:
+def test_output_prompt_support_mode_allows_flexible_shape() -> None:
+    """批次3 共情化：support 形态弹性化（1-3 条），保留无标签与单问号契约。"""
     prompt = build_output_prompt(
         mode="support",
         risk_level="low",
         user_message="我最近状态很乱",
     )
 
-    assert "EXACTLY three short conversational messages" in prompt
+    assert "ONE to THREE short conversational messages" in prompt
     assert "No labels, headings, numbering, or meta words like '回应', '工作性假设', '下一问'" in prompt
-    assert "at most one question" in prompt
+    assert "At most ONE question" in prompt
+    assert "must not appear in consecutive replies" in prompt
+
+
+def test_output_prompt_non_support_keeps_three_part_skeleton() -> None:
+    """assessment/planning/intervention 保留三段式（采集与教学需要结构）。"""
+    prompt = build_output_prompt(
+        mode="assessment",
+        risk_level="low",
+        user_message="我想做个评估",
+    )
+
+    assert "EXACTLY three short conversational messages" in prompt
 
 
 def test_process_prompt_mentions_structure_and_gentle_challenge() -> None:

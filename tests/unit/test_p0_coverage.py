@@ -121,8 +121,12 @@ def test_assessment_temperature_is_low() -> None:
 
 
 def test_support_temperature_is_moderate() -> None:
-    """P0-16: Support mode uses moderate temperature for natural empathy."""
-    assert get_temperature_for_mode("support") == 0.4
+    """Support mode keeps natural variance but stays below intervention.
+
+    批次3 共情化：0.4 → 0.6（机械感根因之一是过低的温度压平了表达
+    多样性；safety_reviewer 红线仍是兜底，crisis/assessment 档位不动）。
+    """
+    assert get_temperature_for_mode("support") == 0.6
 
 
 def test_intervention_temperature_is_highest() -> None:

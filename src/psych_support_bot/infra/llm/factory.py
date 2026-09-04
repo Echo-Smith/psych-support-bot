@@ -8,13 +8,15 @@ from psych_support_bot.infra.config.settings import get_settings
 # Temperature per conversation mode:
 #   crisis     = 0.0  (deterministic, safety-critical)
 #   assessment = 0.3  (low variance for consistent scoring guidance)
-#   support    = 0.4  (natural but controlled empathy)
+#   support    = 0.6  (warmth needs varied natural phrasing; safety_reviewer
+#                     red lines remain the guardrail — a rigid 0.4 was a
+#                     root cause of the mechanical, same-shaped replies)
 #   planning   = 0.4  (structured but flexible)
 #   intervention = 0.5 (slightly creative for technique suggestions)
 MODE_TEMPERATURES: dict[str, float] = {
     "crisis": 0.0,
     "assessment": 0.3,
-    "support": 0.4,
+    "support": 0.6,
     "planning": 0.4,
     "intervention": 0.5,
     # Risk classification must be deterministic and reproducible — a judgement

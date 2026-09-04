@@ -181,6 +181,22 @@ def build_output_prompt(
             "Omit every question this turn: do not probe, do not suggest exercises, do not challenge. "
             "Resume normal conversation only when the user explicitly asks you something."
         )
+    # 响应形态弹性：三段式（镜像→试探性印象→单一提问）是支撑结构而非每轮
+    # 固定模板——真人共情对话的节奏是不规则的，机械感主要来自每轮同构。
+    # support 保留完整三段作为默认骨架但显式允许收窄（纯回应轮/陪伴轮），
+    # 并禁止套话复用（'我有个感觉不一定对'这类框架句不得逐轮出现）。
+    # assessment/planning/intervention 保留三段式（信息采集与教学需要结构）。
+    if mode == "support":
+        return (
+            common + "Write the reply as ONE to THREE short conversational messages separated by blank lines. "
+            "Shape it to what this moment needs, not to a fixed template: when the user mainly needs to vent or is in acute distress, "
+            "one or two messages of pure reflection and presence are better than analysis — omit the impression and the question entirely. "
+            "When you do include an impression, make it tentative, plain-language, explicitly non-diagnostic, framed as an educated guess you could be wrong about. "
+            "At most ONE question per reply, and only when it genuinely moves the conversation forward; vary whether and how you ask across turns. "
+            "Do not reuse stock framing phrases across turns (e.g. '我有个感觉，不一定对' must not appear in consecutive replies). "
+            "Never stack multiple questions: fold alternatives into that single question mark "
+            "(e.g., '你希望先看哪类——情绪、压力，还是睡眠？' — one ？ total), never 'A吗？还是B？'."
+        )
     return (
         common + "Write the reply as EXACTLY three short conversational messages separated by one blank line. "
         "Message 1 briefly mirrors the user's core feeling or tension. "

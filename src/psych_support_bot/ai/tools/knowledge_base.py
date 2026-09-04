@@ -49,6 +49,12 @@ def _grouped_entries_text(entries: list) -> list[str]:
         entry for entry in entries if entry.source not in {"active_learning", "psychoeducation", "foundation"}
     ]
     sections: list[str] = []
+    # 知识区语气指令：这些是给模型化用的背景，不是给用户播报的资料——
+    # "Grounded references" 式渲染头会诱发'根据资料说'的播报腔（机械感根因之一）。
+    usage_note = (
+        "Background for you to weave into your own empathic wording — never cite sources, "
+        "list references, or announce 'according to...' in the visible reply:"
+    )
 
     if learning_entries:
         rendered_learning = [
@@ -69,7 +75,7 @@ def _grouped_entries_text(entries: list) -> list[str]:
             _render_entry(entry.entry_id, entry.title, entry.summary, entry.action_hint)
             for entry in grounded_entries[:5]
         ]
-        sections.append("Grounded references: " + " ".join(rendered_grounded))
+        sections.append(usage_note + " " + " ".join(rendered_grounded))
 
     return sections
 
