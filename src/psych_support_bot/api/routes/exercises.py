@@ -97,18 +97,14 @@ def list_exercise_records(
     limit: int = Query(20, ge=1, le=100),
     session: Session = Depends(get_db_session),
 ) -> list[ExerciseRecordItem]:
-    """练习历史（对话内与页面完成共用一张表，source 仅作来源标记）。"""
+    """练习历史（对话内与页面完成共用一张表，source 仅作来源标记）。
+
+    复用 _record_item：列表必须携带 id（前端点击进详情报告）、
+    ai_feedback（行内摘要）与 risk_flag（需要关照标记）。
+    """
     user_id = request_user_id(request, user_id)
     records = get_user_exercise_records(session, user_id, limit=limit)
-    return [
-        ExerciseRecordItem(
-            exercise_tag=record.exercise_tag,
-            source=record.source,
-            reflection_note=record.reflection_note,
-            completed_at=record.completed_at.isoformat(),
-        )
-        for record in records
-    ]
+    return [_record_item(record) for record in records]
 
 
 @router.get("/records/analysis", response_model=ExerciseAnalysisResponse)

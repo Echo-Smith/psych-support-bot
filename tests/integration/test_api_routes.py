@@ -52,7 +52,7 @@ def test_questionnaire_session_flow() -> None:
     uid = f"u-flow-{uuid4().hex[:8]}"
     start = client.post(
         "/v1/assessments/sessions",
-        json={"user_id": uid, "assessment_type": "gad7"},
+        json={"user_id": uid, "assessment_type": "gad7", "consent_acknowledged": True},
     )
 
     assert start.status_code == 200
@@ -113,7 +113,7 @@ def test_start_session_returns_session_with_next_item() -> None:
     uid = f"u-new-{uuid4().hex[:8]}"
     response = client.post(
         "/v1/assessments/sessions",
-        json={"user_id": uid, "assessment_type": "phq9"},
+        json={"user_id": uid, "assessment_type": "phq9", "consent_acknowledged": True},
     )
     assert response.status_code == 200
     body = response.json()
@@ -129,7 +129,7 @@ def test_get_session_returns_session_state() -> None:
     uid = f"u-get-{uuid4().hex[:8]}"
     start = client.post(
         "/v1/assessments/sessions",
-        json={"user_id": uid, "assessment_type": "gad7"},
+        json={"user_id": uid, "assessment_type": "gad7", "consent_acknowledged": True},
     )
     session_id = start.json()["session_id"]
     for _ in range(3):
@@ -152,7 +152,7 @@ def test_complete_session_returns_result_with_interpretation() -> None:
     uid = f"u-complete-{uuid4().hex[:8]}"
     start = client.post(
         "/v1/assessments/sessions",
-        json={"user_id": uid, "assessment_type": "gad7"},
+        json={"user_id": uid, "assessment_type": "gad7", "consent_acknowledged": True},
     )
     session_id = start.json()["session_id"]
     for _ in range(7):

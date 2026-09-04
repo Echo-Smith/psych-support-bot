@@ -43,10 +43,11 @@ def test_complete_and_list_exercise_records() -> None:
     first = client.post(
         "/v1/exercises/dbt_tipp/complete",
         params={"user_id": user_id},
-        json={"reflection_note": "做完之后手是凉的，但心跳慢下来了"},
+        json={"reflection_note": "做完之后手是凉的，但心跳慢下来了", "consent_acknowledged": True},
     )
     assert first.status_code == 200
-    body = first.json()
+    # 20260904 报告化：complete 返回 {record, ai_feedback, generated_by, risk_level}
+    body = first.json()["record"]
     assert body["exercise_tag"] == "dbt_tipp"
     assert body["source"] == "panel"
     assert "手是凉的" in body["reflection_note"]
@@ -54,10 +55,10 @@ def test_complete_and_list_exercise_records() -> None:
     second = client.post(
         "/v1/exercises/cbt_thought_record/complete",
         params={"user_id": user_id},
-        json=None,
+        json={"consent_acknowledged": True},
     )
     assert second.status_code == 200
-    assert second.json()["reflection_note"] == ""
+    assert second.json()["record"]["reflection_note"] == ""
 
     records = client.get("/v1/exercises/records", params={"user_id": user_id}).json()
     assert len(records) == 2
@@ -79,7 +80,7 @@ def test_exercise_analysis_llm_path(monkeypatch) -> None:
     user_id = f"m3-analysis-llm-{uuid4().hex[:8]}"
     for tag in ("dbt_tipp", "dbt_tipp", "act_defusion"):
         assert client.post(
-            f"/v1/exercises/{tag}/complete", params={"user_id": user_id}, json=None
+            f"/v1/exercises/{tag}/complete", params={"user_id": user_id}, json={"consent_acknowledged": True}
         ).status_code == 200
 
     def _fake_analysis(*, records_text: str, expected_language: str, fallback) -> str:
@@ -101,7 +102,7 @@ def test_exercise_analysis_llm_path(monkeypatch) -> None:
 def test_exercise_analysis_falls_back_when_llm_down(monkeypatch) -> None:
     user_id = f"m3-analysis-fb-{uuid4().hex[:8]}"
     assert client.post(
-        "/v1/exercises/sleep_wind_down/complete", params={"user_id": user_id}, json=None
+        "/v1/exercises/sleep_wind_down/complete", params={"user_id": user_id}, json={"consent_acknowledged": True}
     ).status_code == 200
 
     class _AlwaysFailingModel:
@@ -175,7 +176,7 @@ def test_exercise_usage_events_recorded_without_reflection_note() -> None:
     client.post(
         "/v1/exercises/dbt_wise_mind/complete",
         params={"user_id": user_id},
-        json={"reflection_note": "私密反思内容"},
+        json={"reflection_note": "私密反思内容", "consent_acknowledged": True},
     )
     client.get("/v1/exercises/records/analysis", params={"user_id": user_id})
 

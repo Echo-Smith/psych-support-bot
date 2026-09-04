@@ -752,6 +752,23 @@
       margin-bottom: 6px;
     }
 
+    .ex-step-hint {
+      font-size: 13px;
+      color: var(--muted);
+      line-height: 1.7;
+    }
+
+    /* 加载等待行：文案 + 动态省略号（typing-dots），不用静态"…" */
+    .loading-line {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 10px 2px;
+      color: var(--muted);
+      font-size: 13px;
+      font-style: italic;
+    }
+
     .ex-response-field {
       width: 100%;
       padding: 12px 14px;
@@ -1597,16 +1614,6 @@
       color: var(--muted);
     }
 
-    .analysis-waiting {
-      display: flex;
-      align-items: center;
-      gap: 8px;
-      padding: 12px;
-      color: var(--muted);
-      font-size: 13px;
-      font-style: italic;
-    }
-
     .no-data {
       text-align: center;
       padding: 8px;
@@ -1780,20 +1787,11 @@
         <div class="exercise-viewer" id="exerciseViewer"></div>
       </div>
 
+      <!-- 练习记录：仅在练习列表视图展示（练习进行中隐藏，避免干扰练习） -->
       <div class="record-section" id="exerciseHistorySection">
         <div class="trend-title"><span>练习记录</span></div>
         <div id="exerciseHistoryBody">
           <div class="empty-history">加载中…</div>
-        </div>
-      </div>
-
-      <div class="record-section" id="exerciseAnalysisSection">
-        <div class="trend-title"><span>AI 练习分析</span><span class="paywall-tag">AI ANALYSIS</span></div>
-        <div id="exerciseAnalysisBody">
-          <div class="empty-history">点击下方按钮，基于你的练习记录得到简要分析与下一步建议。</div>
-        </div>
-        <div class="actions-row" style="margin-top:12px;">
-          <button class="btn btn-secondary" id="exerciseAnalysisBtn" onclick="generateExerciseAnalysis()">生成分析</button>
         </div>
       </div>
     </section>
@@ -1827,6 +1825,14 @@
           <div class="actions-row" style="margin-top:12px;">
             <button class="btn btn-secondary" id="assessAnalysisBtn" onclick="generateAssessAnalysis()">生成解读</button>
           </div>
+        </div>
+      </div>
+
+      <!-- 练习记录（评估页同样可见；AI 练习分析仅在点开的单条报告详情内） -->
+      <div class="record-section" id="assessExerciseHistorySection">
+        <div class="trend-title"><span>练习记录</span></div>
+        <div id="assessExerciseHistoryBody">
+          <div class="empty-history">加载中…</div>
         </div>
       </div>
     </section>
@@ -2024,7 +2030,7 @@
       const box = document.getElementById('exerciseViewer');
       box.innerHTML =
         '<div class="ev-title">开始前，请了解这几件事</div>' +
-        '<div class="ev-desc" id="exIntroBody"><span class="loader"></span>加载须知…</div>' +
+        '<div class="ev-desc" id="exIntroBody">' + loadingLine('加载练习须知') + '</div>' +
         '<div id="exIntroActions"></div>';
       fetch(API_BASE + '/v1/exercises/' + tag + '/intro?lang=zh', { headers: authHeaders() })
         .then(r => { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); })
@@ -2146,7 +2152,7 @@
           tab.classList.add('active');
           document.getElementById('panel-' + tab.dataset.tab).classList.add('active');
           if (tab.dataset.tab === 'checkin') renderCheckinStatus();
-          if (tab.dataset.tab === 'exercises') loadExerciseRecords();
+          if (tab.dataset.tab === 'exercises' || tab.dataset.tab === 'assessments') loadExerciseRecords();
         });
       });
     }
@@ -2492,12 +2498,16 @@
     function showExerciseList() {
       document.getElementById('exList').style.display = '';
       document.getElementById('exViewer').style.display = 'none';
+      // 练习记录只在列表视图出现——练习进行中不显示，避免干扰
+      document.getElementById('exerciseHistorySection').style.display = '';
       curExercise = null;
       renderExerciseGrid();
+      loadExerciseRecords();
     }
     async function openExercise(key, tag) {
+      document.getElementById('exerciseHistorySection').style.display = 'none';
       const box = document.getElementById('exerciseViewer');
-      box.innerHTML = '<div class="empty-tip"><span class="loader"></span>加载练习…</div>';
+      box.innerHTML = '<div class="empty-tip">' + loadingLine('加载练习') + '</div>';
       document.getElementById('exList').style.display = 'none';
       document.getElementById('exViewer').style.display = '';
       try {
@@ -2520,6 +2530,18 @@
         }
       }
     }
+    // 步骤文案拆分：标题（「第 1 步：情境」）+ 引导语（「简要描述发生了什么事。」）。
+    // 数据源把两者合写在同一句里；按「步号：名称 + 首个分隔符」切开，避免整句重复渲染。
+    function splitStepGuide(text) {
+      const s = String(text || '').trim();
+      if (!s) return { title: '', guide: '' };
+      const m = s.match(/^((?:第\s*\d+\s*步|[A-Z]|Step\s*\d+)\s*[:：])\s*([^。：.?!？]{1,30})\s*[。：.]\s*(.+)$/);
+      if (m) return { title: m[1] + m[2], guide: m[3] };
+      const idx = s.indexOf('。');
+      if (idx > 0) return { title: s.slice(0, idx), guide: s.slice(idx + 1).trim() };
+      return { title: s, guide: '' };
+    }
+
     function paintExercise() {
       const d = curExercise.data;
       const steps = d.steps || [];
@@ -2548,11 +2570,16 @@
 
       let currentStepHtml = '';
       if (!isComplete && idx < steps.length) {
-        const guideText = escapeHtml(steps[idx] || '');
+        const parts = splitStepGuide(steps[idx]);
         const stepNum = idx + 1;
         const totalSteps = steps.length;
         const prevResp = responses[idx] || '';
         const isGrounding = curExercise.key === 'panic_grounding_5_4_3_2_1';
+        // 标题 = 「第 N 步：情境」，副标题 = 引导提示语（怎么写）
+        const guideHtml =
+          '<div class="ex-step-guide"><strong>' + escapeHtml(parts.title) + '</strong>' +
+          (parts.guide ? '<div class="ex-step-hint">' + escapeHtml(parts.guide) + '</div>' : '') +
+          '</div>';
 
         // Grounding: multi-slot input (5→4→3→2→1)
         if (isGrounding) {
@@ -2571,8 +2598,7 @@
           currentStepHtml =
             '<div class="ex-guided-step">' +
             '<span class="ex-step-label">STEP ' + stepNum + ' / ' + totalSteps + '</span>' +
-            '<div class="ex-step-guide"><strong>' + guideText.split('.')[0] + '</strong>' +
-            (guideText.includes('.') ? guideText.substring(guideText.indexOf('.') + 1) : guideText) + '</div>' +
+            guideHtml +
             '<div class="gr-slot-row" id="grSlotRow">' + slotInputs + '</div>' +
             '<div class="ex-meta-row">' +
             '<span id="grFillStatus">0 / ' + slotCount + ' 已填写</span>' +
@@ -2582,8 +2608,7 @@
           currentStepHtml =
             '<div class="ex-guided-step">' +
             '<span class="ex-step-label">STEP ' + stepNum + ' / ' + totalSteps + '</span>' +
-            '<div class="ex-step-guide"><strong>' + guideText.split('.')[0] + '</strong>' +
-            (guideText.includes('.') ? guideText.substring(guideText.indexOf('.') + 1) : guideText) + '</div>' +
+            guideHtml +
             '<textarea class="ex-response-field" id="exRespField" placeholder="在这里写下你的想法或体验..." oninput="updateExResp(this.value)">' + escapeHtml(prevResp) + '</textarea>' +
             '<div class="ex-meta-row">' +
             '<span>你的回答仅保存在本设备</span>' +
@@ -2595,7 +2620,16 @@
 
       let cta = '';
       if (isComplete) {
-        cta = renderExerciseSummary(d, steps, responses);
+        // 正常完成走 finishExerciseFlow（对话引导 → 合并报告）；此分支仅兜底
+        cta = '<div class="completion-banner">' +
+          '<div class="tick">✓</div>' +
+          '<div class="c-title">练习完成</div>' +
+          '<div class="c-sub">所有步骤都已保存。</div>' +
+          '</div>' +
+          '<div class="ev-actions" style="margin-top:14px;">' +
+          '<button class="btn btn-secondary" onclick="restartExercise()">再来一次</button>' +
+          '<button class="btn" onclick="showExerciseList()">返回练习列表</button>' +
+          '</div>';
       } else {
         const isGrounding = curExercise.key === 'panic_grounding_5_4_3_2_1';
         const disabledAttr = isGrounding ? ' disabled' : '';
@@ -2820,29 +2854,6 @@
 
       return warmHtml;
     }
-    function renderExerciseSummary(d, steps, responses) {
-      const doneMap = JSON.parse(localStorage.getItem(STORE_KEYS.EX_DONE) || '{}');
-      doneMap[curExercise.key] = new Date().toISOString();
-      localStorage.setItem(STORE_KEYS.EX_DONE, JSON.stringify(doneMap));
-      const h = JSON.parse(localStorage.getItem(STORE_KEYS.EX_HIST) || '[]');
-      h.unshift({ key: curExercise.key, name: d.name, at: new Date().toISOString() });
-      localStorage.setItem(STORE_KEYS.EX_HIST, JSON.stringify(h.slice(0, 30)));
-
-      const warmCard = generateWarmSummary(curExercise.key, d, steps, responses);
-
-      // 三重重复修复：历史回答(historyHtml)、温柔总结锚点(warmCard)、完整步骤卡片(ex-summary-card)
-      // 三处同时列出用户回答导致冗余。现去掉 ex-summary-card，由 warmCard 统一承载情感化总结 + 关键锚点。
-      return warmCard +
-        '<div class="completion-banner">' +
-        '<div class="tick">✓</div>' +
-        '<div class="c-title">练习完成</div>' +
-        '<div class="c-sub">你已完成所有步骤。</div>' +
-        '</div>' +
-        '<div class="ev-actions" style="margin-top:14px;">' +
-        '<button class="btn btn-secondary" onclick="restartExercise()">再来一次</button>' +
-        '<button class="btn" onclick="showExerciseList()">返回练习列表</button>' +
-        '</div>';
-    }
     function updateExResp(val) {
       if (!curExercise) return;
       if (!curExercise.responses) curExercise.responses = [];
@@ -2896,17 +2907,88 @@
           }, 50);
         }
       } else {
-        paintExercise();
-        reportExerciseComplete();
+        // 最后一步：进入完成流程（加载动画 → 直接与 AI 聊聊 → 结束后出合并报告）
+        finishExerciseFlow();
       }
     }
-    // M3→20260904 报告化：页面练习完成 → 上报 step_responses + 确认位 →
-    // 服务端风险筛查 + AI 反馈 → 完成视图插入 AI 反馈卡与对话引导区。
-    async function reportExerciseComplete() {
-      if (!curExercise || curExercise.reported) return;
-      curExercise.reported = true;
-      const note = ((curExercise.responses || []).slice().reverse().find(x => (x || '').trim()) || '');
+
+    // 加载等待行：文案后跟动态省略号（typing-dots），不用静态"…"
+    function loadingLine(text) {
+      return '<div class="loading-line"><span>' + escapeHtml(text) + '</span>' +
+        '<span class="typing-dots"><span>.</span><span>.</span><span>.</span></span></div>';
+    }
+
+    // 合并报告（20260904 体验统一）：温柔总结 + AI 练习分析 + 你写下的回答
+    // （+ 引导对话，仅完成页）。完成页与单条历史记录详情共用同一结构。
+    function exerciseReportHtml(opts) {
+      const tag = opts.tag || '';
+      const steps = opts.steps || [];
+      const responses = opts.responses || [];
+      const hasContent = responses.some(x => (x || '').trim());
+      const warm = hasContent
+        ? generateWarmSummary(tag, { name: opts.name || exerciseLabel(tag) }, steps, responses)
+        : '';
+      const answers = steps.map((s, i) => {
+        const a = (responses[i] || '').trim();
+        if (!a) return '';
+        const g = splitStepGuide(s);
+        return '<div class="ex-summary-item">' +
+          '<div class="si-label">' + escapeHtml(g.title || ('步骤 ' + (i + 1))) + '</div>' +
+          '<div class="si-resp">' + escapeHtml(a) + '</div></div>';
+      }).join('');
+      const transcript = (opts.dialog || []).map(t =>
+        '<li style="margin:4px 0;"><b>' + (t.role === 'user' ? '你' : 'AI') + '：</b>' + escapeHtml(t.content) + '</li>'
+      ).join('');
+      return warm +
+        (opts.aiFeedback
+          ? '<div class="ex-guided-step" style="margin-top:14px;">' +
+          '<span class="ex-step-label">AI 练习分析</span>' +
+          '<div style="font-size:14px;line-height:1.8;white-space:pre-wrap;">' + escapeHtml(opts.aiFeedback) + '</div>' +
+          '</div>'
+          : '') +
+        (answers
+          ? '<div class="ex-guided-step" style="margin-top:14px;">' +
+          '<span class="ex-step-label">你写下的回答</span>' + answers + '</div>'
+          : '') +
+        (transcript
+          ? '<div class="ex-guided-step" style="margin-top:14px;">' +
+          '<span class="ex-step-label">引导对话</span>' +
+          '<ul style="padding-left:18px;font-size:13px;line-height:1.7;list-style:none;margin:0;">' + transcript + '</ul></div>'
+          : '');
+    }
+
+    // M3→20260904 完成流程：最后一步保存 → 加载动画（准备对话）→ 直接进入
+    // "和 AI 聊聊"对话框；温柔总结与 AI 分析统一放到"结束引导，生成报告"。
+    async function finishExerciseFlow() {
+      if (!curExercise || curExercise.finishing) return;
+      curExercise.finishing = true;
+      const d = curExercise.data;
+
+      // 本地簿记：练习卡"已完成"标记 + 本地历史
+      const doneMap = JSON.parse(localStorage.getItem(STORE_KEYS.EX_DONE) || '{}');
+      doneMap[curExercise.key] = new Date().toISOString();
+      localStorage.setItem(STORE_KEYS.EX_DONE, JSON.stringify(doneMap));
+      const h = JSON.parse(localStorage.getItem(STORE_KEYS.EX_HIST) || '[]');
+      h.unshift({ key: curExercise.key, name: d.name, at: new Date().toISOString() });
+      localStorage.setItem(STORE_KEYS.EX_HIST, JSON.stringify(h.slice(0, 30)));
+      renderExerciseGrid();
+
+      const viewer = document.getElementById('exerciseViewer');
+      viewer.innerHTML =
+        '<div class="ev-title">' + escapeHtml(d.name || curExercise.key) + '</div>' +
+        '<div class="ev-desc">' + escapeHtml(d.description || '') + '</div>' +
+        '<div class="completion-banner">' +
+        '<div class="tick">✓</div>' +
+        '<div class="c-title">练习完成</div>' +
+        '<div class="c-sub">所有步骤都已保存。</div>' +
+        '</div>' +
+        '<div class="ex-guided-step" style="margin-top:14px;" id="exAiSection">' +
+        loadingLine('正在准备和 AI 的对话，我们慢慢来') +
+        '</div>';
+
+      let data = null;
       try {
+        const note = ((curExercise.responses || []).slice().reverse().find(x => (x || '').trim()) || '');
         const res = await fetch(API_BASE + '/v1/exercises/' + curExercise.tag + '/complete?user_id=' +
           encodeURIComponent(USER_ID) + '&source=panel', {
           method: 'POST',
@@ -2919,49 +3001,53 @@
           })
         });
         if (res.ok) {
-          const data = await res.json();
+          data = await res.json();
           curExercise.report = data;
-          renderAiFeedbackAndGuidance(data);
         }
-        // 上报成功后立即刷新练习记录，用户刚做完不应还显示"还没有练习记录"
-        loadExerciseRecords();
-      } catch (err) { /* 服务端不可达时不上报，本地温柔总结仍在 */ }
+      } catch (err) { /* 服务端不可达：对话引导仍可用（本轮为本地降级） */ }
+
+      renderAiFeedbackAndGuidance(data);
+      // 上报后立即刷新练习记录，用户刚做完不应还显示"还没有练习记录"
+      loadExerciseRecords();
+      curExercise.finishing = false;
     }
 
-    // AI 反馈卡 + 完成后对话引导（单次练习内多轮，用户决策 2026-09-04）
+    // 完成后的对话引导区：AI 分析/反馈作为第一条消息直接开聊（单次练习内多轮，
+    // 用户决策 2026-09-04）。风险暂停时不进入对话——展示安抚口径 + 直接看报告。
     function renderAiFeedbackAndGuidance(data) {
-      const banner = document.querySelector('#exerciseViewer .completion-banner');
-      if (!banner) return;
-      const wrap = document.createElement('div');
-      wrap.id = 'exAiSection';
-      let html = '';
-      if (data.ai_feedback) {
-        html += '<div class="ex-guided-step" style="margin-top:14px;">' +
-          '<span class="ex-step-label">AI 反馈</span>' +
-          '<div style="font-size:14px;line-height:1.8;white-space:pre-wrap;">' + escapeHtml(data.ai_feedback) + '</div>' +
-          '</div>';
-      }
-      const paused = data.generated_by === 'safety_pause' || data.risk_level === 'elevated';
+      const holder = document.getElementById('exAiSection');
+      if (!holder) return;
+      const report = data || {};
+      const paused = report.generated_by === 'safety_pause' || report.risk_level === 'elevated';
       if (paused) {
-        html += '<div class="empty-tip" style="margin-top:10px;">我们在你的回答里听到了一些沉重的信号，先停一下练习——上面的求助资源现在对你更重要。</div>';
-      } else {
-        html +=
-          '<div id="exGuideBox" style="margin-top:14px;">' +
-          '<div class="ex-step-label">和 AI 聊聊这次练习</div>' +
-          '<div id="exGuideLog" style="display:flex;flex-direction:column;gap:8px;margin:10px 0;"></div>' +
-          '<div style="display:flex;gap:8px;">' +
-          '<input type="text" id="exGuideInput" class="gr-slot" style="flex:1;" placeholder="说说刚才写下的感受，比如\u201c被误解了，心里不是滋味\u201d" onkeydown="if(event.key===\'Enter\')exGuideSend()">' +
-          '<button class="btn" onclick="exGuideSend()">发送</button>' +
-          '</div>' +
-          '<div class="ev-actions" style="margin-top:10px;">' +
-          '<button class="btn btn-secondary" onclick="exGuideFinish()">结束引导，生成报告</button>' +
-          '</div></div>';
+        holder.innerHTML =
+          (report.ai_feedback
+            ? '<div style="font-size:14px;line-height:1.8;white-space:pre-wrap;margin-bottom:10px;">' + escapeHtml(report.ai_feedback) + '</div>'
+            : '') +
+          '<div class="empty-tip" style="margin-top:4px;">我们在你的回答里听到了一些沉重的信号，先停一下练习——上面的求助资源现在对你更重要。</div>' +
+          '<div class="ev-actions" style="margin-top:12px;">' +
+          '<button class="btn btn-secondary" onclick="exGuideFinish()">查看我的练习报告</button>' +
+          '</div>';
+        return;
       }
-      wrap.innerHTML = html;
-      banner.parentNode.insertBefore(wrap, banner.nextSibling);
-      const actions = wrap.nextElementSibling;
-      if (paused && actions) actions.remove();
+      holder.innerHTML =
+        '<span class="ex-step-label">和 AI 聊聊这次练习</span>' +
+        '<div id="exGuideLog" style="display:flex;flex-direction:column;gap:8px;margin:10px 0;"></div>' +
+        '<div style="display:flex;gap:8px;">' +
+        '<input type="text" id="exGuideInput" class="gr-slot" style="flex:1;" placeholder="说说刚才写下的感受，比如\u201c被误解了，心里不是滋味\u201d" onkeydown="if(event.key===\'Enter\')exGuideSend()">' +
+        '<button class="btn" onclick="exGuideSend()">发送</button>' +
+        '</div>' +
+        '<div class="ev-actions" style="margin-top:10px;">' +
+        '<button class="btn btn-secondary" onclick="exGuideFinish()">结束引导，生成报告</button>' +
+        '</div>';
+      if (report.ai_feedback) {
+        exGuideAppend('assistant', report.ai_feedback);
+        curExercise.dialog = [{ role: 'assistant', content: report.ai_feedback }];
+      }
+      const input = document.getElementById('exGuideInput');
+      if (input) input.focus();
     }
+    // M3→20260904 报告化：上报在 finishExerciseFlow 内完成；此处仅保留引导发送。
 
     function exGuideAppend(role, text) {
       const log = document.getElementById('exGuideLog');
@@ -3001,37 +3087,42 @@
         curExercise.dialog.push({ role: 'user', content: msg }, { role: 'assistant', content: data.reply });
         if (data.status === 'risk_paused') {
           // 危机信号：停止引导，展示求助资源口径
-          const box = document.getElementById('exGuideBox');
-          if (box) box.innerHTML = '<div class="empty-tip">先照顾好自己。上面的危机求助资源现在对你更重要，练习可以随时回来。</div>';
+          const box = document.getElementById('exAiSection');
+          if (box) box.innerHTML = '<div class="empty-tip">先照顾好自己。上面的危机求助资源现在对你更重要，练习可以随时回来。</div>' +
+            '<div class="ev-actions" style="margin-top:12px;">' +
+            '<button class="btn btn-secondary" onclick="exGuideFinish()">查看我的练习报告</button>' +
+            '</div>';
         }
       } catch (err) {
         exGuideAppend('assistant', '（引导服务暂时不可用，你可以先结束练习，报告会保留你写下的内容。）');
       }
     }
 
+    // 结束引导 → 合并报告（温柔总结 + AI 练习分析 + 你写下的回答 + 引导对话）
     function exGuideFinish() {
       if (!curExercise) return;
       const report = curExercise.report || {};
       const d = curExercise.data;
       const steps = d.steps || [];
       const responses = curExercise.responses || [];
-      const stepsRecap = steps.map((s, i) => {
-        const a = (responses[i] || '').trim();
-        return a ? '<li><b>步骤 ' + (i + 1) + '：</b>' + escapeHtml(a) + '</li>' : '';
-      }).filter(Boolean).join('');
-      const transcript = (curExercise.dialog || []).map(t =>
-        '<li style="margin:4px 0;"><b>' + (t.role === 'user' ? '你' : 'AI') + '：</b>' + escapeHtml(t.content) + '</li>'
-      ).join('');
-      document.getElementById('exAiSection').innerHTML =
-        '<div class="ex-guided-step">' +
-        '<span class="ex-step-label">本次练习报告</span>' +
-        (report.ai_feedback ? '<div style="font-size:14px;line-height:1.8;white-space:pre-wrap;margin:8px 0;">' + escapeHtml(report.ai_feedback) + '</div>' : '') +
-        (stepsRecap ? '<div style="font-size:12px;color:#666;margin-top:8px;">你写下的回答</div><ul style="padding-left:18px;font-size:13px;line-height:1.7;">' + stepsRecap + '</ul>' : '') +
-        (transcript ? '<div style="font-size:12px;color:#666;margin-top:8px;">引导对话</div><ul style="padding-left:18px;font-size:13px;line-height:1.7;list-style:none;">' + transcript + '</ul>' : '') +
-        '<div class="ev-actions" style="margin-top:12px;">' +
+      const holder = document.getElementById('exAiSection');
+      if (!holder) return;
+      // 外层步骤卡降级为普通容器：报告自身由分块卡片组成，避免双层边框
+      holder.className = '';
+      holder.id = 'exReportSection';
+      holder.innerHTML =
+        exerciseReportHtml({
+          tag: curExercise.key,
+          name: d.name,
+          steps: steps,
+          responses: responses,
+          dialog: curExercise.dialog || [],
+          aiFeedback: report.ai_feedback || ''
+        }) +
+        '<div class="ev-actions" style="margin-top:14px;">' +
         '<button class="btn btn-secondary" onclick="restartExercise()">再来一次</button>' +
         '<button class="btn" onclick="showExerciseList()">返回练习列表</button>' +
-        '</div></div>';
+        '</div>';
       loadExerciseRecords();
     }
     function markStepDone() {
@@ -3048,8 +3139,8 @@
       curExercise.done = new Set();
       curExercise.responses = [];
       curExercise.dialog = [];
-      curExercise.reported = false;
       curExercise.report = null;
+      curExercise.finishing = false;
       // 20260904：每次练习都需重新确认须知（用户决策）
       renderExerciseIntro(curExercise.key, curExercise.tag);
     }
@@ -3057,7 +3148,7 @@
     // ========== Assessments (C2) ==========
     function renderScaleList() {
       const list = document.getElementById('scaleList');
-      list.innerHTML = '<div class="empty-tip"><span class="loader"></span>加载量表列表…</div>';
+      list.innerHTML = '<div class="empty-tip">' + loadingLine('加载量表列表') + '</div>';
       fetch(API_BASE + '/v1/assessments/questionnaires', { headers: authHeaders() }).then(r => {
         if (!r.ok) throw new Error('HTTP ' + r.status);
         return r.json();
@@ -3084,7 +3175,7 @@
     }
     async function startAssess(code) {
       const box = document.getElementById('assessViewBox');
-      box.innerHTML = '<div class="empty-tip"><span class="loader"></span>开始会话…</div>';
+      box.innerHTML = '<div class="empty-tip">' + loadingLine('正在打开评估须知') + '</div>';
       document.getElementById('assessList').style.display = 'none';
       document.getElementById('assessViewer').style.display = '';
       // 答题过程中隐藏历史与 AI 解读——不在测试时添堵（出结果后随详情页展示）
@@ -3117,7 +3208,7 @@
 
     async function launchAssessSession(code, disclaimerVersion) {
       const box = document.getElementById('assessViewBox');
-      box.innerHTML = '<div class="empty-tip"><span class="loader"></span>开始会话…</div>';
+      box.innerHTML = '<div class="empty-tip">' + loadingLine('正在开始评估会话') + '</div>';
       try {
         const res = await fetch(API_BASE + '/v1/assessments/sessions', {
           method: 'POST',
@@ -3150,8 +3241,9 @@
       }
       const item = v.next_item;
       const total = v.total_items;
-      const answered = v.current_index;
-      const pct = Math.round(((answered + 1) / total) * 100);
+      // 已答题数：答完全部后（next_item 为空）= total，不再出现"进度 10 / 9"
+      const answered = Math.min(v.current_index, total);
+      const pct = Math.max(0, Math.min(100, Math.round((answered / total) * 100)));
       let optHtml = '';
       if (item && item.options) {
         optHtml = '<div class="opt-grid">' + item.options.map(o =>
@@ -3165,7 +3257,7 @@
         '<div class="title">' + escapeHtml(g.title || '') + '</div>' +
         '<div class="timeframe">' + escapeHtml(g.timeframe || '') + '</div>' +
         '</div>' +
-        '<div class="progress-label"><span>进度 ' + (answered + 1) + ' / ' + total + '</span><span>' + pct + '%</span></div>' +
+        '<div class="progress-label"><span>进度 ' + answered + ' / ' + total + '</span><span>' + pct + '%</span></div>' +
         '<div class="progress"><div class="progress-fill" style="width:' + pct + '%"></div></div>' +
         (item
           ? '<div class="q-box">' +
@@ -3201,7 +3293,7 @@
     async function completeAssess() {
       if (!curAssess) return;
       const box = document.getElementById('assessViewBox');
-      box.innerHTML = '<div class="empty-tip"><span class="loader"></span>正在生成结果…</div>';
+      box.innerHTML = '<div class="empty-tip">' + loadingLine('正在生成评估结果') + '</div>';
       try {
         const res = await fetch(API_BASE + '/v1/assessments/sessions/' + curAssess.session_id +
           '/complete?user_id=' + encodeURIComponent(USER_ID), {
@@ -3380,8 +3472,8 @@
       const body = document.getElementById('assessAnalysisBody');
       const btn = document.getElementById('assessAnalysisBtn');
       btn.disabled = true;
-      // 回声气泡等待模式：与聊天发送后的等待体验一致。
-      body.innerHTML = '<div class="analysis-waiting"><span class="typing-dots"><span>.</span><span>.</span><span>.</span></span>正在结合你的历次分数生成解读…</div>';
+      // 回声气泡等待模式：文案后跟动态省略号（typing-dots）。
+      body.innerHTML = loadingLine('正在结合你的历次分数生成解读');
       try {
         const typeParam = assessContext.type ? '&assessment_type=' + encodeURIComponent(assessContext.type) : '';
         const res = await fetchOrThrow(API_BASE + '/v1/assessments/analysis?user_id=' + encodeURIComponent(USER_ID) + '&expected_language=zh&limit=10' + typeParam);
@@ -3473,7 +3565,7 @@
       const body = document.getElementById('checkinAnalysisBody');
       const btn = document.getElementById('checkinAnalysisBtn');
       btn.disabled = true;
-      body.innerHTML = '<div class="analysis-waiting"><span class="typing-dots"><span>.</span><span>.</span><span>.</span></span>正在分析近 30 天的打卡规律…</div>';
+      body.innerHTML = loadingLine('正在分析近 30 天的打卡规律');
       try {
         const res = await fetchOrThrow(API_BASE + '/v1/checkins/analysis?user_id=' + encodeURIComponent(USER_ID) + '&expected_language=zh&days=30');
         const data = await res.json();
@@ -3498,84 +3590,90 @@
       return String(tag).replace(/_/g, ' ').toUpperCase();
     }
 
+    // 练习记录行（练习页与评估页共用同一份渲染；rows=false 时返回精简版）
+    function exerciseRecordRows(records) {
+      return records.map(r => {
+        const d = new Date(r.completed_at);
+        const dateStr = d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
+        const noteHtml = r.ai_feedback
+          ? '<div class="cl-note" style="font-size:12px;color:var(--muted);padding:0 2px 6px;">' + escapeHtml(r.ai_feedback.slice(0, 60)) + (r.ai_feedback.length > 60 ? '…' : '') + '</div>'
+          : (r.reflection_note
+            ? '<div class="cl-note" style="font-size:12px;color:var(--muted);padding:0 2px 6px;">「' + escapeHtml(r.reflection_note) + '」</div>'
+            : '');
+        const flag = r.risk_flag && r.risk_flag !== 'low'
+          ? '<span class="h-src" style="color:#c0392b;font-weight:600;">⚠ 需要关照</span>'
+          : '';
+        const clickable = r.id ? ' style="cursor:pointer;" onclick="openExerciseRecord(' + r.id + ')"' : '';
+        return '<div class="history-row"' + clickable + '>' +
+          '<span class="h-date">' + dateStr + '</span>' +
+          '<span class="h-type">' + escapeHtml(exerciseLabel(r.exercise_tag)) + '</span>' +
+          '<span class="h-src">' + escapeHtml(SRC_LABELS[r.source] || r.source) + flag + '</span>' +
+          '</div>' + noteHtml;
+      }).join('');
+    }
+
     async function loadExerciseRecords() {
-      const body = document.getElementById('exerciseHistoryBody');
       try {
         const res = await fetchOrThrow(API_BASE + '/v1/exercises/records?user_id=' + encodeURIComponent(USER_ID) + '&limit=20');
         const records = await res.json();
-        if (!records.length) {
-          body.innerHTML = '<div class="empty-history">还没有练习记录——完成一次练习（对话里或页面里）后会出现在这里。</div>';
-          return;
-        }
-        const rows = records.map(r => {
-          const d = new Date(r.completed_at);
-          const dateStr = d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
-          const noteHtml = r.ai_feedback
-            ? '<div class="cl-note" style="font-size:12px;color:var(--muted);padding:0 2px 6px;">' + escapeHtml(r.ai_feedback.slice(0, 60)) + (r.ai_feedback.length > 60 ? '…' : '') + '</div>'
-            : (r.reflection_note
-              ? '<div class="cl-note" style="font-size:12px;color:var(--muted);padding:0 2px 6px;">「' + escapeHtml(r.reflection_note) + '」</div>'
-              : '');
-          const flag = r.risk_flag && r.risk_flag !== 'low'
-            ? '<span class="h-src" style="color:#c0392b;font-weight:600;">⚠ 需要关照</span>'
-            : '';
-          const clickable = r.id ? ' style="cursor:pointer;" onclick="openExerciseRecord(' + r.id + ')"' : '';
-          return '<div class="history-row"' + clickable + '>' +
-            '<span class="h-date">' + dateStr + '</span>' +
-            '<span class="h-type">' + escapeHtml(exerciseLabel(r.exercise_tag)) + '</span>' +
-            '<span class="h-src">' + escapeHtml(SRC_LABELS[r.source] || r.source) + flag + '</span>' +
-            '</div>' + noteHtml;
-        }).join('');
-        body.innerHTML = '<div class="history-table">' + rows + '</div>';
+        const rowsHtml = records.length
+          ? '<div class="history-table">' + exerciseRecordRows(records) + '</div>'
+          : '<div class="empty-history">还没有练习记录——完成一次练习（对话里或页面里）后会出现在这里。</div>';
+        const bodies = ['exerciseHistoryBody', 'assessExerciseHistoryBody'];
+        bodies.forEach(id => {
+          const el = document.getElementById(id);
+          if (el) el.innerHTML = rowsHtml;
+        });
       } catch (err) {
-        body.innerHTML = '<div class="empty-history">练习记录加载失败：' + escapeHtml(err.message) + '</div>';
+        ['exerciseHistoryBody', 'assessExerciseHistoryBody'].forEach(id => {
+          const el = document.getElementById(id);
+          if (el) el.innerHTML = '<div class="empty-history">练习记录加载失败：' + escapeHtml(err.message) + '</div>';
+        });
       }
     }
 
-    // 20260904：练习报告详情（本人可见；步骤回答 + AI 反馈）
+    // 20260904：单条历史练习报告详情（本人可见）——与完成页同一合并结构：
+    // 温柔总结 + AI 练习分析 + 你写下的回答。练习页与评估页的记录区共用。
+    const EX_RECORD_BODY_IDS = ['exerciseHistoryBody', 'assessExerciseHistoryBody'];
+
     async function openExerciseRecord(recordId) {
-      const body = document.getElementById('exerciseHistoryBody');
+      const bodies = EX_RECORD_BODY_IDS.map(id => document.getElementById(id)).filter(Boolean);
+      bodies.forEach(el => { el.innerHTML = loadingLine('正在加载练习报告'); });
       try {
         const res = await fetchOrThrow(API_BASE + '/v1/exercises/records/' + recordId + '?user_id=' + encodeURIComponent(USER_ID));
         const r = await res.json();
-        const steps = (r.step_responses || []).map((a, i) =>
-          a ? '<li style="margin:4px 0;"><b>步骤 ' + (i + 1) + '：</b>' + escapeHtml(a) + '</li>' : ''
-        ).filter(Boolean).join('');
+        // 中文练习元数据（步骤名/描述）用于温柔总结与回答标题；拉不到时退化为通用标题
+        let meta = null;
+        try {
+          const er = await fetch(API_BASE + '/v1/exercises/' + r.exercise_tag + '?lang=zh', { headers: authHeaders() });
+          if (er.ok) meta = await er.json();
+        } catch (e) { /* 元数据缺失不阻断 */ }
+        const responses = r.step_responses || [];
         const flagNote = r.risk_flag
           ? '<div style="color:#c0392b;font-size:12px;margin:8px 0;">⚠ 这份记录完成时被标记需要关照——如果你此刻仍感到沉重，请使用危机求助资源。</div>'
           : '';
-        body.innerHTML =
-          '<div class="history-table">' +
+        const html =
           '<button class="link-btn" onclick="loadExerciseRecords()">← 返回记录列表</button>' +
-          '<div style="font-weight:700;margin:10px 0 4px;">' + escapeHtml(exerciseLabel(r.exercise_tag)) +
+          '<div style="font-weight:700;margin:10px 0 4px;">' + escapeHtml((meta && meta.name) || exerciseLabel(r.exercise_tag)) +
           ' <span style="font-weight:400;color:var(--muted);font-size:12px;">' + new Date(r.completed_at).toLocaleString() + '</span></div>' +
           flagNote +
-          (r.ai_feedback ? '<div class="ex-guided-step" style="margin:10px 0;"><span class="ex-step-label">AI 反馈</span><div style="font-size:13px;line-height:1.8;white-space:pre-wrap;">' + escapeHtml(r.ai_feedback) + '</div></div>' : '') +
-          (steps ? '<div style="font-size:12px;color:#666;margin-top:10px;">你写下的回答</div><ul style="padding-left:18px;font-size:13px;line-height:1.7;">' + steps + '</ul>' : '<div class="empty-history">这份记录没有步骤回答（对话内完成）。</div>') +
-          '</div>';
+          exerciseReportHtml({
+            tag: r.exercise_tag,
+            name: (meta && meta.name) || exerciseLabel(r.exercise_tag),
+            steps: (meta && meta.steps) || responses.map((x, i) => '第 ' + (i + 1) + ' 步'),
+            responses: responses,
+            aiFeedback: r.ai_feedback || ''
+          }) +
+          (!responses.some(x => (x || '').trim()) && r.reflection_note
+            ? '<div class="ex-guided-step" style="margin-top:14px;"><span class="ex-step-label">练习感想</span>' +
+            '<div style="font-size:13px;line-height:1.8;">' + escapeHtml(r.reflection_note) + '</div></div>'
+            : '') +
+          (!(r.ai_feedback || '').trim()
+            ? '<div class="empty-history" style="margin-top:12px;">这份记录完成时没有生成 AI 练习分析（对话内完成或当时服务不可用）。</div>'
+            : '');
+        bodies.forEach(el => { el.innerHTML = '<div class="history-table">' + html + '</div>'; });
       } catch (err) {
-        body.innerHTML = '<div class="empty-history">报告加载失败：' + escapeHtml(err.message) + '</div>';
-      }
-    }
-
-    async function generateExerciseAnalysis() {
-      const body = document.getElementById('exerciseAnalysisBody');
-      const btn = document.getElementById('exerciseAnalysisBtn');
-      btn.disabled = true;
-      body.innerHTML = '<div class="analysis-waiting"><span class="typing-dots"><span>.</span><span>.</span><span>.</span></span>正在结合你的练习记录生成分析…</div>';
-      try {
-        const res = await fetchOrThrow(API_BASE + '/v1/exercises/records/analysis?user_id=' + encodeURIComponent(USER_ID) + '&expected_language=zh&limit=10');
-        const data = await res.json();
-        const meta = data.generated_by === 'llm'
-          ? 'AI 生成 · 仅供参考，不构成诊断'
-          : '离线统计（AI 暂不可用，已切换确定性摘要）';
-        body.innerHTML = '<div class="analysis-card">' + renderMarkdown(data.analysis) +
-          '<div class="analysis-meta">' + escapeHtml(meta) + ' · 共 ' + data.count + ' 次练习</div></div>';
-      } catch (err) {
-        body.innerHTML = /暂无练习记录/.test(err.message)
-          ? '<div class="empty-history">还没有练习记录——完成一次练习（对话里或页面里）后，这里就能生成分析。</div>'
-          : '<div class="empty-history">分析生成失败：' + escapeHtml(err.message) + '</div>';
-      } finally {
-        btn.disabled = false;
+        bodies.forEach(el => { el.innerHTML = '<div class="empty-history">报告加载失败：' + escapeHtml(err.message) + '</div>'; });
       }
     }
 

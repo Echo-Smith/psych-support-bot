@@ -189,10 +189,12 @@ def create_assessment(
 ) -> AssessmentResult:
     payload.user_id = request_user_id(request, payload.user_id)
     answer_set = AssessmentAnswerSet(answers=payload.answers) if payload.answers is not None else None
+    # 面板提交为中文 UI 出口：解读文案固定 zh（与对话路径 expected_language 同语义）
     assessment = build_assessment_result(
         payload.assessment_type,
         score=payload.score,
         answers=answer_set,
+        language="zh",
     )
     save_assessment(session, payload.user_id, assessment, source="panel")
     return assessment
@@ -317,6 +319,7 @@ def complete_questionnaire_session_route(
     result = build_assessment_result(
         assessment_type,
         answers=AssessmentAnswerSet(answers=answers),
+        language="zh",
     )
     save_assessment(session, completed.user_id, result, source="panel")
     return QuestionnaireSessionResult(session=session_view, result=result)
