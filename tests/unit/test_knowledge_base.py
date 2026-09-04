@@ -286,3 +286,48 @@ def test_knowledge_index_refreshes_from_updated_corpus_files(
 
     assert any(entry.entry_id == "local:second:1" for entry in second)
     assert not any(entry.entry_id == "local:first:1" for entry in second)
+
+
+def test_detect_topics_recognizes_relaxation_intent() -> None:
+    assert "relaxation" in detect_topics("我想放松一下")
+    assert "relaxation" in detect_topics("Can you teach me some calm breathing exercises?")
+
+
+def test_relaxation_messages_retrieve_practice_pointer_entries() -> None:
+    entries = retrieve_knowledge_entries(
+        "我想放松一下，有没有什么平静的方法？",
+        mode="support",
+        risk_level="low",
+        limit=5,
+    )
+
+    pointer_ids = {entry.entry_id for entry in entries if entry.source == "practice_pointer"}
+    assert "practice-pointer:panic_grounding_5_4_3_2_1" in pointer_ids
+
+    grounding = next(entry for entry in entries if entry.entry_id == "practice-pointer:panic_grounding_5_4_3_2_1")
+    assert "Exercises panel" in grounding.action_hint
+    assert "panic_grounding_5_4_3_2_1" in grounding.action_hint
+
+
+def test_relaxation_pointer_entries_present_in_index() -> None:
+    index = get_knowledge_index()
+    pointers = {entry.entry_id for entry in index if entry.source == "practice_pointer"}
+
+    assert {
+        "practice-pointer:panic_grounding_5_4_3_2_1",
+        "practice-pointer:sleep_wind_down",
+        "practice-pointer:dbt_tipp",
+    } <= pointers
+
+
+def test_crisis_retrieval_unaffected_by_relaxation_topic() -> None:
+    entries = retrieve_knowledge_entries(
+        "我撑不下去了",
+        mode="crisis",
+        risk_level="high",
+        limit=4,
+    )
+
+    entry_ids = [entry.entry_id for entry in entries]
+    assert any(entry_id.startswith("crisis:") for entry_id in entry_ids)
+    assert not any(entry_id.startswith("practice-pointer:") for entry_id in entry_ids)

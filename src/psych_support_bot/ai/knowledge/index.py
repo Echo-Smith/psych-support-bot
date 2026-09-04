@@ -298,6 +298,34 @@ TOPIC_KEYWORDS = {
         "成瘾",
         "戒断",
     ],
+    # 调节/放松意图：非危机的"想缓缓"类消息此前检不出任何主题，知识层
+    # 无从接手。词汇聚焦意图（想放松/平静下来），不与 panic 的生理症状词
+    # 重叠，避免惊恐发作消息被分流到放松内容。
+    "relaxation": [
+        "relax",
+        "relaxation",
+        "calm down",
+        "calming",
+        "soothing",
+        "unwind",
+        "decompress",
+        "breathing exercise",
+        "mindfulness",
+        "meditation",
+        "放松",
+        "平静",
+        "静一静",
+        "缓缓",
+        "缓一缓",
+        "平复",
+        "安定下来",
+        "松口气",
+        "舒压",
+        "正念",
+        "冥想",
+        "深呼吸",
+        "呼吸练习",
+    ],
 }
 
 
@@ -567,6 +595,54 @@ def build_knowledge_index() -> list[KnowledgeEntry]:
             action_hint="Reflect desire, ability, reasons, and commitment language rather than pushing the user.",
         )
     )
+
+    # 调节/放松类指针条目：练习库里的稳定化练习（tools/exercises.py）此前
+    # 不在知识检索通道——"我想放松一下"这类消息既检不出主题，索引里也没
+    # 有可命中的条目。这里为最对口的三个练习建"指针"条目：不复制练习全
+    # 文，交付载体仍是练习面板（action_hint 指向 tag），保持单一事实源。
+    _RELAXATION_POINTER_EXERCISES: tuple[tuple[str, str, str, tuple[str, ...], str, str], ...] = (
+        (
+            "panic_grounding_5_4_3_2_1",
+            "5-4-3-2-1 Grounding",
+            "5-4-3-2-1 接地练习",
+            ("relaxation", "panic", "anxiety"),
+            "Anchors attention to the present through the five senses.",
+            "用五感把注意力锚回当下，从慌乱里稳住。",
+        ),
+        (
+            "sleep_wind_down",
+            "Sleep Wind-Down Routine",
+            "睡前收尾流程",
+            ("relaxation", "sleep"),
+            "A consistent pre-sleep ritual that signals the body it is time to rest.",
+            "一套固定的睡前流程，给身体一个'该休息了'的信号。",
+        ),
+        (
+            "dbt_tipp",
+            "DBT TIPP",
+            "DBT TIPP 降温",
+            ("relaxation", "panic", "anger"),
+            "Rapid physiological down-regulation for intense emotion spikes.",
+            "高强度情绪飙升时的快速生理降温手段。",
+        ),
+    )
+    for _tag, _name_en, _name_zh, _topics, _desc_en, _desc_zh in _RELAXATION_POINTER_EXERCISES:
+        entries.append(
+            _entry(
+                entry_id=f"practice-pointer:{_tag}",
+                title=f"{_name_en} / {_name_zh}",
+                source="practice_pointer",
+                topics=_topics,
+                # support 是放松请求的主通道；intervention 便于引导时直接引用。
+                modes=("support", "intervention"),
+                keywords=(*_topic_keywords(_topics), "relax", "calm", "放松", "平静"),
+                content=f"{_desc_en} {_desc_zh}",
+                action_hint=(
+                    f"Available in the Exercises panel as tag '{_tag}'. "
+                    "Offer to walk through it together, or point the user there."
+                ),
+            )
+        )
 
     for chunk in load_all_corpora():
         details: list[str] = [f"Source: {chunk.publisher}. URL: {chunk.url}"]
