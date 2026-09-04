@@ -4,6 +4,7 @@ from pathlib import Path
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse, HTMLResponse
 from fastapi.staticfiles import StaticFiles
 
 from psych_support_bot.api.routes.analytics import router as analytics_router
@@ -124,6 +125,11 @@ def create_app() -> FastAPI:
         )
 
     app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
+
+    @app.get("/favicon.ico", include_in_schema=False)
+    async def serve_favicon():
+        return FileResponse(STATIC_DIR / "icons" / "favicon.ico", media_type="image/x-icon")
+
     return app
 
 
