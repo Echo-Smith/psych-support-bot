@@ -47,7 +47,9 @@ def _check_structure(text: str, expected_language: str, mode: str = "") -> bool:
     """
     if mode == "crisis":
         return True
-    forbidden = ["回应", "工作性假设", "下一问"]
+    # 观察/形成/下一步 are internal consultation-scaffolding labels — visible
+    # occurrences mean chain-of-thought leaked into the reply.
+    forbidden = ["回应", "工作性假设", "下一问", "观察", "形成", "下一步"]
     if any(label in text for label in forbidden):
         return False
 

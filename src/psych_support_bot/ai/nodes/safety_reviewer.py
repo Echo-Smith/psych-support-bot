@@ -68,6 +68,114 @@ def _build_leak_markers() -> tuple[str, ...]:
 
 LEAK_MARKERS: tuple[str, ...] = _build_leak_markers()
 
+# ---------------------------------------------------------------------------
+# Vendor/model-name leak (identity guard): the assistant must never surface
+# the underlying model or vendor name. Langfuse 巡检（2026-09-04）：用户问
+# 「你是什么模型」时回复自称 "dots，由小红书 Dots Studio 开发"。提示词层
+# 已锁定口径（build_identity_prompt），此处是运行时兜底——命中即整条替换。
+# Word-boundary regexes so "dots" doesn't match ordinary English words, and
+# plain substring checks for CJK names that have no word boundaries.
+# ---------------------------------------------------------------------------
+VENDOR_NAME_REGEXES: tuple[re.Pattern[str], ...] = tuple(
+    re.compile(pattern, re.IGNORECASE)
+    for pattern in (
+        # "connect/join the dots" is ordinary English — exclude it explicitly.
+        r"(?<!the )\bdots\b",
+        r"\bdots\s*studio\b",
+        r"\bchatgpt\b",
+        r"\bgpt-?\d",
+        r"\bopenai\b",
+        r"\bclaude\b",
+        r"\banthropic\b",
+        r"\bgemini\b",
+        r"\bdeepseek\b",
+        r"\bqwen\b",
+        r"\bqwq\b",
+        r"\bkimi\b",
+        r"\bmoonshot\b",
+        r"\bllama\b",
+        r"\bdoubao\b",
+        r"\bernie\b",
+        r"\bchatglm\b",
+        r"\bgpt\b",
+    )
+)
+VENDOR_NAME_SUBSTRINGS: tuple[str, ...] = (
+    "智谱",
+    "深度求索",
+    "月之暗面",
+    "通义千问",
+    "文心一言",
+    "小红书",
+)
+
+IDENTITY_FALLBACK_ZH = "我是这个应用里的 AI 心理支持伙伴，一个愿意听你说话的 AI，不是真人。有什么想聊的，我都在。"
+IDENTITY_FALLBACK_EN = (
+    "I'm this app's AI support companion — an AI here to listen, not a human. What's on your mind?"
+)
+
+
+def _detect_vendor_name(text: str) -> bool:
+    return any(p.search(text) for p in VENDOR_NAME_REGEXES) or any(s in text for s in VENDOR_NAME_SUBSTRINGS)
+
+
+# ---------------------------------------------------------------------------
+# Internal clinical-label leakage: consultation agents write opinions in the
+# 观察/形成/下一步 format and the reply skeleton uses 回应/工作性假设/下一问;
+# these are internal scaffolding and must never reach the user. Runs as a
+# line-level cleanup AFTER leak/redline checks (those replace wholesale;
+# here we strip scaffolding but keep legitimate content).
+# 内部 formulation 标签（观察/形成/下一步 + 英文 Observation/Formulation/
+# Next step）整行都是内部内容 —— 删行；可见回复骨架标签（回应/工作性假设/
+# 下一问 + Reflection/Working hypothesis/Next question）只剥前缀、保留正文。
+# 只有标签后跟冒号、或标签独占一行（标题式，如「# 观察 用户希望…」）才
+# 判定，避免把恰好以这些词开头的普通句子误删（如「我们聊聊下一步怎么办」）。
+# ---------------------------------------------------------------------------
+_INTERNAL_LABELS = ("观察", "形成", "下一步", "Observation", "Formulation", "Next step")
+_VISIBLE_LABELS = ("回应", "工作性假设", "下一问", "Reflection", "Working hypothesis", "Next question")
+
+# Heading style: 「# 观察 …」 / 「**观察**」独占一行 —— 整行都是内部内容
+_INTERNAL_LABEL_LINE_RE = re.compile(
+    r"^\s*#{1,6}\s*(?:\*\*)?\s*(?:" + "|".join(_INTERNAL_LABELS) + r")\b(?:\*\*)?\s*[:：]?",
+    re.IGNORECASE,
+)
+# Colon style: 「观察：…」 / 「**形成**: …」 —— 标签引出内部 formulation
+_INTERNAL_LABEL_COLON_RE = re.compile(
+    r"^\s*(?:\d{1,2}[.、)]\s*)?(?:\*\*)?\s*(?:" + "|".join(_INTERNAL_LABELS) + r")\s*(?:\*\*)?\s*[:：]",
+    re.IGNORECASE,
+)
+# Visible reply skeleton labels: strip the prefix, keep the content
+_VISIBLE_LABEL_PREFIX_RE = re.compile(
+    r"^\s*(?:#{1,6}\s*)?(?:\*\*)?\s*(?:" + "|".join(_VISIBLE_LABELS) + r")\s*(?:\*\*)?\s*[:：]\s*",
+    re.IGNORECASE,
+)
+
+
+def _sanitize_internal_labels(text: str) -> tuple[str, bool]:
+    """Strip internal clinical scaffolding from the visible reply.
+
+    Lines that ARE internal-formulation content (观察/形成/下一步/…) are removed
+    entirely; lines merely PREFIXED with a visible-reply label (回应：… /
+    **工作性假设**：…) keep their content with the label removed.
+
+    Returns (cleaned_text, was_modified). Empty result signals the caller to
+    use the fallback reply.
+    """
+    was_modified = False
+    kept_lines: list[str] = []
+    for line in text.split("\n"):
+        if _INTERNAL_LABEL_LINE_RE.match(line) or _INTERNAL_LABEL_COLON_RE.match(line):
+            was_modified = True
+            logger.warning("Safety reviewer: removing internal-formulation line: %s", line.strip()[:100])
+            continue
+        new_line, n = _VISIBLE_LABEL_PREFIX_RE.subn("", line, count=1)
+        if n:
+            was_modified = True
+            logger.warning("Safety reviewer: stripped visible-reply label prefix: %s", line.strip()[:100])
+        kept_lines.append(new_line)
+    cleaned = "\n".join(kept_lines).strip()
+    return (cleaned, was_modified) if was_modified else (text, False)
+
 # Diagnosis language patterns: LLM outputs that imply or state a diagnosis
 DIAGNOSIS_PATTERNS: list[str] = [
     # English
@@ -419,6 +527,10 @@ def review_response(state: GraphState) -> GraphState:
         # 1. Prompt leak detection (existing logic)
         has_leak = any(marker in text for marker in LEAK_MARKERS)
 
+        # 1b. Vendor/model-name leak (identity guard): full replacement —
+        #     same path as prompt leaks, safety-critical.
+        vendor_leak = _detect_vendor_name(text)
+
         # 2. Red-line detection: diagnosis, overreach, pathological attribution,
         #    experience denial, over-pathologization (all unified).
         has_redline = _detect_redline(text)
@@ -430,9 +542,23 @@ def review_response(state: GraphState) -> GraphState:
         if not challenge_allowed:
             has_challenge = _detect_challenge(text)
 
-        if has_leak:
-            # Prompt leak: full replacement (safety critical)
-            text = _fallback_text(
+        # 4. Internal clinical scaffolding (观察/形成/下一步/回应 labels):
+        #    line-level cleanup that keeps legitimate content.
+        labeled_text, had_labels = _sanitize_internal_labels(text)
+
+        if has_leak or vendor_leak:
+            # Prompt/vendor leak: full replacement (safety critical)
+            if vendor_leak:
+                lang = expected_lang or ("zh" if _is_chinese(state["user_message"]) else "en")
+                text = IDENTITY_FALLBACK_ZH if lang == "zh" else IDENTITY_FALLBACK_EN
+            else:
+                text = _fallback_text(
+                    state["user_message"],
+                    expected_lang,
+                    risk_result=risk_result,
+                )
+        elif had_labels:
+            text = labeled_text if labeled_text else _fallback_text(
                 state["user_message"],
                 expected_lang,
                 risk_result=risk_result,
@@ -479,9 +605,11 @@ def review_response(state: GraphState) -> GraphState:
             obs,
             {
                 "has_leak": has_leak,
+                "vendor_leak": vendor_leak,
+                "had_internal_labels": had_labels,
                 "has_redline": has_redline,
                 "has_challenge": has_challenge,
-                "modified": has_leak or has_redline or has_challenge,
+                "modified": has_leak or vendor_leak or had_labels or has_redline or has_challenge,
                 "final_text": text[:200],
             },
         )

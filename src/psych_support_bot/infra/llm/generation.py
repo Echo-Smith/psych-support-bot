@@ -15,6 +15,7 @@ from psych_support_bot.ai.prompts.templates import (
     build_consultation_synthesis_prompt,
     build_context_prompt,
     build_diagnosis_refusal_prompt,
+    build_identity_prompt,
     build_output_prompt,
     build_process_prompt,
     build_role_prompt,
@@ -42,14 +43,19 @@ class LLMUnavailableError(RuntimeError):
 # Retry policy: transient failures (429 / 5xx / timeout / connection) get a
 # bounded number of retries with backoff. Deterministic client errors (auth,
 # content-safety rejection, bad request) are never retried — they cannot
-# succeed on a second attempt.
+# succeed on a second attempt. Exception: gateway governance rejections
+# (governance.* error types) are observed to fire in bursts on an otherwise
+# working key (Langfuse 2026-09-04: 1566 burst 403s), so one retry is allowed.
 _RETRY_BACKOFF_SECONDS: tuple[float, ...] = (0.5, 1.0)
 _NON_RETRYABLE_STATUS_CODES = {400, 401, 403, 404, 422}
+_GOVERNANCE_STATUS_CODES = {403}
 
 
 def _is_retryable_llm_error(exc: Exception) -> bool:
     status = getattr(exc, "status_code", None)
     if isinstance(status, int):
+        if status in _GOVERNANCE_STATUS_CODES and "governance" in str(exc):
+            return True
         return status not in _NON_RETRYABLE_STATUS_CODES
     return True
 
@@ -356,6 +362,7 @@ def generate_clinically_bounded_reply(
     system_prompt = "\n\n".join(
         [
             build_role_prompt(),
+            build_identity_prompt(),
             build_boundary_prompt(risk_level=risk_level, emotional_state=emotional_state),
             build_consultation_prompt(
                 consultation_required=consultation_required,

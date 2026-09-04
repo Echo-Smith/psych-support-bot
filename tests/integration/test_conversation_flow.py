@@ -251,10 +251,12 @@ def test_process_metadata_is_exposed_for_contradiction_style_message() -> None:
 
 
 def test_non_assessment_message_during_assessment_reprompts_same_question() -> None:
-    """活跃评估期间发送非数字消息按无效答案处理：重问当前题、不推进问卷。
+    """活跃评估期间发送非数字消息：情绪倾诉自动暂停转倾听，中性闲聊重问当前题。
 
     25370c9 回归 main 行为：问卷进行中不再做 detect_mode 跳出，
     非数字输入触发 invalid_answer 重问，避免问卷被闲聊打断丢失进度。
+    2026-09-04 Langfuse 巡检更新：情绪倾诉（「我最近还感到很焦虑」）不得被
+    反复回以「请回复一个数字」——自动暂停问卷、进度保存、转回倾听。
     """
     user_id = f"non-assessment-during-{uuid4()}"
     with SessionLocal() as session:
@@ -265,19 +267,23 @@ def test_non_assessment_message_during_assessment_reprompts_same_question() -> N
         assert start.mode == "assessment"
         assert start.debug["source"] == "assessment_start"
 
-        # 在量表进行中发送一句支持意图消息（不是数字也不是退出/暂停指令）
+        # 在量表进行中倾诉情绪：必须暂停问卷、转回支持，而不是推题
         mid = conversation_service.respond(
             ConversationRequest(user_id=user_id, message="我最近还感到很焦虑"),
             session=session,
         )
+        assert mid.debug.get("source") == "questionnaire_emotional_pause"
+        assert mid.mode == "support"
+        assert "先放一放" in mid.reply.text
 
-    # 按无效答案处理：留在问卷内，重问当前题
-    assert mid is not None
-    assert mid.mode == "assessment"
-    assert mid.debug.get("source") == "questionnaire_progress"
-    # 题目不推进：仍是开始时的那道题
-    assert mid.question_options == start.question_options
-    assert mid.reply.text
+        # 暂停后不再拦截：后续消息（含中性闲聊）自然进入对话图，
+        # 说「继续 PHQ-9」即可恢复作答
+        resumed = conversation_service.respond(
+            ConversationRequest(user_id=user_id, message="继续 PHQ-9"),
+            session=session,
+        )
+        assert resumed.mode == "assessment"
+        assert resumed.debug.get("source") == "assessment_resumed"
 
 
 def test_help_message_during_assessment_reprompts_without_advancing() -> None:

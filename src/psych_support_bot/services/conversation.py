@@ -7,6 +7,8 @@ from uuid import uuid4
 from sqlalchemy.orm import Session
 
 from psych_support_bot.ai.graphs.conversation import conversation_graph
+from psych_support_bot.ai.routers.intent import CRISIS_KEYWORDS
+from psych_support_bot.ai.safety.crisis import build_crisis_reply
 from psych_support_bot.ai.schemas.messages import (
     ConversationMode,
     ConversationRequest,
@@ -24,6 +26,7 @@ from psych_support_bot.domain.assessments.service import (
     build_questionnaire_session_view,
     classify_disengage,
     cooldown_days_for,
+    detect_emotional_disclosure,
     detect_questionnaire_request,
     detect_retest_override,
     detect_skip_or_exit,
@@ -337,6 +340,48 @@ class ConversationService:
                         summary=f"Questionnaire {assessment_type} skipped by user.",
                         debug={
                             "source": "questionnaire_skip",
+                            "llm_used": False,
+                            "fallback_used": False,
+                            "assessment_type": assessment_type,
+                        },
+                    )
+                # Emotional disclosure mid-questionnaire (Langfuse 巡检 2026-09-04:
+                # 「我最近还感到很焦虑」被反复回以「请回复一个数字」)。危机信号走
+                # 危机引导；普通情绪倾诉自动暂停问卷、转回倾听——推题永远排在
+                # 人的感受之后。
+                if detect_emotional_disclosure(payload.message):
+                    pause_questionnaire_session(session, active_session)
+                    zh_emo = expected_language == "zh"
+                    crisis_hit = any(kw in payload.message for kw in CRISIS_KEYWORDS)
+                    if crisis_hit:
+                        emo_reply = build_crisis_reply(
+                            RiskResult(risk_level="high", risk_types=[], needs_crisis_mode=True, reason="危机信号出现在问卷进行中"),
+                            user_message=payload.message,
+                            expected_language=expected_language,
+                        )
+                        risk_level_emo, risk_reason_emo = "high", "Crisis keywords in mid-questionnaire message."
+                    else:
+                        emo_reply = (
+                            f"好，{guide.title}先放一放，已答的 {len(answers)} 题都保存了，"
+                            f"之后想继续时说一声「继续{guide.title}」就行。"
+                            "你刚才说的话我听到了——想聊聊现在的感受吗？"
+                            if zh_emo
+                            else (
+                                f"Let's set the {guide.title} aside for now — your {len(answers)} answers are saved; "
+                                "just ask to continue whenever you like. "
+                                "I heard what you just said — would you like to talk about how you're feeling?"
+                            )
+                        )
+                        risk_level_emo, risk_reason_emo = "low", "Emotional disclosure during questionnaire; questionnaire paused."
+                    return self._build_response(
+                        session_id=active_session.id,
+                        mode="crisis" if crisis_hit else "support",
+                        reply_text=emo_reply,
+                        summary=f"Questionnaire {assessment_type} paused after emotional disclosure.",
+                        risk_level=risk_level_emo,
+                        risk_reason=risk_reason_emo,
+                        debug={
+                            "source": "questionnaire_emotional_pause",
                             "llm_used": False,
                             "fallback_used": False,
                             "assessment_type": assessment_type,

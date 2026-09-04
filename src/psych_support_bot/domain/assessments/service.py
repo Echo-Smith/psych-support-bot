@@ -236,11 +236,20 @@ def parse_questionnaire_answer(message: str, assessment_type: AssessmentType) ->
         if 0 <= value <= max_score:
             return value
 
-    # Extract a number from common patterns like "3。", "3，", '"3"', "3.",
-    # "选3", "3分" etc. — grab the first integer in the cleaned text.
-    num_match = re.search(r"\d+", cleaned)
-    if num_match:
-        value = int(num_match.group())
+    # Strict structured extraction: only accept the answer when the message is
+    # shaped like an answer ("3分", "选3", "第3项", "3.", '"3"'). Grabbing the
+    # first integer from free text once scored "我最近3天都很焦虑" as answer 3 —
+    # a real emotional disclosure silently swallowed as data (Langfuse 巡检
+    # 2026-09-04). Unstructured prose must return None so downstream guards
+    # (disengage / emotional-disclosure) can handle it.
+    structured_answer = re.match(r'^["\'“”‘’\s]*(\d+)\s*(?:分|\.|。|，|,|项|个|号)?["\'“”‘’\s.,。、！？!?：:~～]*$', cleaned)
+    if not structured_answer:
+        structured_answer = re.match(
+            r'^["\'“”‘’\s]*(?:我)?(?:选择|选|答案是|答案|第)\s*(\d+)\s*(?:项|个|号|题)?["\'“”‘’\s.,。、！？!?：:~～]*$',
+            cleaned,
+        )
+    if structured_answer:
+        value = int(structured_answer.group(1))
         max_score = int(cast(dict[str, Any], QUESTIONNAIRES[assessment_type])["item_max_score"])
         if 0 <= value <= max_score:
             return value
@@ -332,6 +341,52 @@ def classify_disengage(message: str) -> str | None:
     if any(word in lowered for word in _QUIET_WORDS):
         return "quiet"
     return None
+
+
+# Emotional-disclosure markers: when a mid-questionnaire message is really the
+# user opening up about how they feel, pressing them for the next numeric
+# answer is the worst possible reply (Langfuse 巡检 2026-09-04: 「我最近还感到
+# 很焦虑」被反复回以「请回复一个数字」). Matched as substrings on purpose —
+# these phrases are short and unambiguous, and false positives only cost a
+# gentle pause, which is the safer failure mode.
+_EMOTIONAL_DISCLOSURE_WORDS = [
+    "心情",
+    "难受",
+    "难过",
+    "不开心",
+    "很烦",
+    "好烦",
+    "烦躁",
+    "心慌",
+    "焦虑",
+    "压抑",
+    "委屈",
+    "想哭",
+    "崩溃",
+    "撑不住",
+    "受不了",
+    "好累",
+    "好难",
+    "痛苦",
+    "绝望",
+    "孤独",
+    "害怕",
+    "恐惧",
+    "emo",
+    "低落",
+    "睡不着",
+    "失眠",
+    "压力",
+    "喘不过气",
+    "情绪",
+]
+
+
+def detect_emotional_disclosure(message: str) -> bool:
+    """Return True when the message reads as the user sharing emotional distress
+    rather than answering (or disengaging from) the questionnaire."""
+    lowered = message.strip().casefold()
+    return any(word in lowered for word in _EMOTIONAL_DISCLOSURE_WORDS)
 
 
 # Minimum days between runs of the same screening scale; re-running sooner
