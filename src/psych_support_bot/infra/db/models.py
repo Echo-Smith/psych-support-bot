@@ -174,6 +174,12 @@ class ExerciseRecord(Base):
     source 语义同 assessments.source：chat=对话图内完成 / panel=页面练习面板完成。
     reflection_note 是用户自己的反思内容——只用于本人记录展示与本人 AI 分析输入，
     不进商业化埋点（UsageEvent 伦理边界）。
+
+    报告字段（20260904_0001，用户须知同意后的主动交互场景）：
+    - step_responses_json: 面板分步回答（JSON 数组，索引对应步骤）
+    - ai_feedback: 完成后的 AI 个人化反馈（读取步骤回答生成——被动统计
+      不碰内容的旧边界不变；这是经须知确认的主动交互例外）
+    - guidance_transcript_json: 完成后 AI 对话引导的轮次记录（JSON 数组）
     """
 
     __tablename__ = "exercise_records"
@@ -183,4 +189,10 @@ class ExerciseRecord(Base):
     exercise_tag: Mapped[str] = mapped_column(String(64))
     source: Mapped[str] = mapped_column(String(16), default="chat", server_default="chat")
     reflection_note: Mapped[str] = mapped_column(Text, default="")
+    step_responses_json: Mapped[str] = mapped_column(Text, default="[]", server_default="[]")
+    ai_feedback: Mapped[str] = mapped_column(Text, default="", server_default="")
+    guidance_transcript_json: Mapped[str] = mapped_column(Text, default="[]", server_default="[]")
+    # 风险标记（""/"elevated"/"high"/"critical"）：完成时筛查命中则记录，
+    # 记录列表展示"需要关照"徽标（只记等级词，不记内容）。
+    risk_flag: Mapped[str] = mapped_column(String(16), default="", server_default="")
     completed_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)

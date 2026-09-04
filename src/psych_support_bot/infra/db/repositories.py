@@ -326,6 +326,12 @@ _ALLOWED_USAGE_EVENTS = {
     "auth_register",
     "auth_login",
     "auth_login_failed",
+    # 练习/评估须知确认与 AI 反馈触达（只记 tag + 条款版本 + 时间，无内容）
+    "exercise_consent",
+    "assessment_consent",
+    "privacy_policy_ack",
+    "exercise_guidance_used",
+    "exercise_feedback_served",
 }
 
 

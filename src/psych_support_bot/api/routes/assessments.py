@@ -5,6 +5,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from psych_support_bot.api.auth import request_user_id
+from psych_support_bot.domain import consents
 from psych_support_bot.domain.assessments.schemas import (
     AssessmentAnswerSet,
     AssessmentResult,
@@ -165,12 +166,19 @@ def get_assessment_analysis(
 
 @router.get("/questionnaires", response_model=list[QuestionnaireGuide])
 def get_questionnaires() -> list[QuestionnaireGuide]:
-    return list_questionnaire_guides()
+    guides = list_questionnaire_guides()
+    for guide in guides:
+        guide.disclaimer_points = consents.ASSESSMENT_DISCLAIMER_ZH
+        guide.disclaimer_version = consents.DISCLAIMER_VERSION
+    return guides
 
 
 @router.get("/questionnaires/{assessment_type}", response_model=QuestionnaireGuide)
 def get_questionnaire(assessment_type: AssessmentType) -> QuestionnaireGuide:
-    return questionnaire_guide(assessment_type)
+    guide = questionnaire_guide(assessment_type)
+    guide.disclaimer_points = consents.ASSESSMENT_DISCLAIMER_ZH
+    guide.disclaimer_version = consents.DISCLAIMER_VERSION
+    return guide
 
 
 @router.post("", response_model=AssessmentResult)
@@ -197,6 +205,17 @@ def start_questionnaire_session(
     session: Session = Depends(get_db_session),
 ) -> QuestionnaireSessionView:
     payload.user_id = request_user_id(request, payload.user_id)
+    # 须知确认强校验（20260904，每次评估必须）：评估有临床语义，确认必须
+    # 落后端而非仅前端 gate。
+    if not payload.consent_acknowledged:
+        raise HTTPException(status_code=403, detail="Assessment disclaimer must be acknowledged")
+    record_usage_event(
+        session,
+        payload.user_id,
+        "assessment_consent",
+        assessment_type=str(payload.assessment_type),
+        disclaimer_version=payload.disclaimer_version or consents.DISCLAIMER_VERSION,
+    )
     record = create_questionnaire_session(session, payload.user_id, payload.assessment_type)
     return build_questionnaire_session_view(
         session_id=record.id,
