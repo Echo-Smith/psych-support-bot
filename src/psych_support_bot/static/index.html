@@ -1928,7 +1928,7 @@
   <script>
     // ========== Globals ==========
     const API_BASE = window.location.origin;
-    const STORE_KEYS = { EX_HIST: 'np_ex_history', EX_DONE: 'np_ex_done', CK: 'np_checkins', UID: 'np_user_id', TOKEN: 'np_auth_token' };
+    const STORE_KEYS = { EX_HIST: 'np_ex_history', EX_DONE: 'np_ex_done', CK: 'np_checkins', UID: 'np_user_id', TOKEN: 'np_auth_token', PRIVACY_VER: 'np_privacy_ver' };
     let USER_ID = localStorage.getItem(STORE_KEYS.UID);
     if (!USER_ID) { USER_ID = 'u_' + Math.random().toString(36).slice(2, 10); localStorage.setItem(STORE_KEYS.UID, USER_ID); }
     let SESSION_ID = null;
@@ -1973,6 +1973,91 @@
     let curExercise = null; // { tag, data, currentStep, doneSteps:Set }
     // Current assessment state
     let curAssess = null;    // { session_id, user_id, type, view, guide }
+
+    // ---- 隐私协议 / 数据处理协议（使用前确认；版本变更后重新弹窗）----
+    async function ensurePrivacyConsent() {
+      const agreedVer = localStorage.getItem(STORE_KEYS.PRIVACY_VER);
+      try {
+        const res = await fetch(API_BASE + '/v1/users/privacy-agreement?expected_language=zh', { headers: authHeaders() });
+        if (!res.ok) return; // 后端不可达时不阻断页面主流程
+        const agreement = await res.json();
+        if (agreedVer === agreement.consent_version) return; // 已同意当前版本
+        const mask = document.createElement('div');
+        mask.id = 'privacyMask';
+        mask.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:999;display:flex;align-items:center;justify-content:center;padding:16px;';
+        const listHtml = agreement.privacy_points.map(p => '<li>' + escapeHtml(p) + '</li>').join('');
+        const dpHtml = agreement.data_processing_points.map(p => '<li>' + escapeHtml(p) + '</li>').join('');
+        mask.innerHTML =
+          '<div style="background:#fff;border-radius:14px;max-width:520px;width:100%;max-height:80vh;overflow:auto;padding:22px;">' +
+          '<div style="font-weight:700;font-size:17px;margin-bottom:10px;">隐私协议与数据处理说明</div>' +
+          '<div style="font-size:13px;color:#444;line-height:1.7;">' +
+          '<div style="font-weight:600;margin:6px 0;">隐私协议</div><ul style="padding-left:18px;margin:0 0 8px;">' + listHtml + '</ul>' +
+          '<div style="font-weight:600;margin:6px 0;">数据处理协议</div><ul style="padding-left:18px;margin:0;">' + dpHtml + '</ul>' +
+          '</div>' +
+          '<label style="display:flex;gap:8px;align-items:flex-start;font-size:13px;margin:14px 0;">' +
+          '<input type="checkbox" id="privacyChk" style="margin-top:3px;">' +
+          '<span>我已阅读并同意上述隐私协议与数据处理协议</span></label>' +
+          '<div style="display:flex;gap:10px;">' +
+          '<button class="btn btn-secondary" style="flex:1;" id="privacyDecline">暂不同意</button>' +
+          '<button class="btn" style="flex:1;" id="privacyAgree" disabled>同意并继续</button>' +
+          '</div></div>';
+        document.body.appendChild(mask);
+        const chk = mask.querySelector('#privacyChk');
+        const agreeBtn = mask.querySelector('#privacyAgree');
+        chk.addEventListener('change', () => { agreeBtn.disabled = !chk.checked; });
+        mask.querySelector('#privacyDecline').addEventListener('click', () => { mask.remove(); });
+        agreeBtn.addEventListener('click', async () => {
+          try {
+            await fetch(API_BASE + '/v1/users/privacy-consent?user_id=' + encodeURIComponent(USER_ID), {
+              method: 'POST', headers: authHeaders(),
+              body: JSON.stringify({ acknowledged: true, consent_version: agreement.consent_version })
+            });
+          } catch (e) { /* 落库失败不阻断本地记住 */ }
+          localStorage.setItem(STORE_KEYS.PRIVACY_VER, agreement.consent_version);
+          mask.remove();
+        });
+      } catch (e) { /* 网络失败静默 */ }
+    }
+
+    // ---- 练习须知页（每次练习确认）----
+    function renderExerciseIntro(key, tag) {
+      const box = document.getElementById('exerciseViewer');
+      box.innerHTML =
+        '<div class="ev-title">开始前，请了解这几件事</div>' +
+        '<div class="ev-desc" id="exIntroBody"><span class="loader"></span>加载须知…</div>' +
+        '<div id="exIntroActions"></div>';
+      fetch(API_BASE + '/v1/exercises/' + tag + '/intro', { headers: authHeaders() })
+        .then(r => { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); })
+        .then(intro => {
+          const points = intro.disclaimer_points.map(p => '<li>' + escapeHtml(p) + '</li>').join('');
+          document.getElementById('exIntroBody').innerHTML =
+            '<div style="font-weight:600;margin-bottom:4px;">' + escapeHtml(intro.name) + ' · ' + intro.step_count + ' 个步骤</div>' +
+            '<div style="margin-bottom:10px;">' + escapeHtml(intro.description || '') + '</div>' +
+            '<ul style="padding-left:18px;line-height:1.8;">' + points + '</ul>';
+          document.getElementById('exIntroActions').innerHTML =
+            '<label style="display:flex;gap:8px;align-items:flex-start;font-size:13px;margin:14px 0;">' +
+            '<input type="checkbox" id="exIntroChk" style="margin-top:3px;">' +
+            '<span>我已阅读并确认以上须知</span></label>' +
+            '<div class="ev-actions">' +
+            '<button class="btn btn-secondary" onclick="showExerciseList()">暂不开始</button>' +
+            '<button class="btn" id="exIntroGo" disabled>确认并开始练习</button>' +
+            '</div>';
+          const chk = document.getElementById('exIntroChk');
+          const go = document.getElementById('exIntroGo');
+          chk.addEventListener('change', () => { go.disabled = !chk.checked; });
+          go.addEventListener('click', () => {
+            fetch(API_BASE + '/v1/exercises/' + tag + '/consent?user_id=' + encodeURIComponent(USER_ID), {
+              method: 'POST', headers: authHeaders(),
+              body: JSON.stringify({ disclaimer_version: intro.disclaimer_version })
+            }).catch(() => {});
+            curExercise.introVersion = intro.disclaimer_version;
+            paintExercise();
+          });
+        })
+        .catch(() => { // 后端不可达：回退到直接开始（保持可用性）
+          paintExercise();
+        });
+    }
 
     const RISK_COLORS = { 'low': 'risk-low', 'elevated': 'risk-elevated', 'high': 'risk-high', 'critical': 'risk-critical' };
     const RISK_LABELS = { 'low': '低风险', 'elevated': '情绪升高', 'high': '高风险', 'critical': '危急' };
@@ -2047,6 +2132,8 @@
         renderTrend();
         loadExerciseRecords();
         document.getElementById('messageInput').focus();
+        // 20260904：隐私协议/数据处理协议使用前确认（版本变更后重新弹窗）
+        ensurePrivacyConsent();
       });
     }
 
@@ -2418,12 +2505,13 @@
         const res = await fetch(API_BASE + '/v1/exercises/' + tag + '?lang=zh', { headers: authHeaders() });
         if (!res.ok) throw new Error('HTTP ' + res.status);
         const data = await res.json();
-        curExercise = { key, tag, data, currentStep: 0, done: new Set(), responses: [] };
-        paintExercise();
+        curExercise = { key, tag, data, currentStep: 0, done: new Set(), responses: [], introVersion: '', dialog: [] };
+        // 20260904：每次练习先过须知确认页（用户决策：每次确认，防练习更新）
+        renderExerciseIntro(key, tag);
       } catch (err) {
         const mockData = EXERCISE_MOCK[tag];
         if (mockData) {
-          curExercise = { key, tag, data: mockData, currentStep: 0, done: new Set(), responses: [], mock: true };
+          curExercise = { key, tag, data: mockData, currentStep: 0, done: new Set(), responses: [], mock: true, dialog: [] };
           paintExercise();
         } else {
           box.innerHTML = '<div class="empty-tip">加载失败：' + escapeHtml(err.message) +
@@ -2812,21 +2900,139 @@
         reportExerciseComplete();
       }
     }
-    // M3：页面练习完成 → 服务端落库（source=panel）。失败静默，本地记录仍在。
+    // M3→20260904 报告化：页面练习完成 → 上报 step_responses + 确认位 →
+    // 服务端风险筛查 + AI 反馈 → 完成视图插入 AI 反馈卡与对话引导区。
     async function reportExerciseComplete() {
       if (!curExercise || curExercise.reported) return;
       curExercise.reported = true;
       const note = ((curExercise.responses || []).slice().reverse().find(x => (x || '').trim()) || '');
       try {
-        await fetch(API_BASE + '/v1/exercises/' + curExercise.tag + '/complete?user_id=' +
+        const res = await fetch(API_BASE + '/v1/exercises/' + curExercise.tag + '/complete?user_id=' +
           encodeURIComponent(USER_ID) + '&source=panel', {
           method: 'POST',
           headers: authHeaders(),
-          body: JSON.stringify({ reflection_note: note.slice(0, 500) })
+          body: JSON.stringify({
+            reflection_note: note.slice(0, 500),
+            step_responses: (curExercise.responses || []).map(x => (x || '').slice(0, 800)),
+            consent_acknowledged: true,
+            disclaimer_version: curExercise.introVersion || ''
+          })
         });
+        if (res.ok) {
+          const data = await res.json();
+          curExercise.report = data;
+          renderAiFeedbackAndGuidance(data);
+        }
         // 上报成功后立即刷新练习记录，用户刚做完不应还显示"还没有练习记录"
         loadExerciseRecords();
-      } catch (err) { /* 服务端不可达时不上报 */ }
+      } catch (err) { /* 服务端不可达时不上报，本地温柔总结仍在 */ }
+    }
+
+    // AI 反馈卡 + 完成后对话引导（单次练习内多轮，用户决策 2026-09-04）
+    function renderAiFeedbackAndGuidance(data) {
+      const banner = document.querySelector('#exerciseViewer .completion-banner');
+      if (!banner) return;
+      const wrap = document.createElement('div');
+      wrap.id = 'exAiSection';
+      let html = '';
+      if (data.ai_feedback) {
+        html += '<div class="ex-guided-step" style="margin-top:14px;">' +
+          '<span class="ex-step-label">AI 反馈</span>' +
+          '<div style="font-size:14px;line-height:1.8;white-space:pre-wrap;">' + escapeHtml(data.ai_feedback) + '</div>' +
+          '</div>';
+      }
+      const paused = data.generated_by === 'safety_pause' || data.risk_level === 'elevated';
+      if (paused) {
+        html += '<div class="empty-tip" style="margin-top:10px;">我们在你的回答里听到了一些沉重的信号，先停一下练习——上面的求助资源现在对你更重要。</div>';
+      } else {
+        html +=
+          '<div id="exGuideBox" style="margin-top:14px;">' +
+          '<div class="ex-step-label">和 AI 聊聊这次练习</div>' +
+          '<div id="exGuideLog" style="display:flex;flex-direction:column;gap:8px;margin:10px 0;"></div>' +
+          '<div style="display:flex;gap:8px;">' +
+          '<input type="text" id="exGuideInput" class="gr-slot" style="flex:1;" placeholder="说说刚才写下的感受，比如\u201c被误解了，心里不是滋味\u201d" onkeydown="if(event.key===\'Enter\')exGuideSend()">' +
+          '<button class="btn" onclick="exGuideSend()">发送</button>' +
+          '</div>' +
+          '<div class="ev-actions" style="margin-top:10px;">' +
+          '<button class="btn btn-secondary" onclick="exGuideFinish()">结束引导，生成报告</button>' +
+          '</div></div>';
+      }
+      wrap.innerHTML = html;
+      banner.parentNode.insertBefore(wrap, banner.nextSibling);
+      const actions = wrap.nextElementSibling;
+      if (paused && actions) actions.remove();
+    }
+
+    function exGuideAppend(role, text) {
+      const log = document.getElementById('exGuideLog');
+      if (!log) return;
+      const bubble = document.createElement('div');
+      bubble.style.cssText = 'max-width:88%;padding:8px 12px;border-radius:12px;font-size:13px;line-height:1.6;' +
+        (role === 'user' ? 'align-self:flex-end;background:#57affa;color:#fff;' : 'align-self:flex-start;background:#f2f2f2;');
+      bubble.textContent = text;
+      log.appendChild(bubble);
+      log.scrollTop = log.scrollHeight;
+    }
+
+    async function exGuideSend() {
+      const input = document.getElementById('exGuideInput');
+      if (!input || !curExercise) return;
+      const msg = input.value.trim();
+      if (!msg) return;
+      input.value = '';
+      exGuideAppend('user', msg);
+      const steps = curExercise.data.steps || [];
+      try {
+        const res = await fetch(API_BASE + '/v1/exercises/' + curExercise.tag + '/guidance?user_id=' +
+          encodeURIComponent(USER_ID), {
+          method: 'POST', headers: authHeaders(),
+          body: JSON.stringify({
+            step_index: steps.length - 1,
+            step_guide: steps[steps.length - 1] || '',
+            step_responses: (curExercise.responses || []).map(x => (x || '').slice(0, 800)),
+            user_message: msg.slice(0, 2000),
+            dialog_history: (curExercise.dialog || []).slice(-20),
+            expected_language: 'zh'
+          })
+        });
+        if (!res.ok) throw new Error('HTTP ' + res.status);
+        const data = await res.json();
+        exGuideAppend('assistant', data.reply);
+        curExercise.dialog.push({ role: 'user', content: msg }, { role: 'assistant', content: data.reply });
+        if (data.status === 'risk_paused') {
+          // 危机信号：停止引导，展示求助资源口径
+          const box = document.getElementById('exGuideBox');
+          if (box) box.innerHTML = '<div class="empty-tip">先照顾好自己。上面的危机求助资源现在对你更重要，练习可以随时回来。</div>';
+        }
+      } catch (err) {
+        exGuideAppend('assistant', '（引导服务暂时不可用，你可以先结束练习，报告会保留你写下的内容。）');
+      }
+    }
+
+    function exGuideFinish() {
+      if (!curExercise) return;
+      const report = curExercise.report || {};
+      const d = curExercise.data;
+      const steps = d.steps || [];
+      const responses = curExercise.responses || [];
+      const stepsRecap = steps.map((s, i) => {
+        const a = (responses[i] || '').trim();
+        return a ? '<li><b>步骤 ' + (i + 1) + '：</b>' + escapeHtml(a) + '</li>' : '';
+      }).filter(Boolean).join('');
+      const transcript = (curExercise.dialog || []).map(t =>
+        '<li style="margin:4px 0;"><b>' + (t.role === 'user' ? '你' : 'AI') + '：</b>' + escapeHtml(t.content) + '</li>'
+      ).join('');
+      document.getElementById('exAiSection').innerHTML =
+        '<div class="ex-guided-step">' +
+        '<span class="ex-step-label">本次练习报告</span>' +
+        (report.ai_feedback ? '<div style="font-size:14px;line-height:1.8;white-space:pre-wrap;margin:8px 0;">' + escapeHtml(report.ai_feedback) + '</div>' : '') +
+        (stepsRecap ? '<div style="font-size:12px;color:#666;margin-top:8px;">你写下的回答</div><ul style="padding-left:18px;font-size:13px;line-height:1.7;">' + stepsRecap + '</ul>' : '') +
+        (transcript ? '<div style="font-size:12px;color:#666;margin-top:8px;">引导对话</div><ul style="padding-left:18px;font-size:13px;line-height:1.7;list-style:none;">' + transcript + '</ul>' : '') +
+        '<div class="ev-actions" style="margin-top:12px;">' +
+        '<button class="btn btn-secondary" onclick="restartExercise()">再来一次</button>' +
+        '<button class="btn" onclick="showExerciseList()">返回练习列表</button>' +
+        '</div></div>';
+      loadExerciseRecords();
     }
     function markStepDone() {
       saveAndAdvance();
@@ -2841,7 +3047,11 @@
       curExercise.currentStep = 0;
       curExercise.done = new Set();
       curExercise.responses = [];
-      paintExercise();
+      curExercise.dialog = [];
+      curExercise.reported = false;
+      curExercise.report = null;
+      // 20260904：每次练习都需重新确认须知（用户决策）
+      renderExerciseIntro(curExercise.key, curExercise.tag);
     }
 
     // ========== Assessments (C2) ==========
@@ -2880,11 +3090,44 @@
       // 答题过程中隐藏历史与 AI 解读——不在测试时添堵（出结果后随详情页展示）
       document.getElementById('assessHistorySection').style.display = 'none';
       document.getElementById('assessAnalysisSection').style.display = 'none';
+      // 20260904：评估须知页（每次确认，服务端强校验）——先拉量表详情拿条款
+      try {
+        const guide0 = await (await fetch(API_BASE + '/v1/assessments/questionnaires/' + code, { headers: authHeaders() })).json();
+        const points = (guide0.disclaimer_points || []).map(p => '<li>' + escapeHtml(p) + '</li>').join('');
+        box.innerHTML =
+          '<div class="ev-title">开始前，请了解这几件事</div>' +
+          '<div class="ev-desc">' +
+          '<div style="font-weight:600;margin-bottom:6px;">' + escapeHtml(guide0.title || '') + ' · ' + escapeHtml(guide0.timeframe || '') + '</div>' +
+          '<ul style="padding-left:18px;line-height:1.8;">' + points + '</ul></div>' +
+          '<label style="display:flex;gap:8px;align-items:flex-start;font-size:13px;margin:14px 0;">' +
+          '<input type="checkbox" id="asIntroChk" style="margin-top:3px;">' +
+          '<span>我已阅读并确认以上须知</span></label>' +
+          '<div class="ev-actions">' +
+          '<button class="btn btn-secondary" onclick="showAssessList()">暂不开始</button>' +
+          '<button class="btn" id="asIntroGo" disabled>确认并开始评估</button></div>';
+        const chk = document.getElementById('asIntroChk');
+        const go = document.getElementById('asIntroGo');
+        chk.addEventListener('change', () => { go.disabled = !chk.checked; });
+        go.addEventListener('click', () => launchAssessSession(code, guide0.disclaimer_version || ''));
+      } catch (err) {
+        // 量表详情拉取失败：回退直接开始（旧后端兼容）
+        launchAssessSession(code, '');
+      }
+    }
+
+    async function launchAssessSession(code, disclaimerVersion) {
+      const box = document.getElementById('assessViewBox');
+      box.innerHTML = '<div class="empty-tip"><span class="loader"></span>开始会话…</div>';
       try {
         const res = await fetch(API_BASE + '/v1/assessments/sessions', {
           method: 'POST',
           headers: authHeaders(),
-          body: JSON.stringify({ user_id: USER_ID, assessment_type: code })
+          body: JSON.stringify({
+            user_id: USER_ID,
+            assessment_type: code,
+            consent_acknowledged: true,
+            disclaimer_version: disclaimerVersion
+          })
         });
         if (!res.ok) throw new Error('HTTP ' + res.status);
         const view = await res.json();
@@ -3267,18 +3510,50 @@
         const rows = records.map(r => {
           const d = new Date(r.completed_at);
           const dateStr = d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
-          const noteHtml = r.reflection_note
-            ? '<div class="cl-note" style="font-size:12px;color:var(--muted);padding:0 2px 6px;">「' + escapeHtml(r.reflection_note) + '」</div>'
+          const noteHtml = r.ai_feedback
+            ? '<div class="cl-note" style="font-size:12px;color:var(--muted);padding:0 2px 6px;">' + escapeHtml(r.ai_feedback.slice(0, 60)) + (r.ai_feedback.length > 60 ? '…' : '') + '</div>'
+            : (r.reflection_note
+              ? '<div class="cl-note" style="font-size:12px;color:var(--muted);padding:0 2px 6px;">「' + escapeHtml(r.reflection_note) + '」</div>'
+              : '');
+          const flag = r.risk_flag && r.risk_flag !== 'low'
+            ? '<span class="h-src" style="color:#c0392b;font-weight:600;">⚠ 需要关照</span>'
             : '';
-          return '<div class="history-row">' +
+          const clickable = r.id ? ' style="cursor:pointer;" onclick="openExerciseRecord(' + r.id + ')"' : '';
+          return '<div class="history-row"' + clickable + '>' +
             '<span class="h-date">' + dateStr + '</span>' +
             '<span class="h-type">' + escapeHtml(exerciseLabel(r.exercise_tag)) + '</span>' +
-            '<span class="h-src">' + escapeHtml(SRC_LABELS[r.source] || r.source) + '</span>' +
+            '<span class="h-src">' + escapeHtml(SRC_LABELS[r.source] || r.source) + flag + '</span>' +
             '</div>' + noteHtml;
         }).join('');
         body.innerHTML = '<div class="history-table">' + rows + '</div>';
       } catch (err) {
         body.innerHTML = '<div class="empty-history">练习记录加载失败：' + escapeHtml(err.message) + '</div>';
+      }
+    }
+
+    // 20260904：练习报告详情（本人可见；步骤回答 + AI 反馈）
+    async function openExerciseRecord(recordId) {
+      const body = document.getElementById('exerciseHistoryBody');
+      try {
+        const res = await fetchOrThrow(API_BASE + '/v1/exercises/records/' + recordId + '?user_id=' + encodeURIComponent(USER_ID));
+        const r = await res.json();
+        const steps = (r.step_responses || []).map((a, i) =>
+          a ? '<li style="margin:4px 0;"><b>步骤 ' + (i + 1) + '：</b>' + escapeHtml(a) + '</li>' : ''
+        ).filter(Boolean).join('');
+        const flagNote = r.risk_flag
+          ? '<div style="color:#c0392b;font-size:12px;margin:8px 0;">⚠ 这份记录完成时被标记需要关照——如果你此刻仍感到沉重，请使用危机求助资源。</div>'
+          : '';
+        body.innerHTML =
+          '<div class="history-table">' +
+          '<button class="link-btn" onclick="loadExerciseRecords()">← 返回记录列表</button>' +
+          '<div style="font-weight:700;margin:10px 0 4px;">' + escapeHtml(exerciseLabel(r.exercise_tag)) +
+          ' <span style="font-weight:400;color:var(--muted);font-size:12px;">' + new Date(r.completed_at).toLocaleString() + '</span></div>' +
+          flagNote +
+          (r.ai_feedback ? '<div class="ex-guided-step" style="margin:10px 0;"><span class="ex-step-label">AI 反馈</span><div style="font-size:13px;line-height:1.8;white-space:pre-wrap;">' + escapeHtml(r.ai_feedback) + '</div></div>' : '') +
+          (steps ? '<div style="font-size:12px;color:#666;margin-top:10px;">你写下的回答</div><ul style="padding-left:18px;font-size:13px;line-height:1.7;">' + steps + '</ul>' : '<div class="empty-history">这份记录没有步骤回答（对话内完成）。</div>') +
+          '</div>';
+      } catch (err) {
+        body.innerHTML = '<div class="empty-history">报告加载失败：' + escapeHtml(err.message) + '</div>';
       }
     }
 
