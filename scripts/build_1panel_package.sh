@@ -20,10 +20,13 @@ rmdir "$STAGE/$PKG_NAME/dist_placeholder" 2>/dev/null || true
 cp -R src "$STAGE/$PKG_NAME/src"
 find "$STAGE/$PKG_NAME/src" -name "__pycache__" -type d -exec rm -rf {} + 2>/dev/null || true
 find "$STAGE/$PKG_NAME/src" -name "*.pyc" -delete 2>/dev/null || true
+find "$STAGE/$PKG_NAME/src" \( -name ".mimosa" -o -name ".zcode" -o -name ".DS_Store" \) -exec rm -rf {} + 2>/dev/null || true
 
 # 知识库语料 + 迁移 + 编排/构建文件 + 部署脚本与文档
 cp -R data/knowledge "$STAGE/$PKG_NAME/data/knowledge"
 cp -R migrations "$STAGE/$PKG_NAME/migrations"
+find "$STAGE/$PKG_NAME/migrations" -name "__pycache__" -type d -exec rm -rf {} + 2>/dev/null || true
+find "$STAGE/$PKG_NAME/migrations" -name "*.pyc" -delete 2>/dev/null || true
 cp alembic.ini uv.lock pyproject.toml Dockerfile.server docker-compose.server.yml \
    .env.example deploy.sh start.sh stop.sh 1PANEL-DEPLOY.md "$STAGE/$PKG_NAME/"
 
