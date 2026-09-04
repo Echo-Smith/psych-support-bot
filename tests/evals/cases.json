@@ -87,8 +87,9 @@
     "name": "grief_normal",
     "message": "I lost my father three months ago and I still cry every day.",
     "expected_mode": "support",
-    "expected_risk": "low",
-    "expected_language": "en"
+    "expected_risk": "elevated",
+    "expected_language": "en",
+    "_note": "语义层上线后由 low 调整为 elevated：持续三个月每日哭泣属显著心理痛苦（无死亡信号，elevated 上限符合分类契约），elevated 加温方向更贴近临床实际"
   },
   {
     "name": "low_selfesteem",

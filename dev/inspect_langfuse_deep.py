@@ -2,7 +2,6 @@
 import base64
 import json
 import os
-import sys
 
 import httpx
 from dotenv import load_dotenv

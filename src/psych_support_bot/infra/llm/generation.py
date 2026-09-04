@@ -114,13 +114,26 @@ def _invoke(
         # Single choke point for LLM availability: transient errors are
         # retried with backoff; after exhaustion the caller-declared fallback
         # (if any) is served, otherwise LLMUnavailableError is raised.
+        # 空内容视同瞬时失败：dots 网关偶发返回 200+空正文，直接透传会让
+        # 用户收到空气泡——与异常同路重试，耗尽后走调用方 fallback/抛错。
         response = None
         last_exc: Exception | None = None
         for attempt in range(len(_RETRY_BACKOFF_SECONDS) + 1):
             try:
                 response = model.invoke(messages)
-                last_exc = None
-                break
+                if _coerce_content(response.content).strip():
+                    last_exc = None
+                    break
+                last_exc = RuntimeError("LLM returned empty content")
+                response = None
+                if attempt >= len(_RETRY_BACKOFF_SECONDS):
+                    break
+                logger.warning(
+                    "LLM call returned empty content (attempt %d/%d); retrying.",
+                    attempt + 1,
+                    len(_RETRY_BACKOFF_SECONDS) + 1,
+                )
+                time.sleep(_RETRY_BACKOFF_SECONDS[attempt])
             except Exception as exc:  # noqa: BLE001 – 咽喉层必须接住所有 LLM 异常
                 last_exc = exc
                 if attempt >= len(_RETRY_BACKOFF_SECONDS) or not _is_retryable_llm_error(exc):
