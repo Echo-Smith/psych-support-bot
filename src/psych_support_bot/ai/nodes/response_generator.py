@@ -137,6 +137,7 @@ def _generate_normal_reply(state: GraphState, risk_level: str, no_question_mode:
                 loop_hint="Prioritize safety, validation, and gentle redirection to support resources.",
                 expected_language=state.get("expected_language", ""),
                 emotional_state=state.get("emotional_state", ""),
+                history=[dict(turn) for turn in (state.get("recent_history") or [])],
             )
             state["consultation_opinions"] = []
         except Exception:
@@ -186,6 +187,7 @@ def _generate_normal_reply(state: GraphState, risk_level: str, no_question_mode:
                 # 生成时就明确告知上一轮已交付过内容，不要复述。
                 anti_repeat_note=_anti_repeat_note(),
                 emotional_state=state.get("emotional_state", ""),
+                history=[dict(turn) for turn in (state.get("recent_history") or [])],
             )
             state["consultation_opinions"] = []
     except Exception:

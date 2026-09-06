@@ -5,7 +5,7 @@ from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from functools import partial
 
-from langchain_core.messages import HumanMessage, SystemMessage
+from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 
 from psych_support_bot.ai.consultation import consultation_agents
 from psych_support_bot.ai.prompts.templates import (
@@ -101,6 +101,20 @@ def _enforce_language(output: str, expected_language: str) -> str:
     return output
 
 
+def _history_messages(history: list[dict[str, str]] | None) -> list:
+    """逐字近史 → 标准 API 消息序列（user/assistant，按传入顺序）。"""
+    out: list = []
+    for turn in history or []:
+        content = turn.get("content", "")
+        if not content:
+            continue
+        if turn.get("role") == "assistant":
+            out.append(AIMessage(content=content))
+        else:
+            out.append(HumanMessage(content=content))
+    return out
+
+
 def _usage_details(response: object) -> dict[str, int] | None:
     """Map langchain usage_metadata onto Langfuse usage_details keys.
 
@@ -133,19 +147,24 @@ def _invoke(
     mode: str = "support",
     fallback: Callable[[], str] | None = None,
     user_context: str = "",
+    history: list[dict[str, str]] | None = None,
 ) -> str:
     """LLM 调用咽喉层。
 
-    user_context（Phase 2）：memory/knowledge 等参考数据不再进 system
-    prompt，而是作为数据块前缀拼进本轮 HumanMessage——系统之声保持
-    纯净（指令层），数据紧贴用户本轮输入且位于缓存断点之后。
+    消息结构（Phase 3 上下文拼接修复，标准 API 格式）：
+
+        [SystemMessage 静态前缀+每轮状态]           ← 前缀字节稳定，缓存命中区
+        *[历史轮次 HumanMessage/AssistantMessage]   ← 逐字近史，标准角色
+        [HumanMessage 数据区前缀 + 本轮用户消息]     ← 动态信息追加在末尾
+
+    user_context（memory/knowledge 参考数据）作为数据块前缀拼进本轮
+    HumanMessage；history 为逐字近史（user/assistant 交替，时间正序），
+    让「换个方向吧」这类上下文依赖型消息可被正确解读。
     """
     model = build_chat_model(temperature=get_temperature_for_mode(mode), mode=mode)
     human_content = f"{user_context}\n\n{user_message}" if user_context else user_message
-    messages = [
-        SystemMessage(content=system_prompt),
-        HumanMessage(content=human_content),
-    ]
+    messages: list = [SystemMessage(content=system_prompt), *_history_messages(history)]
+    messages.append(HumanMessage(content=human_content))
     settings = get_settings()
     with trace_span(
         "llm.invoke",
@@ -221,6 +240,7 @@ def _invoke(
             retry_response = model.invoke(
                 [
                     SystemMessage(content=retry_prompt),
+                    *_history_messages(history),
                     HumanMessage(content=human_content),
                 ]
             )
@@ -398,6 +418,7 @@ def generate_clinically_bounded_reply(
     no_question_mode: bool = False,
     anti_repeat_note: str = "",
     emotional_state: str = "",
+    history: list[dict[str, str]] | None = None,
 ) -> str:
     if not expected_language:
         expected_language = _expected_language(user_message)
@@ -408,12 +429,15 @@ def generate_clinically_bounded_reply(
         [
             # --- 静态前缀区（仅随语言分池；部署才变）---
             build_static_prefix(expected_language),
-            # --- 每轮状态区（缓存断点之后）---
+            # --- 每轮状态区（缓存断点之后）：结构化字段，流程驱动 ---
+            "## Turn context",
             build_boundary_state_prompt(
                 risk_level=risk_level,
                 emotional_state=emotional_state,
             ),
+            "## Reply shape",
             build_mode_shape_prompt(mode, risk_level, no_question_mode=no_question_mode),
+            "## Process frame",
             build_process_state_prompt(
                 interview_stage=interview_stage,
                 question_strategy=question_strategy,
@@ -438,7 +462,14 @@ def generate_clinically_bounded_reply(
     # Inject diagnosis refusal prompt if user is asking for a diagnosis
     if _is_diagnosis_request(user_message):
         system_prompt = system_prompt + "\n\n" + build_diagnosis_refusal_prompt()
-    return _invoke(system_prompt, user_message, expected_language, mode=mode, user_context=user_context)
+    return _invoke(
+        system_prompt,
+        user_message,
+        expected_language,
+        mode=mode,
+        user_context=user_context,
+        history=history,
+    )
 
 
 def generate_assessment_history_analysis(

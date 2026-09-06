@@ -64,3 +64,8 @@ class GraphState(TypedDict):
     # LLM 语义层输出的知识主题（闭集枚举，≤3 个；[]=不可用）。knowledge_loader
     # 与关键词 topics 取并集作检索通道——"心情很低落"这类词表外表达由此可达。
     llm_topics: list[str]
+    # 会话逐字近史（P3 上下文拼接修复）：最近 N 条 user/assistant 消息
+    # （[{"role": "user"|"assistant", "content": str}]，时间正序）。以标准
+    # API 格式追加在消息列表末尾——「换个方向吧」这类上下文依赖型消息
+    # 此前因模型看不到逐字近史而被误读（Langfuse 2026-09-06 实证）。
+    recent_history: list[dict[str, str]]

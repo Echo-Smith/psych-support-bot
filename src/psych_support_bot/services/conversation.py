@@ -33,6 +33,10 @@ from psych_support_bot.services.support import _days_since, _detect_expected_lan
 # elevated-risk floor on every incoming message.
 SAFETY_FLOOR_WINDOW_DAYS = 7
 
+# 逐字近史条数：以标准 API 格式进 prompt 的最近 user/assistant 消息上限。
+# 覆盖最近 3 个完整问答对——「换个方向吧」这类指代性消息的可解读窗口。
+RECENT_HISTORY_TURNS = 6
+
 
 logger = logging.getLogger(__name__)
 
@@ -103,6 +107,15 @@ class ConversationService:
         # build_memory_snapshot 完成。
         prior_messages = get_session_messages(session, session_id) if payload.session_id else []
         expected_language = _detect_expected_language(payload.message, prior_messages)
+        # 逐字近史（P3 上下文拼接修复）：最近 6 条 user/assistant 消息以标准
+        # API 格式追加在消息末尾——「换个方向吧」这类上下文依赖型消息此前
+        # 因模型看不到逐字近史而被误读（Langfuse 2026-09-06 实证：摘要过期
+        # + 粘贴截断，模型从记忆碎片里抓线头）。
+        recent_history = [
+            {"role": str(msg.role), "content": str(msg.content)}
+            for msg in prior_messages[-RECENT_HISTORY_TURNS:]
+            if msg.role in {"user", "assistant"} and (msg.content or "").strip()
+        ]
 
         memory_summary = payload.memory_summary or build_memory_snapshot(
             session, payload.user_id, language=expected_language
@@ -149,6 +162,8 @@ class ConversationService:
             "no_question_mode": classify_disengage(payload.message) == "quiet",
             # Depth of this conversation; feeds stage-floor escalation.
             "turn_count": len(prior_messages),
+            # 逐字近史（标准 API 格式，追加在消息末尾）
+            "recent_history": recent_history,
             # A recent flagged screening (PHQ-9 item 9 etc.) raises the risk
             # floor so quiet/ambiguous turns still land in the safety path.
             "safety_floor_risk_level": (

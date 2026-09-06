@@ -126,6 +126,9 @@ def _prepare_speculative_args(state: GraphState) -> dict | None:
         "loop_hint": loop_hint,
         "expected_language": state.get("expected_language", ""),
         "no_question_mode": bool(state.get("no_question_mode", False)),
+        # 投机回复与正式生成看到同一份逐字近史——否则投机轮对上下文依赖型
+        # 消息（「换个方向吧」）的解读会与正式路径不一致。
+        "history": [dict(turn) for turn in (state.get("recent_history") or [])],
     }
 
 

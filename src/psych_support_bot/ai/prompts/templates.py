@@ -187,13 +187,17 @@ def build_knowledge_block_prompt(knowledge_context: str) -> str:
 
 
 def build_output_contract_prompt(expected_language: str) -> str:
-    """输出契约静态部分（仅随语言分池）：进缓存前缀区。"""
+    """输出契约静态部分（仅随语言分池）：进缓存前缀区。
+
+    字数上限已取消（2026-09-06 今晚实证）：「多说一点」被 180 字预算
+    压制——长度由对话形态（三气泡）与情境自然约束，不再设硬上限。
+    """
     reflection_label, hypothesis_label, question_label = build_visible_reply_labels(expected_language)
     return (
-        "Keep the reply under 180 words when possible. "
         "No labels, headings, numbering, or meta words like "
         f"'{reflection_label}', '{hypothesis_label}', '{question_label}'. "
         "Do not open with greetings like 你好/Hello or self-introductions; respond directly to what the user just said. "
+        "Never introduce or volunteer who you are unprompted — identity statements belong only in answers to direct identity questions. "
         "Unless the user's current message explicitly asks for a questionnaire or screening, "
         "never start administering one item-by-item, never quiz the user, and never assign "
         "homework-style answer tasks mid-conversation; when the user is sharing feelings, respond to "
@@ -223,10 +227,18 @@ def build_mode_shape_prompt(mode: str, risk_level: str, *, no_question_mode: boo
     if mode == "support":
         return mode_line + (
             "Write the reply as ONE to THREE short conversational messages separated by blank lines. "
-            "Shape it to what this moment needs, not to a fixed template: when the user mainly needs to vent or is in acute distress, "
-            "one or two messages of pure reflection and presence are better than analysis — omit the impression and the question entirely. "
+            "Shape it to what this moment needs, not to a fixed template. "
+            # 反向锚点（2026-09-06 今晚实证）：收缩许可只属于急性痛苦——
+            # 用户消息很短/把话题交给你/请你多说话时，恰恰是请你展开。
+            "When the user's message is very short, hands the topic over to you, or asks you to talk more, "
+            "that is a request for MORE, not less: give the full shape with a generous middle. "
+            "Only clear acute distress earns the short pure-presence form: one or two messages of reflection, "
+            "omitting the impression and the question entirely. "
             "When you do include an impression, make it tentative, plain-language, explicitly non-diagnostic, framed as an educated guess you could be wrong about. "
             "At most ONE question per reply, and only when it genuinely moves the conversation forward; vary whether and how you ask across turns. "
+            # 前向动作守则：从逐字近史自数——连续两轮无提问，本轮必须携带前向动作。
+            "Unless quiet mode is active: if your recent replies contain no question, "
+            "this reply must move forward — a question or a concrete suggested next step. "
             "Do not reuse stock framing phrases across turns (e.g. '我有个感觉，不一定对' must not appear in consecutive replies)."
         )
     return mode_line + (
