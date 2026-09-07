@@ -16,6 +16,7 @@ import openai
 
 from psych_support_bot.ai.schemas.messages import ConversationRequest
 from psych_support_bot.infra.db.init_db import init_db
+from psych_support_bot.infra.db.repositories import create_questionnaire_session
 from psych_support_bot.infra.db.session import SessionLocal
 from psych_support_bot.infra.llm import generation as llm_generation
 from psych_support_bot.services import conversation as conversation_module
@@ -55,12 +56,7 @@ def test_questionnaire_llm_failure_falls_back_to_deterministic_prompt(monkeypatc
 
     user_id = f"llm-fail-questionnaire-{uuid4()}"
     with SessionLocal() as session:
-        start = conversation_service.respond(
-            ConversationRequest(user_id=user_id, message="我想做 PHQ-9"),
-            session=session,
-        )
-        assert start.mode == "assessment"
-        assert start.debug["source"] == "assessment_start"
+        create_questionnaire_session(session, user_id, "phq9")
 
         # 此时 LLM 全链路必抛 403——答题仍应得到确定性提示
         step = conversation_service.respond(

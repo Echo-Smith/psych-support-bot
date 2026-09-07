@@ -409,6 +409,21 @@ def append_questionnaire_answer(
     return session_record
 
 
+def bulk_submit_questionnaire_answers(
+    session: Session, session_record: QuestionnaireSessionRecord, answers: list[int]
+) -> QuestionnaireSessionRecord:
+    """面板整卷提交：客户端一次性送达全部作答，覆写会话记录。
+
+    逐题端点服务增量续答；整卷端点是最后一击——直接覆盖 answers_json，
+    长度/取值校验在路由层完成后才允许走到这里。
+    """
+    session_record.answers_json = json.dumps(answers)
+    session_record.current_index = len(answers)
+    session.commit()
+    session.refresh(session_record)
+    return session_record
+
+
 def complete_questionnaire_session(
     session: Session, session_record: QuestionnaireSessionRecord
 ) -> QuestionnaireSessionRecord:

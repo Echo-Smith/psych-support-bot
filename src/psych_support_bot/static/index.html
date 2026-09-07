@@ -1318,6 +1318,58 @@
       font-family: "Courier New", monospace;
     }
 
+    .opt-btn.selected {
+      border-color: var(--ink);
+      background: var(--ink);
+      color: #fff;
+    }
+
+    .pager-nav {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      margin-top: 12px;
+    }
+
+    .pager-hint {
+      flex: 1;
+      text-align: center;
+      font-size: 11px;
+      color: var(--muted);
+    }
+
+    .safety-banner {
+      margin-top: 10px;
+      padding: 10px 12px;
+      border: 1px solid #fecaca;
+      background: #fef2f2;
+      color: #991b1b;
+      border-radius: 8px;
+      font-size: 13px;
+      line-height: 1.7;
+    }
+
+    .deep-card {
+      border: 1px solid var(--rule);
+      background: #f8fafc;
+      border-radius: 12px;
+      padding: 12px 14px;
+      margin-top: 4px;
+    }
+
+    .deep-card .dc-title {
+      font-weight: 700;
+      font-size: 13px;
+      margin-bottom: 4px;
+    }
+
+    .deep-card .dc-desc {
+      font-size: 12px;
+      color: var(--muted);
+      line-height: 1.6;
+      margin-bottom: 8px;
+    }
+
     .result-box {
       padding: 18px;
       border: 2px solid var(--rule);
@@ -2409,6 +2461,11 @@
           ? data.reply.messages.slice(0, 3)
           : [data.reply.text];
         renderBotParts(parts, data.mode, data.risk, () => {
+          const dbg = data.debug || {};
+          // 聊天入口卡片化：新开问卷只发引导卡（会话由评估页确认须知后创建）
+          if (data.mode === 'assessment' && dbg.source === 'assessment_card' && dbg.assessment_type) {
+            renderAssessDeepLink(dbg.assessment_type);
+          }
           if (Array.isArray(data.question_options) && data.question_options.length) {
             renderScaleChips(data.question_options);
           }
@@ -2526,9 +2583,29 @@
       step();
     }
 
+    // 聊天入口卡片化：评估引导轮附「打开评估页」深链卡。
+    // 评估页为 shadcn 式逐题分页 + 整卷一次提交；会话在用户确认须知后才创建。
+    function renderAssessDeepLink(code) {
+      const chatArea = document.getElementById('chatArea');
+      const d = document.createElement('div');
+      d.className = 'msg bot';
+      d.innerHTML = '<div class="bubble"><div class="deep-card">' +
+        '<div class="dc-title">在这里完成评估</div>' +
+        '<div class="dc-desc">打开评估页，确认须知后逐题点选、一次提交，立刻看到结果。</div>' +
+        '<button class="btn" onclick="openAssessmentPage(\'' + code + '\')">开始评估</button>' +
+        '</div></div>';
+      chatArea.appendChild(d);
+      chatArea.scrollTop = chatArea.scrollHeight;
+    }
+
+    function openAssessmentPage(code) {
+      switchTab('tools');
+      switchToolsSeg('assess');
+      startAssess(code);
+    }
+
     // Tappable option chips for in-chat questionnaire items.
-    function clearStaleChips() {
-      document.querySelectorAll('.scale-options[data-live="1"]').forEach(el => {
+    function clearStaleChips() {      document.querySelectorAll('.scale-options[data-live="1"]').forEach(el => {
         el.dataset.live = '0';
         el.querySelectorAll('button').forEach(b => { b.disabled = true; b.style.opacity = '.5'; });
       });
@@ -3452,75 +3529,141 @@
         loadAssessResult();
         return;
       }
-      const item = v.next_item;
-      const total = v.total_items;
-      // 已答题数：答完全部后（next_item 为空）= total，不再出现"进度 10 / 9"
-      const answered = Math.min(v.current_index, total);
-      const pct = Math.max(0, Math.min(100, Math.round((answered / total) * 100)));
-      let optHtml = '';
-      if (item && item.options) {
-        optHtml = '<div class="opt-grid">' + item.options.map(o =>
-          '<button class="opt-btn" onclick="answerAssess(' + o.value + ')">' +
-          '<span class="v">' + o.value + '.</span> ' + escapeHtml(o.label) + '</button>'
-        ).join('') + '</div>';
+      // ---- shadcn 式逐题分页：作答状态本地持有，逐题导航零往返，整卷一次提交 ----
+      // 本地作答状态：服务端已有答案（对话里暂停后切到页面续作）优先，
+      // 其次恢复本地草稿，都没有则全部未作答。
+      const total = (g.items || []).length;
+      if (!curAssess.localAnswers) {
+        const serverAnswers = (v.answers || []).slice();
+        let draft = [];
+        try { draft = JSON.parse(localStorage.getItem(assessDraftKey(curAssess.type)) || '[]'); } catch (e) { draft = []; }
+        if (serverAnswers.length && serverAnswers.length <= total) {
+          curAssess.localAnswers = serverAnswers.concat(new Array(total - serverAnswers.length).fill(null));
+        } else if (Array.isArray(draft) && draft.length === total) {
+          curAssess.localAnswers = draft;
+        } else {
+          curAssess.localAnswers = new Array(total).fill(null);
+        }
+        const firstEmpty = curAssess.localAnswers.findIndex(a => a === null || a === undefined);
+        curAssess.pagerIndex = firstEmpty === -1 ? total - 1 : firstEmpty;
       }
+      paintAssessPager();
+    }
+
+    const ASSESS_SAFETY_BANNER =
+      '<div class="safety-banner">你刚选的这一项，提示你可能存在与死亡或自我伤害相关的想法。' +
+      '如果这些想法正在发生、在加重，或者你觉得很难控制：全国心理援助热线 <b>400-161-9995</b>（24 小时），' +
+      '紧急情况请直接拨打 <b>120</b>。你不必独自扛着这些。</div>';
+
+    function assessDraftKey(type) {
+      return 'psb_assess_draft_' + USER_ID + '_' + type;
+    }
+
+    function paintAssessPager() {
+      const box = document.getElementById('assessViewBox');
+      const g = curAssess.guide;
+      const items = g.items || [];
+      const total = items.length;
+      const opts = g.options || [];
+      const idx = curAssess.pagerIndex;
+      const answered = curAssess.localAnswers.filter(a => a !== null && a !== undefined).length;
+      const pct = Math.max(0, Math.min(100, Math.round((answered / total) * 100)));
+      const current = curAssess.localAnswers[idx];
+      const hasCurrent = current !== null && current !== undefined;
+      const isLast = idx === total - 1;
+      const allDone = answered === total;
+      // PHQ-9 第 9 题（index 8）选中 >0：即刻出安全资源，不等提交结算
+      const selfHarm = g.code === 'phq9' && idx === 8 && typeof current === 'number' && current > 0;
+      const optHtml = opts.map((o, i) =>
+        '<button class="opt-btn' + (current === o.value ? ' selected' : '') + '"' +
+        ' onclick="selectAssessOption(' + o.value + ')">' +
+        '<span class="v">' + o.value + '.</span> ' + escapeHtml(o.label) + '</button>'
+      ).join('');
       box.innerHTML =
         '<div class="av-head">' +
         '<div class="code">' + (g.code || '').toUpperCase() + '</div>' +
         '<div class="title">' + escapeHtml(g.title || '') + '</div>' +
         '<div class="timeframe">' + escapeHtml(g.timeframe || '') + '</div>' +
         '</div>' +
-        '<div class="progress-label"><span>进度 ' + answered + ' / ' + total + '</span><span>' + pct + '%</span></div>' +
+        '<div class="progress-label"><span>已答 ' + answered + ' / ' + total + '</span><span>' + pct + '%</span></div>' +
         '<div class="progress"><div class="progress-fill" style="width:' + pct + '%"></div></div>' +
-        (item
-          ? '<div class="q-box">' +
-          '<div class="q-index">第 ' + (answered + 1) + ' / ' + total + ' 题</div>' +
-          '<div class="q-text">' + escapeHtml(item.text || '') + '</div>' +
-          optHtml +
-          '</div>'
-          : '<div class="empty-tip">已答完所有问题，请点击下方完成按钮。</div>'
-        ) +
+        '<div class="q-box">' +
+        '<div class="q-index">第 ' + (idx + 1) + ' / ' + total + ' 题' + (hasCurrent ? ' · 已选 ' + current : '') + '</div>' +
+        '<div class="q-text">' + escapeHtml(items[idx] || '') + '</div>' +
+        '<div class="opt-grid">' + optHtml + '</div>' +
+        (selfHarm ? ASSESS_SAFETY_BANNER : '') +
+        '</div>' +
+        '<div class="pager-nav">' +
+        '<button class="btn btn-secondary"' + (idx === 0 ? ' disabled' : '') + ' onclick="assessGo(-1)">上一题</button>' +
+        '<span class="pager-hint">数字键 1-' + opts.length + ' 快捷作答，←→ 切题</span>' +
+        (isLast
+          ? '<button class="btn"' + (allDone ? '' : ' disabled') + ' onclick="submitAssessBulk()">提交并查看结果</button>'
+          : '<button class="btn"' + (hasCurrent ? '' : ' disabled') + ' onclick="assessGo(1)">下一题</button>') +
+        '</div>' +
         '<div class="actions-row">' +
-        (item
-          ? '<button class="btn btn-secondary" onclick="showAssessList()">退出（不保存进度）</button>'
-          : '<button class="btn" onclick="completeAssess()">完成并查看结果</button>') +
+        '<button class="btn btn-secondary" onclick="showAssessList()">退出（草稿已自动保存）</button>' +
         '</div>';
     }
-    async function answerAssess(value) {
-      if (!curAssess) return;
+
+    function selectAssessOption(value) {
+      if (!curAssess || !curAssess.localAnswers) return;
+      curAssess.localAnswers[curAssess.pagerIndex] = value;
+      try { localStorage.setItem(assessDraftKey(curAssess.type), JSON.stringify(curAssess.localAnswers)); } catch (e) { /* 隐私模式等场景静默降级 */ }
+      paintAssessPager();
+    }
+
+    function assessGo(delta) {
+      if (!curAssess || !curAssess.localAnswers) return;
+      const total = (curAssess.guide.items || []).length;
+      const next = curAssess.pagerIndex + delta;
+      if (next < 0 || next >= total) return;
+      curAssess.pagerIndex = next;
+      paintAssessPager();
+    }
+
+    async function submitAssessBulk() {
+      if (!curAssess || !curAssess.localAnswers) return;
+      const answers = curAssess.localAnswers.slice();
+      if (answers.some(a => a === null || a === undefined)) return; // 提交按钮已禁用，此处防御性兜底
+      const box = document.getElementById('assessViewBox');
+      box.innerHTML = '<div class="empty-tip">' + loadingLine('正在结算评估结果') + '</div>';
       try {
         const res = await fetch(API_BASE + '/v1/assessments/sessions/' + curAssess.session_id +
-          '/answers?user_id=' + encodeURIComponent(USER_ID), {
+          '/bulk?user_id=' + encodeURIComponent(USER_ID), {
           method: 'POST',
           headers: authHeaders(),
-          body: JSON.stringify({ value })
+          body: JSON.stringify({ answers })
         });
         if (!res.ok) throw new Error('HTTP ' + res.status);
-        curAssess.view = await res.json();
-        paintAssess();
-        // if all answered, auto show complete button
+        const data = await res.json();
+        try { localStorage.removeItem(assessDraftKey(curAssess.type)); } catch (e) { /* 忽略 */ }
+        curAssess.resultData = data;
+        // 结果卡即刻渲染：分数/分档/解读均为服务端确定性输出（无 LLM 等待）；
+        // 趋势 AI 解读由结果页按钮按需异步生成（showAssessSidePanels）。
+        paintAssessResult(data, curAssess.type);
       } catch (err) {
-        alert('作答失败：' + err.message);
+        box.innerHTML = '<div class="empty-tip">提交失败：' + escapeHtml(err.message) +
+          '<br><br><button class="btn btn-secondary" onclick="paintAssess()">返回作答</button>' +
+          '<button class="btn btn-secondary" style="margin-left:8px;" onclick="showAssessList()">返回列表</button></div>';
       }
     }
-    async function completeAssess() {
-      if (!curAssess) return;
-      const box = document.getElementById('assessViewBox');
-      box.innerHTML = '<div class="empty-tip">' + loadingLine('正在生成评估结果') + '</div>';
-      try {
-        const res = await fetch(API_BASE + '/v1/assessments/sessions/' + curAssess.session_id +
-          '/complete?user_id=' + encodeURIComponent(USER_ID), {
-          method: 'POST',
-          headers: authHeaders()
-        });
-        if (!res.ok) throw new Error('HTTP ' + res.status);
-        curAssess.resultData = await res.json();
-        paintAssessResult(curAssess.resultData, curAssess.type);
-      } catch (err) {
-        box.innerHTML = '<div class="empty-tip">失败：' + escapeHtml(err.message) +
-          '<br><br><button class="btn btn-secondary" onclick="showAssessList()">返回列表</button></div>';
+
+    // shadcn 式键盘快捷键：数字键 1-N 选择选项，←→ 切题（仅评估分页视图内生效）
+    document.addEventListener('keydown', (e) => {
+      if (!curAssess || !curAssess.localAnswers) return;
+      const viewer = document.getElementById('assessViewer');
+      if (!viewer || viewer.style.display === 'none') return;
+      if (!document.querySelector('#assessViewBox .q-box')) return; // 结果页/加载态不劫持按键
+      const tag = document.activeElement ? document.activeElement.tagName : '';
+      if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
+      if (e.key === 'ArrowRight') { assessGo(1); return; }
+      if (e.key === 'ArrowLeft') { assessGo(-1); return; }
+      const n = parseInt(e.key, 10);
+      if (!isNaN(n) && n >= 1) {
+        const opts = curAssess.guide.options || [];
+        if (n <= opts.length) { e.preventDefault(); selectAssessOption(opts[n - 1].value); }
       }
-    }
+    });
     async function loadAssessResult() {
       // Use history instead
       try {
