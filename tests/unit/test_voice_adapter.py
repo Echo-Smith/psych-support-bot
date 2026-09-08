@@ -427,8 +427,8 @@ def test_synthesize_minimax_success(monkeypatch, tts_key) -> None:
         [
             {"event": "connected_success", "base_resp": {"status_code": 0}},
             {"event": "task_started", "base_resp": {"status_code": 0}},
-            {"data": {"audio": hex_a}, "is_final": False, "base_resp": {"status_code": 0}},
-            {"data": {"audio": hex_b}, "is_final": True, "base_resp": {"status_code": 0}},
+            {"data": {"audio": hex_a}, "is_final": True, "base_resp": {"status_code": 0}},
+            {"data": {"audio": hex_b}, "is_final": False, "base_resp": {"status_code": 0}},
             {"event": "task_finished", "base_resp": {"status_code": 0}},
         ]
     )
@@ -447,6 +447,47 @@ def test_synthesize_minimax_success(monkeypatch, tts_key) -> None:
     assert events[1] == "task_continue"
     assert fake.sent[1]["text"] == "慢慢来"
     assert events[-1] == "task_finish"
+
+
+def test_synthesize_minimax_long_text_not_truncated_at_is_final(monkeypatch, tts_key) -> None:
+    """多句长文本：每句各有一次 is_final=true，只有 task_finished 是会话终点。
+
+    回归用例（生产 bug：循环把 is_final 当总终点，长回复只朗读第一句）。
+    """
+    _configure_minimax(tts_key)
+    first_sentence = b"sentence-one-audio".hex()
+    second_sentence = b"sentence-two-audio".hex()
+    third_sentence = b"sentence-three-audio".hex()
+    fake = _FakeWebSocket(
+        [
+            {"event": "connected_success", "base_resp": {"status_code": 0}},
+            {"event": "task_started", "base_resp": {"status_code": 0}},
+            # 第一句：sentence_start → 分块 → sentence_end（末块 is_final=true）
+            {"event": "sentence_start", "base_resp": {"status_code": 0}},
+            {"data": {"audio": first_sentence}, "is_final": True, "base_resp": {"status_code": 0}},
+            {"event": "sentence_end", "base_resp": {"status_code": 0}},
+            # 第二句
+            {"event": "sentence_start", "base_resp": {"status_code": 0}},
+            {"data": {"audio": second_sentence}, "is_final": True, "base_resp": {"status_code": 0}},
+            {"event": "sentence_end", "base_resp": {"status_code": 0}},
+            # 第三句 + 会话终点
+            {"event": "sentence_start", "base_resp": {"status_code": 0}},
+            {"data": {"audio": third_sentence}, "is_final": True, "base_resp": {"status_code": 0}},
+            {"event": "sentence_end", "base_resp": {"status_code": 0}},
+            {"event": "task_finished", "base_resp": {"status_code": 0}},
+        ]
+    )
+
+    def fake_connect(url, **kwargs):
+        return fake
+
+    import psych_support_bot.infra.voice.adapter as _adapter
+
+    monkeypatch.setattr(_adapter.websockets, "connect", fake_connect)
+    audio = synthesize("第一句。第二句。第三句。")
+    assert audio == b"sentence-one-audio" + b"sentence-two-audio" + b"sentence-three-audio"
+    # task_finish 仍在终点事件之后发送
+    assert fake.sent[-1]["event"] == "task_finish"
 
 
 def test_synthesize_minimax_task_failed(monkeypatch, tts_key) -> None:

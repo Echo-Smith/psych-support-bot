@@ -492,7 +492,13 @@ def _synthesize_minimax(config: TtsConfig, cleaned: str) -> bytes:
                 raise VoiceProviderError(f"MiniMax task_start failed: {started.get('base_resp')}")
 
             await ws.send(_json.dumps({"event": "task_continue", "text": cleaned}))
+            # task_finish 立即发送：服务端会先合成完缓冲中的全部文本再回
+            # task_finished（平台文档事件流程第 3/6 步）。
+            await ws.send(_json.dumps({"event": "task_finish"}))
 
+            # 结束语义（平台文档）：is_final 只表示「本次请求/当前句」音频结束，
+            # 多句长文本每句各有一次 is_final；task_finished 才是整个会话终点。
+            # 在 task_finished 前持续收集 task_continued 音频块。
             audio_done = False
             while not audio_done:
                 message = _json.loads(await asyncio.wait_for(ws.recv(), _MINIMAX_WS_IDLE_TIMEOUT))
@@ -500,24 +506,15 @@ def _synthesize_minimax(config: TtsConfig, cleaned: str) -> bytes:
                 status = base.get("status_code", 0)
                 if status != 0:
                     raise VoiceProviderError(f"MiniMax TTS error {status}: {base.get('status_msg')}")
+                event = message.get("event")
                 data = message.get("data") or {}
                 hex_audio = data.get("audio")
                 if hex_audio:
                     audio_chunks.append(bytes.fromhex(hex_audio))
                     if sum(len(c) for c in audio_chunks) > _MINIMAX_MAX_AUDIO_BYTES:
                         raise VoiceProviderError("MiniMax TTS audio exceeds size cap") from None
-                if message.get("is_final"):
+                if event in ("task_finished", "task_failed"):
                     audio_done = True
-
-            await ws.send(_json.dumps({"event": "task_finish"}))
-            # task_finished 到达前连接可能已被服务端关闭——尽力而为
-            try:
-                while True:
-                    final = _json.loads(await asyncio.wait_for(ws.recv(), _MINIMAX_WS_IDLE_TIMEOUT))
-                    if final.get("event") in {"task_finished", "task_failed"}:
-                        break
-            except (TimeoutError, websockets.ConnectionClosed):
-                pass
 
         audio = b"".join(audio_chunks)
         if not audio:
