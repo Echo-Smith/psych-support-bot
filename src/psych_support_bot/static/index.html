@@ -443,6 +443,37 @@
       border-color: #dc2626;
     }
 
+    /* 免提对话态：绿色描边 + 柔和绿呼吸（区别于一次性录音的红脉冲） */
+    #micBtn.conversation {
+      color: #059669;
+      border-color: #059669;
+    }
+
+    #micBtn.conversation:hover {
+      background: #fff;
+      color: #059669;
+      border-color: #059669;
+    }
+
+    #micBtn.listening {
+      animation: micPulseGreen 2.4s ease-out infinite;
+    }
+
+    @keyframes micPulseGreen {
+
+      0% {
+        box-shadow: 0 0 0 0 rgba(5, 150, 105, .25);
+      }
+
+      75% {
+        box-shadow: 0 0 0 9px rgba(5, 150, 105, 0);
+      }
+
+      100% {
+        box-shadow: 0 0 0 0 rgba(5, 150, 105, 0);
+      }
+    }
+
     @keyframes micPulse {
 
       0% {
@@ -2567,6 +2598,7 @@
       } catch (err) {
         console.error(err);
         addMessage('bot', '抱歉，遇到了问题：' + err.message + '。请确认后端服务正在运行。');
+        if (VOICE.mode === 'thinking') scheduleResumeListening(); // 网络失败后免提循环继续
       } finally {
         isLoading = false;
         document.getElementById('sendBtn').disabled = false;
@@ -2606,6 +2638,7 @@
       USER_ID = 'u_' + Math.random().toString(36).slice(2, 10);
       localStorage.setItem(STORE_KEYS.UID, USER_ID);
       SESSION_ID = null;
+      if (VOICE.mode !== 'idle') exitConversation();
       document.getElementById('currentMode').textContent = '未开始';
       document.getElementById('replySource').textContent = '已重置';
       appendDebug('session reset => user_id=' + USER_ID);
@@ -2756,6 +2789,12 @@
       recorder: null,
       chunks: [],
       audioEl: null,
+      mode: 'idle',          // 免提对话状态机：idle | listening | thinking | speaking
+      stream: null,          // 免提模式常驻麦克风流
+      vad: null,             // VAD 上下文（analyser/timer/基线）
+      mime: '',
+      discardUtterance: false,
+      lastCrisis: false,     // 上一轮是否危机回复（朗读结束后决定是否继续听）
       usedMic: localStorage.getItem('np_voice_used') === '1',
       // ttsPref 语义=「开声」。默认开声：仅显式存过 '0'（用户点过静音）才关
       ttsPref: localStorage.getItem('np_tts_pref') !== '0',
@@ -2819,9 +2858,16 @@
     function stopVoicePlayback() {
       if (VOICE.audioEl) { VOICE.audioEl.pause(); VOICE.audioEl = null; }
       if ('speechSynthesis' in window) window.speechSynthesis.cancel();
+      if (VOICE.mode === 'speaking') {
+        // pause() 不触发 onended：手动收尾，防止模式卡死在 speaking
+        VOICE.mode = 'idle';
+        setMicState('idle');
+        hideTyping();
+        document.getElementById('micHint').textContent = '点麦克风开启免提对话；说完自动发送';
+      }
     }
 
-    // 麦克风按钮双态图标：麦克风（待录）⇄ 圆角方块（录音中，点按停止）
+    // 麦克风按钮图标：麦克风（待录/聆听）⇄ 停止方块（录音中）⇄ 喇叭（朗读中）
     const MIC_ICON_SVG =
       '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' +
       '<path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3z"></path>' +
@@ -2832,51 +2878,196 @@
       '<svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor" stroke="none" aria-hidden="true">' +
       '<rect x="6" y="6" width="12" height="12" rx="2"></rect>' +
       '</svg>';
+    const SPEAKER_ICON_SVG =
+      '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' +
+      '<path d="M11 5 6 9H2v6h4l5 4V5z" fill="currentColor" stroke="none"></path>' +
+      '<path d="M15.5 8.5a5 5 0 0 1 0 7"></path>' +
+      '<path d="M18.5 5.5a9 9 0 0 1 0 13"></path>' +
+      '</svg>';
 
-    function setMicIcon(recording) {
+    // 按钮视觉随对话模式切换；recording=红色脉冲（正在采集一段话），
+    // listening/thinking/speaking=绿色系（免提循环中）
+    function setMicState(state) {
       const btn = document.getElementById('micBtn');
       if (!btn) return;
-      btn.innerHTML = recording ? STOP_ICON_SVG : MIC_ICON_SVG;
-      btn.classList.toggle('recording', !!recording);
-      btn.title = recording ? '停止录音' : '语音输入';
+      btn.classList.remove('recording', 'conversation', 'listening');
+      if (state === 'recording') {
+        btn.innerHTML = STOP_ICON_SVG;
+        btn.classList.add('recording');
+        btn.title = '正在听你说（静音即自动发送）；点击提前发送';
+      } else if (state === 'listening') {
+        btn.innerHTML = MIC_ICON_SVG;
+        btn.classList.add('conversation', 'listening');
+        btn.title = '免提对话中：直接说话即可；点击退出';
+      } else if (state === 'thinking' || state === 'speaking') {
+        btn.innerHTML = state === 'speaking' ? SPEAKER_ICON_SVG : MIC_ICON_SVG;
+        btn.classList.add('conversation');
+        btn.title = state === 'speaking' ? '点击打断朗读' : '思考中…';
+      } else {
+        btn.innerHTML = MIC_ICON_SVG;
+        btn.title = '语音输入';
+      }
     }
 
+    function setVoiceMode(mode) {
+      VOICE.mode = mode;
+      setMicState(mode);
+      if (mode === 'listening') showTyping('正在聆听');
+      if (mode === 'speaking') hideTyping();
+    }
+
+    // ---------------- 免提对话模式（能量 VAD 自动听-说循环） ----------------
+    // 麦克风一键进入：常驻 stream + AnalyserNode 本地能量检测——检测到人声
+    // 自动开录，静音 1.5s 自动停止并走既有「转写→发送」链路；回复朗读期间
+    // 暂停聆听（防回声），播完自动恢复。VAD 只算 RMS，音频不上传。
+
+    const VAD = {
+      TICK_MS: 100,          // 采样周期
+      START_MS: 200,         // 连续超阈 200ms 判定开口
+      END_SILENCE_MS: 1500,  // 静音 1.5s 判定说完
+      MIN_UTTERANCE_MS: 800, // 短于此的有效语音丢弃（防咳嗽/碰撞误触）
+      MAX_UTTERANCE_MS: 60000,
+    };
+
     function toggleMicRecording() {
-      if (VOICE.recording) { VOICE.recorder && VOICE.recorder.stop(); return; }
+      if (VOICE.mode === 'speaking') {
+        // 打断朗读：非危机且麦还开着 → 回聆听继续对话；否则回待机
+        const wasCrisis = VOICE.lastCrisis;
+        stopVoicePlayback();
+        if (!wasCrisis && VOICE.stream) setVoiceMode('listening');
+        return;
+      }
+      if (VOICE.mode !== 'idle') { exitConversation(); return; }       // listening/thinking 再点=退出
       if (!navigator.mediaDevices || !window.MediaRecorder) {
         addMessage('bot', '当前浏览器不支持录音，请直接打字。');
         return;
       }
       stopVoicePlayback();
       navigator.mediaDevices.getUserMedia({ audio: true }).then((stream) => {
-        VOICE.chunks = [];
-        // 编码优先级：MiniMax ASR 支持 mp4/aac 与 ogg/opus，不支持 webm 容器；
-        // Chrome 新版支持 audio/mp4，Safari 原生 mp4，Firefox 走 ogg，webm 仅兜底。
-        const mime = ['audio/mp4', 'audio/ogg;codecs=opus', 'audio/webm']
-          .find((m) => MediaRecorder.isTypeSupported(m)) || '';
-        const recorder = new MediaRecorder(stream, mime ? { mimeType: mime } : undefined);
-        VOICE.recorder = recorder;
-        recorder.ondataavailable = (e) => { if (e.data.size) VOICE.chunks.push(e.data); };
-        recorder.onstop = () => {
-          VOICE.recording = false;
-          stream.getTracks().forEach((t) => t.stop());
-          setMicIcon(false);
-          hideTyping();
-          const blob = new Blob(VOICE.chunks, { type: mime || 'audio/webm' });
-          if (blob.size > 1000) {
-            // 各家 ASR 支持的容器不一（如 MiniMax 不吃 Chrome 的 opus-in-mp4），
-            // 统一转 16kHz 单声道 WAV 上传——供应商无关，杜绝容器兼容问题。
-            transcodeToWav(blob)
-              .then((wav) => { if (wav.size > 1000) uploadForTranscribe(wav, 'audio/wav'); })
-              .catch(() => addMessage('bot', '录音处理失败，请直接打字或再试一次。'));
-          }
-        };
-        recorder.start();
-        VOICE.recording = true;
-        setMicIcon(true);
-        // 录音中的持续反馈；停止方式即按钮本身的红色停止态
-        showTyping('正在聆听');
+        VOICE.stream = stream;
+        setupVad(stream);
+        setVoiceMode('listening');
+        document.getElementById('micHint').textContent = '免提对话中：直接说话即可，说完自动发送；点麦克风或按 ESC 退出';
       }).catch(() => addMessage('bot', '无法访问麦克风，请检查浏览器权限后重试。'));
+    }
+
+    function setupVad(stream) {
+      const ctx = new (window.AudioContext || window.webkitAudioContext)();
+      const analyser = ctx.createAnalyser();
+      analyser.fftSize = 1024;
+      ctx.createMediaStreamSource(stream).connect(analyser);
+      const vad = {
+        ctx, analyser,
+        buf: new Float32Array(analyser.fftSize),
+        baseline: 0.006, calibrating: true, calSum: 0, calN: 0,
+        voiceStartAt: null, lastVoiceAt: 0, utterStartAt: 0,
+      };
+      VOICE.vad = vad;
+      vad.timer = setInterval(() => {
+        if (!VOICE.vad) return;
+        analyser.getFloatTimeDomainData(vad.buf);
+        let sum = 0;
+        for (let i = 0; i < vad.buf.length; i++) sum += vad.buf[i] * vad.buf[i];
+        const rms = Math.sqrt(sum / vad.buf.length);
+        if (vad.calibrating) {
+          // 开场 500ms 采环境底噪，阈值 = 底噪 × 3（有下限防完全静音环境）
+          vad.calSum += rms; vad.calN++;
+          if (vad.calN >= 5) {
+            vad.calibrating = false;
+            vad.baseline = Math.max(0.004, (vad.calSum / vad.calN) * 3);
+          }
+          return;
+        }
+        vadTick(rms);
+      }, VAD.TICK_MS);
+    }
+
+    function vadTick(rms) {
+      const vad = VOICE.vad;
+      const now = Date.now();
+      // 回声防护：回复思考/朗读期间不采集（防助手自己的声音触发录音）
+      if (VOICE.mode !== 'listening') { vad.lastVoiceAt = now; return; }
+      const voiced = rms > vad.baseline * 3;
+      if (!VOICE.recording) {
+        if (voiced) {
+          vad.voiceStartAt = vad.voiceStartAt || now;
+          if (now - vad.voiceStartAt >= VAD.START_MS) startUtterance();
+        } else {
+          vad.voiceStartAt = null;
+        }
+        return;
+      }
+      // 录音中：说完（静音 1.5s）自动发送；超长强制切段
+      if (voiced) vad.lastVoiceAt = now;
+      const voicedMs = now - vad.utterStartAt;
+      if (now - vad.lastVoiceAt >= VAD.END_SILENCE_MS) {
+        // 有效语音过短（咳嗽/碰撞）→ 丢弃不上传
+        VOICE.discardUtterance = voicedMs < VAD.MIN_UTTERANCE_MS;
+        stopUtterance();
+      } else if (voicedMs >= VAD.MAX_UTTERANCE_MS) {
+        stopUtterance();
+      }
+    }
+
+    function startUtterance() {
+      // 编码优先级：MiniMax ASR 支持 mp4/aac 与 ogg/opus，不支持 webm 容器
+      const mime = ['audio/mp4', 'audio/ogg;codecs=opus', 'audio/webm']
+        .find((m) => MediaRecorder.isTypeSupported(m)) || '';
+      const recorder = new MediaRecorder(VOICE.stream, mime ? { mimeType: mime } : undefined);
+      VOICE.chunks = [];
+      VOICE.discardUtterance = false;
+      VOICE.recorder = recorder;
+      VOICE.mime = mime;
+      VOICE.vad.utterStartAt = Date.now();
+      VOICE.vad.lastVoiceAt = Date.now();
+      recorder.ondataavailable = (e) => { if (e.data.size) VOICE.chunks.push(e.data); };
+      recorder.onstop = onUtteranceStop;
+      recorder.start();
+      VOICE.recording = true;
+      setMicState('recording');
+      showTyping('正在聆听');
+    }
+
+    function stopUtterance() {
+      if (VOICE.recorder && VOICE.recorder.state === 'recording') VOICE.recorder.stop();
+    }
+
+    function onUtteranceStop() {
+      VOICE.recording = false;
+      const blob = new Blob(VOICE.chunks, { type: VOICE.mime || 'audio/webm' });
+      if (VOICE.mode === 'idle' || VOICE.discardUtterance || blob.size <= 1000) {
+        if (VOICE.mode !== 'idle') setVoiceMode('listening'); // 丢弃段：继续听
+        return;
+      }
+      setVoiceMode('thinking');
+      // 各家 ASR 支持的容器不一：统一转 16kHz 单声道 WAV 上传（供应商无关）
+      transcodeToWav(blob)
+        .then((wav) => {
+          if (wav.size > 1000) return uploadForTranscribe(wav, 'audio/wav');
+          setVoiceMode('listening');
+        })
+        .catch(() => {
+          addMessage('bot', '录音处理失败，请直接打字或再试一次。');
+          scheduleResumeListening();
+        });
+    }
+
+    function scheduleResumeListening() {
+      if (VOICE.mode === 'idle') return;
+      // 等回复气泡渲染节奏走完再回听，避免用户听到「正在输入」就抢答
+      setTimeout(() => { if (VOICE.mode === 'thinking') setVoiceMode('listening'); }, 1200);
+    }
+
+    function exitConversation() {
+      VOICE.discardUtterance = true; // 退出时正在录的段落直接丢弃
+      stopUtterance();
+      if (VOICE.vad) { clearInterval(VOICE.vad.timer); VOICE.vad.ctx && VOICE.vad.ctx.close(); VOICE.vad = null; }
+      if (VOICE.stream) { VOICE.stream.getTracks().forEach((t) => t.stop()); VOICE.stream = null; }
+      stopVoicePlayback();
+      VOICE.mode = 'idle';
+      setMicState('idle');
+      hideTyping();
+      document.getElementById('micHint').textContent = '点麦克风开启免提对话；说完自动发送';
     }
 
     async function transcodeToWav(blob) {
@@ -2940,17 +3131,37 @@
       } catch (err) {
         hideTyping();
         addMessage('bot', '转写失败（' + err.message + '），请直接打字或再试一次。');
+        if (VOICE.mode === 'thinking') scheduleResumeListening(); // 免提模式失败后继续听
+      }
+    }
+
+    function beginSpeaking() {
+      // 朗读期间暂停聆听（防助手声音触发 VAD 的回声循环）
+      if (VOICE.mode === 'listening' || VOICE.mode === 'thinking') setVoiceMode('speaking');
+    }
+
+    function endSpeaking() {
+      VOICE.audioEl = null;
+      if (VOICE.mode === 'speaking') {
+        if (VOICE.lastCrisis) {
+          // 危机回复读完即停：把注意力交还给用户与求助资源，不自动继续听
+          exitConversation();
+        } else {
+          setVoiceMode('listening');
+        }
       }
     }
 
     async function speakReply(reply, isCrisis) {
+      VOICE.lastCrisis = !!isCrisis;
       // 静音闸门（成本开关）：静音时零 TTS 请求；危机回复例外（强制照读）
-      if (!effectiveTtsOn(isCrisis)) return;
+      if (!effectiveTtsOn(isCrisis)) { scheduleResumeListening(); return; }
       const parts = (reply && Array.isArray(reply.messages) && reply.messages.length)
         ? reply.messages.slice(0, 3)
         : [(reply && reply.text) || ''];
       const text = parts.join(' ').trim();
-      if (!text) return;
+      if (!text) { scheduleResumeListening(); return; }
+      beginSpeaking();
       if (VOICE.ttsAvailable) {
         try {
           const res = await fetch(API_BASE + '/v1/voice/speak', {
@@ -2960,9 +3171,13 @@
           });
           if (!res.ok) throw new Error('HTTP ' + res.status);
           const blob = await res.blob();
-          const audio = new Audio(URL.createObjectURL(blob));
+          const url = URL.createObjectURL(blob);
+          const audio = new Audio(url);
+          // 生命周期清理：播完释放（免提循环靠它回到聆听态）
+          audio.onended = () => { URL.revokeObjectURL(url); endSpeaking(); };
+          audio.onerror = () => { URL.revokeObjectURL(url); endSpeaking(); };
           VOICE.audioEl = audio;
-          audio.play().catch(() => speakWithBrowser(text));
+          audio.play().catch(() => { URL.revokeObjectURL(url); speakWithBrowser(text); });
           return;
         } catch (err) {
           // 服务端 TTS 失败 → 浏览器合成降级
@@ -2972,14 +3187,18 @@
     }
 
     function speakWithBrowser(text) {
-      if (!('speechSynthesis' in window)) return;
+      if (!('speechSynthesis' in window)) { endSpeaking(); return; }
       try {
         const utter = new SpeechSynthesisUtterance(text);
         utter.lang = 'zh-CN';
         utter.rate = 0.95;
+        utter.onend = endSpeaking;
+        utter.onerror = endSpeaking;
         window.speechSynthesis.cancel();
         window.speechSynthesis.speak(utter);
-      } catch (err) { /* 静默降级：语音不可用不影响文字 */ }
+      } catch (err) {
+        endSpeaking(); // 静默降级：语音不可用不影响文字
+      }
     }
 
     // 图内练习进度标签：气泡流上方的小徽标（🪨 5-4-3-2-1 · 第 N/5 步）。
@@ -4021,6 +4240,14 @@
           '<button class="btn btn-secondary" style="margin-left:8px;" onclick="showAssessList()">返回列表</button></div>';
       }
     }
+
+    // 免提对话退出通道：ESC 退出；页面隐藏时释放麦克风（隐私）
+    document.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape' && VOICE.mode !== 'idle') exitConversation();
+    });
+    document.addEventListener('visibilitychange', () => {
+      if (document.hidden && VOICE.mode !== 'idle') exitConversation();
+    });
 
     // shadcn 式键盘快捷键：数字键 1-N 选择选项，←→ 切题（仅评估分页视图内生效）
     document.addEventListener('keydown', (e) => {
