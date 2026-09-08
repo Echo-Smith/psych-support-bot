@@ -26,6 +26,7 @@ import logging
 import threading
 import time
 from collections import OrderedDict
+from collections.abc import Iterator
 from dataclasses import dataclass
 from urllib.parse import urlparse
 
@@ -212,7 +213,7 @@ def get_tts_config() -> TtsConfig | None:
             base_url="",
             ws_url=ws_url,
             api_key=api_key,
-            model=s.voice_tts_model or "speech-2.8-hd",
+            model=s.voice_tts_model or "speech-2.8-turbo",
             voice=s.voice_tts_voice or "male-qn-qingse",
             language_boost=s.voice_tts_language_boost or "",
         )
@@ -467,6 +468,44 @@ def synthesize(text: str, *, language: str = "") -> bytes:
     return audio
 
 
+def synthesize_stream(text: str, *, language: str = "") -> Iterator[bytes]:
+    """文本 → mp3 音频块流（边合成边出，流式播放用）。错误语义同 synthesize。
+
+    命中文本缓存时一次性产出完整音频；未命中则透传上游分块，全部收完后
+    写入缓存。openai REST 无分块语义，整段作为单块产出。
+    """
+    config = get_tts_config()
+    if config is None:
+        raise VoiceNotConfigured("Voice TTS is not configured")
+    cleaned = (text or "").strip()
+    if not cleaned:
+        raise VoiceProviderError("Empty TTS input")
+    cache_key = (
+        config.provider,
+        config.model,
+        config.voice,
+        config.language_boost,
+        language,
+        cleaned,
+    )
+    cached = _tts_cache_get(cache_key)
+    if cached is not None:
+        yield cached
+        return
+    if config.provider == "minimax":
+        chunks: list[bytes] = []
+        for chunk in _minimax_stream(config, cleaned):
+            chunks.append(chunk)
+            yield chunk
+    elif config.provider == "openai":
+        audio = _synthesize_openai(config, cleaned)
+        chunks = [audio]
+        yield audio
+    else:
+        raise VoiceNotConfigured(f"Unknown TTS provider: {config.provider}")
+    _tts_cache_put(cache_key, b"".join(chunks))
+
+
 def _synthesize_openai(config: TtsConfig, cleaned: str) -> bytes:
     try:
         response = httpx.post(
@@ -499,88 +538,109 @@ _MINIMAX_WS_IDLE_TIMEOUT = 30.0
 _MINIMAX_MAX_AUDIO_BYTES = 20 * 1024 * 1024  # 单次合成输出兜底上限
 
 
-def _synthesize_minimax(config: TtsConfig, cleaned: str) -> bytes:
-    """MiniMax speech TTS（双向流式 WebSocket）。
+async def _run_minimax_session(config: TtsConfig, cleaned: str, emit) -> None:
+    """MiniMax T2A bidi 会话：每收到一块音频调 emit(bytes)，结束语义同前。
 
-    事件流（platform.minimax.cn/docs api-reference/speech-t2a-websocket-bidi）：
-    wss 握手（Bearer）→ connected_success → task_start（音色/音频参数）
-    → task_started → task_continue（全文一次发送，服务端攒句）→
-    task_continued 分块返回 hex 音频（is_final=true 表示本次音频结束）
-    → task_finish → task_finished → 连接关闭。音频按序拼接为完整 mp3。
+    task_finish 在 task_continue 后立即发送（服务端先合成完缓冲中的全部
+    文本，之后才回 task_finished）；is_final 只是「当前句」音频结束，
+    task_finished 才是会话终点，期间所有 task_continued 块照常交出。
     """
     import json as _json
 
     # 配置自检：SSRF 约束同样适用于我们即将外连的 WS 地址
     validate_public_http_url(config.ws_url)
 
-    async def _run() -> bytes:
-        audio_chunks: list[bytes] = []
-        async with websockets.connect(
-            config.ws_url,
-            additional_headers={"Authorization": f"Bearer {config.api_key}"},
-            open_timeout=_MINIMAX_WS_OPEN_TIMEOUT,
-            close_timeout=5,
-        ) as ws:
-            connected = _json.loads(await asyncio.wait_for(ws.recv(), _MINIMAX_WS_IDLE_TIMEOUT))
-            if connected.get("event") != "connected_success":
-                raise VoiceProviderError(f"MiniMax handshake failed: {connected.get('base_resp')}")
+    async with websockets.connect(
+        config.ws_url,
+        additional_headers={"Authorization": f"Bearer {config.api_key}"},
+        open_timeout=_MINIMAX_WS_OPEN_TIMEOUT,
+        close_timeout=5,
+    ) as ws:
+        connected = _json.loads(await asyncio.wait_for(ws.recv(), _MINIMAX_WS_IDLE_TIMEOUT))
+        if connected.get("event") != "connected_success":
+            raise VoiceProviderError(f"MiniMax handshake failed: {connected.get('base_resp')}")
 
-            await ws.send(
-                _json.dumps(
-                    {
-                        "event": "task_start",
-                        "model": config.model,
-                        **({"language_boost": config.language_boost} if config.language_boost else {}),
-                        "voice_setting": {"voice_id": config.voice, "speed": 0.95, "vol": 1, "pitch": 0},
-                        "audio_setting": {
-                            "sample_rate": _MINIMAX_SAMPLE_RATE,
-                            "bitrate": _MINIMAX_BITRATE,
-                            "format": "mp3",
-                            "channel": 1,
-                        },
-                    }
-                )
+        await ws.send(
+            _json.dumps(
+                {
+                    "event": "task_start",
+                    "model": config.model,
+                    **({"language_boost": config.language_boost} if config.language_boost else {}),
+                    "voice_setting": {"voice_id": config.voice, "speed": 0.95, "vol": 1, "pitch": 0},
+                    "audio_setting": {
+                        "sample_rate": _MINIMAX_SAMPLE_RATE,
+                        "bitrate": _MINIMAX_BITRATE,
+                        "format": "mp3",
+                        "channel": 1,
+                    },
+                }
             )
-            started = _json.loads(await asyncio.wait_for(ws.recv(), _MINIMAX_WS_IDLE_TIMEOUT))
-            if started.get("event") != "task_started":
-                raise VoiceProviderError(f"MiniMax task_start failed: {started.get('base_resp')}")
+        )
+        started = _json.loads(await asyncio.wait_for(ws.recv(), _MINIMAX_WS_IDLE_TIMEOUT))
+        if started.get("event") != "task_started":
+            raise VoiceProviderError(f"MiniMax task_start failed: {started.get('base_resp')}")
 
-            await ws.send(_json.dumps({"event": "task_continue", "text": cleaned}))
-            # task_finish 立即发送：服务端会先合成完缓冲中的全部文本再回
-            # task_finished（平台文档事件流程第 3/6 步）。
-            await ws.send(_json.dumps({"event": "task_finish"}))
+        await ws.send(_json.dumps({"event": "task_continue", "text": cleaned}))
+        # task_finish 立即发送：服务端会先合成完缓冲中的全部文本再回
+        # task_finished（平台文档事件流程第 3/6 步）。
+        await ws.send(_json.dumps({"event": "task_finish"}))
 
-            # 结束语义（平台文档）：is_final 只表示「本次请求/当前句」音频结束，
-            # 多句长文本每句各有一次 is_final；task_finished 才是整个会话终点。
-            # 在 task_finished 前持续收集 task_continued 音频块。
-            audio_done = False
-            while not audio_done:
-                message = _json.loads(await asyncio.wait_for(ws.recv(), _MINIMAX_WS_IDLE_TIMEOUT))
-                base = message.get("base_resp") or {}
-                status = base.get("status_code", 0)
-                if status != 0:
-                    raise VoiceProviderError(f"MiniMax TTS error {status}: {base.get('status_msg')}")
-                event = message.get("event")
-                data = message.get("data") or {}
-                hex_audio = data.get("audio")
-                if hex_audio:
-                    audio_chunks.append(bytes.fromhex(hex_audio))
-                    if sum(len(c) for c in audio_chunks) > _MINIMAX_MAX_AUDIO_BYTES:
-                        raise VoiceProviderError("MiniMax TTS audio exceeds size cap") from None
-                if event in ("task_finished", "task_failed"):
-                    audio_done = True
+        audio_done = False
+        emitted = 0
+        while not audio_done:
+            message = _json.loads(await asyncio.wait_for(ws.recv(), _MINIMAX_WS_IDLE_TIMEOUT))
+            base = message.get("base_resp") or {}
+            status = base.get("status_code", 0)
+            if status != 0:
+                raise VoiceProviderError(f"MiniMax TTS error {status}: {base.get('status_msg')}")
+            event = message.get("event")
+            data = message.get("data") or {}
+            hex_audio = data.get("audio")
+            if hex_audio:
+                chunk = bytes.fromhex(hex_audio)
+                emitted += len(chunk)
+                if emitted > _MINIMAX_MAX_AUDIO_BYTES:
+                    raise VoiceProviderError("MiniMax TTS audio exceeds size cap") from None
+                emit(chunk)
+            if event in ("task_finished", "task_failed"):
+                audio_done = True
 
-        audio = b"".join(audio_chunks)
-        if not audio:
-            raise VoiceProviderError("MiniMax TTS returned empty audio")
-        return audio
 
-    try:
-        return asyncio.run(_run())
-    except VoiceProviderError:
-        raise
-    except (OSError, websockets.WebSocketException) as exc:
-        raise VoiceProviderError(f"MiniMax WS failed: {exc}") from exc
-    except ValueError as exc:
-        # bytes.fromhex 对畸形分块的失败
-        raise VoiceProviderError(f"MiniMax TTS malformed audio chunk: {exc}") from exc
+def _minimax_stream(config: TtsConfig, cleaned: str) -> Iterator[bytes]:
+    """同步生成器：后台线程驱动 WS 会话，音频块即产即交（边合成边播用）。"""
+    import queue as _queue
+    import threading
+
+    q: _queue.Queue = _queue.Queue()
+
+    def _worker() -> None:
+        try:
+            asyncio.run(_run_minimax_session(config, cleaned, q.put))
+        except BaseException as exc:  # 线程边界：异常作为队列结果上抛
+            q.put(exc)
+        finally:
+            q.put(None)
+
+    threading.Thread(target=_worker, daemon=True).start()
+    while True:
+        item = q.get()
+        if item is None:
+            return
+        if isinstance(item, VoiceProviderError):
+            raise item
+        if isinstance(item, (OSError, websockets.WebSocketException)):
+            raise VoiceProviderError(f"MiniMax WS failed: {item}") from item
+        if isinstance(item, ValueError):
+            # bytes.fromhex 对畸形分块的失败
+            raise VoiceProviderError(f"MiniMax TTS malformed audio chunk: {item}") from item
+        if isinstance(item, BaseException):
+            raise item
+        yield item
+
+
+def _synthesize_minimax(config: TtsConfig, cleaned: str) -> bytes:
+    """MiniMax speech TTS（双向流式 WebSocket），整段聚合返回。"""
+    audio = b"".join(_minimax_stream(config, cleaned))
+    if not audio:
+        raise VoiceProviderError("MiniMax TTS returned empty audio")
+    return audio

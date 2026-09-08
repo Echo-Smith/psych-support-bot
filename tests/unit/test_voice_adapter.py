@@ -20,6 +20,7 @@ from psych_support_bot.infra.voice.adapter import (
     get_stt_config,
     get_tts_config,
     synthesize,
+    synthesize_stream,
     transcribe,
     validate_public_http_url,
 )
@@ -459,6 +460,54 @@ def test_tts_cache_ttl_expiry(monkeypatch, tts_key) -> None:
     )
     synthesize("你好")  # TTL 过期 → 重打
     assert calls["n"] == 2
+
+
+# ---------------------------------------------------------------------------
+# 流式合成（边合成边播）
+# ---------------------------------------------------------------------------
+
+
+def test_synthesize_stream_minimax_yields_incremental(monkeypatch, tts_key) -> None:
+    _configure_minimax(tts_key)
+    hex_a = b"chunk-a".hex()
+    hex_b = b"chunk-b".hex()
+    fake = _FakeWebSocket(
+        [
+            {"event": "connected_success", "base_resp": {"status_code": 0}},
+            {"event": "task_started", "base_resp": {"status_code": 0}},
+            {"data": {"audio": hex_a}, "is_final": True, "base_resp": {"status_code": 0}},
+            {"event": "sentence_end", "base_resp": {"status_code": 0}},
+            {"data": {"audio": hex_b}, "is_final": False, "base_resp": {"status_code": 0}},
+            {"event": "task_finished", "base_resp": {"status_code": 0}},
+        ]
+    )
+
+    def fake_connect(url, **kwargs):
+        return fake
+
+    import psych_support_bot.infra.voice.adapter as _adapter
+
+    monkeypatch.setattr(_adapter.websockets, "connect", fake_connect)
+    chunks = list(synthesize_stream("慢慢来"))
+    assert chunks == [b"chunk-a", b"chunk-b"]  # 逐块产出（边合成边播）
+    assert fake.sent[-1]["event"] == "task_finish"
+
+
+def test_synthesize_stream_cached_single_chunk(monkeypatch, tts_key) -> None:
+    _configure_minimax(tts_key)
+    calls = {"n": 0}
+
+    def fake_post(url, **kwargs):
+        calls["n"] += 1
+        return httpx.Response(200, content=b"x", request=httpx.Request("POST", url))
+
+    monkeypatch.setattr("psych_support_bot.infra.voice.adapter.httpx.post", fake_post)
+    # openai 路径单块产出
+    _configure(tts_key=tts_key)
+    monkeypatch.setattr("psych_support_bot.infra.voice.adapter.httpx.post", fake_post)
+    assert list(synthesize_stream("你好")) == [b"x"]
+    assert list(synthesize_stream("你好")) == [b"x"]  # 命中缓存：单块整段
+    assert calls["n"] == 1
 
 
 # ---------------------------------------------------------------------------

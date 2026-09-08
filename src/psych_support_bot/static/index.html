@@ -3231,6 +3231,14 @@
       if (!text) { scheduleResumeListening(); return; }
       beginSpeaking();
       if (VOICE.ttsAvailable) {
+        // 首选流式：边合成边播（感知延迟≈上游首块，实测 ~0.5s）；
+        // 浏览器不支持 MSE 或流式失败 → 整段合成后播放
+        if (window.MediaSource && MediaSource.isTypeSupported('audio/mpeg')) {
+          try {
+            await speakStreamMse(text);
+            return;
+          } catch (err) { /* 降级整段合成 */ }
+        }
         try {
           const res = await fetch(API_BASE + '/v1/voice/speak', {
             method: 'POST',
@@ -3252,6 +3260,56 @@
         }
       }
       speakWithBrowser(text);
+    }
+
+    async function speakStreamMse(text) {
+      // 流式朗读：chunked mp3 → MediaSource 边下边播；首个 appendBuffer
+      // 后立即 play，之后每块到达自动续播
+      const res = await fetch(API_BASE + '/v1/voice/speak/stream', {
+        method: 'POST',
+        headers: { ...authHeaders(), 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text }),
+      });
+      if (!res.ok || !res.body) throw new Error('HTTP ' + res.status);
+      const ms = new MediaSource();
+      const url = URL.createObjectURL(ms);
+      const audio = new Audio(url);
+      const cleanup = () => { URL.revokeObjectURL(url); if (VOICE.audioEl === audio) VOICE.audioEl = null; };
+      audio.onended = () => { cleanup(); endSpeaking(); };
+      audio.onerror = () => { cleanup(); endSpeaking(); };
+      VOICE.audioEl = audio;
+      await new Promise((resolve, reject) => {
+        ms.addEventListener('sourceopen', resolve, { once: true });
+        setTimeout(resolve, 1000); // sourceopen 兜底
+      });
+      const sb = ms.addSourceBuffer('audio/mpeg');
+      sb.mode = 'sequence';
+      const waitUpdate = () => new Promise((r) => sb.addEventListener('updateend', r, { once: true }));
+      const reader = res.body.getReader();
+      let played = false;
+      let received = 0;
+      try {
+        for (;;) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          if (!value || !value.length) continue;
+          received += value.length;
+          if (sb.updating) await waitUpdate();
+          sb.appendBuffer(value);
+          await waitUpdate();
+          if (!played) {
+            played = true;
+            audio.play().catch(() => speakWithBrowser(text));
+          }
+        }
+      } catch (err) {
+        // 中途截断：播放已收到的部分
+      }
+      try { if (ms.readyState === 'open') ms.endOfStream(); } catch (err) { /* 已关闭 */ }
+      if (!played) {
+        if (!received) throw new Error('empty stream'); // 触发整段合成降级
+        audio.play().catch(() => speakWithBrowser(text));
+      }
     }
 
     function speakWithBrowser(text) {

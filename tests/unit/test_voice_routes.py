@@ -164,6 +164,42 @@ def test_speak_success_returns_audio(client, monkeypatch):
     assert res.headers["content-type"].startswith("audio/mpeg")
 
 
+def test_speak_stream_contract_and_validation(client, monkeypatch):
+    monkeypatch.delenv("VOICE_TTS_BASE_URL", raising=False)
+    monkeypatch.delenv("VOICE_TTS_API_KEY", raising=False)
+    from psych_support_bot.infra.config.settings import get_settings
+
+    get_settings.cache_clear()
+
+    # 空文本 422
+    assert client.post("/v1/voice/speak/stream", json={"text": "  "}).status_code == 422
+    # 超长 422
+    assert client.post("/v1/voice/speak/stream", json={"text": "长" * 1500}).status_code == 422
+    # 未配置 503
+    assert client.post("/v1/voice/speak/stream", json={"text": "你好"}).status_code == 503
+
+
+def test_speak_stream_success_returns_audio_stream(client, monkeypatch):
+    # 显式 openai 路径（隔离环境已把 provider 置空）
+    monkeypatch.setenv("VOICE_TTS_PROVIDER", "openai")
+    monkeypatch.setenv("VOICE_TTS_BASE_URL", "https://tts.example.com/v1")
+    monkeypatch.setenv("VOICE_TTS_API_KEY", "k" * 8)
+    from psych_support_bot.infra.config.settings import get_settings
+
+    get_settings.cache_clear()
+
+    import httpx
+
+    def fake_post(url, **kw):
+        return httpx.Response(200, content=b"ID3-stream", request=httpx.Request("POST", url))
+
+    monkeypatch.setattr("psych_support_bot.infra.voice.adapter.httpx.post", fake_post)
+    res = client.post("/v1/voice/speak/stream", json={"text": "你好"})
+    assert res.status_code == 200
+    assert res.headers["content-type"].startswith("audio/mpeg")
+    assert res.content == b"ID3-stream"
+
+
 def test_tmp_media_endpoint_removed(client):
     # dots STT 已改为 base64 data URI 内联，无鉴权的 /tmp 拉取端点不复存在
     assert client.get("/v1/voice/tmp/deadbeef").status_code == 404

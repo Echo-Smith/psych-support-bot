@@ -4,6 +4,8 @@
   不写日志）；转写文本作为普通聊天消息的输入由前端走既有 /respond。
 - POST /speak：文本 → audio/mpeg。未配置 503，前端降级浏览器朗读。
   危机回复照读（热线号码读出来更可达）。
+- POST /speak/stream：同上但 chunked 流式返回（边合成边转），前端 MSE
+  边下边播，感知延迟 ≈ 上游首块（实测 ~0.5s vs 整段 ~2s）。
 - GET /status：前端探测（是否配置 STT/TTS），决定麦克风按钮显隐与朗读开关。
 
 阻塞的上游调用走 asyncio.to_thread：适配层是同步 httpx / asyncio.run 包裹
@@ -15,7 +17,7 @@ import logging
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Request, UploadFile
-from fastapi.responses import Response
+from fastapi.responses import Response, StreamingResponse
 
 from psych_support_bot.api.auth import request_user_id, require_auth
 from psych_support_bot.infra.voice.adapter import (
@@ -25,6 +27,7 @@ from psych_support_bot.infra.voice.adapter import (
     get_stt_config,
     get_tts_config,
     synthesize,
+    synthesize_stream,
     transcribe,
 )
 
@@ -104,3 +107,30 @@ async def speak_text(request: Request, payload: dict[str, Any], _sub: str = Depe
         logger.warning("Voice speak failed: %s", exc)
         raise HTTPException(status_code=502, detail=f"Speech synthesis failed: {exc}") from exc
     return Response(content=audio, media_type="audio/mpeg")
+
+
+@router.post("/speak/stream")
+async def speak_stream(request: Request, payload: dict[str, Any], _sub: str = Depends(require_auth)):
+    """文本 → mp3 流（chunked）：上游音频块即产即转，前端边下边播。
+
+    感知延迟 ≈ 上游首块到达时间（MiniMax 实测 ~0.5s），远低于整段合成。
+    首个字节前的配置/校验错误仍返回 JSON 错误码；流出后中途失败只能
+    截断（记日志），前端按已收音频播放。
+    """
+    text = str(payload.get("text") or "").strip()
+    if not text:
+        raise HTTPException(status_code=422, detail="Empty text")
+    if len(text) > _TTS_MAX_CHARS:
+        raise HTTPException(status_code=422, detail=f"Text too long (max {_TTS_MAX_CHARS} chars)")
+    # 配置校验前置：流开始后无法再改状态码
+    if get_tts_config() is None:
+        raise HTTPException(status_code=503, detail="Voice TTS is not configured")
+
+    def _gen():
+        try:
+            yield from synthesize_stream(text)
+        except VoiceProviderError as exc:
+            # 流已开始：状态码不可改，截断表达（前端播放已收到的部分）
+            logger.warning("Voice speak stream interrupted: %s", exc)
+
+    return StreamingResponse(_gen(), media_type="audio/mpeg")
