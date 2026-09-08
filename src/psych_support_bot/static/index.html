@@ -417,79 +417,7 @@
       }
     }
 
-    /* 麦克风按钮：图标化；录音态红色描边 + 呼吸脉冲 */
-    #micBtn {
-      display: inline-flex;
-      align-items: center;
-      justify-content: center;
-      width: 42px;
-      padding: 10px 0;
-      flex: 0 0 auto;
-    }
-
-    #micBtn svg {
-      display: block;
-    }
-
-    #micBtn.recording {
-      color: #dc2626;
-      border-color: #dc2626;
-      animation: micPulse 1.6s ease-out infinite;
-    }
-
-    #micBtn.recording:hover {
-      background: #fff;
-      color: #dc2626;
-      border-color: #dc2626;
-    }
-
-    /* 免提对话态：绿色描边 + 柔和绿呼吸（区别于一次性录音的红脉冲） */
-    #micBtn.conversation {
-      color: #059669;
-      border-color: #059669;
-    }
-
-    #micBtn.conversation:hover {
-      background: #fff;
-      color: #059669;
-      border-color: #059669;
-    }
-
-    #micBtn.listening {
-      animation: micPulseGreen 2.4s ease-out infinite;
-    }
-
-    @keyframes micPulseGreen {
-
-      0% {
-        box-shadow: 0 0 0 0 rgba(5, 150, 105, .25);
-      }
-
-      75% {
-        box-shadow: 0 0 0 9px rgba(5, 150, 105, 0);
-      }
-
-      100% {
-        box-shadow: 0 0 0 0 rgba(5, 150, 105, 0);
-      }
-    }
-
-    @keyframes micPulse {
-
-      0% {
-        box-shadow: 0 0 0 0 rgba(220, 38, 38, .30);
-      }
-
-      75% {
-        box-shadow: 0 0 0 10px rgba(220, 38, 38, 0);
-      }
-
-      100% {
-        box-shadow: 0 0 0 0 rgba(220, 38, 38, 0);
-      }
-    }
-
-    /* 静音按钮：文字态（开声）与静音态（muted 样式） */
+    /* 静音按钮：图标态（开声）与静音态（虚线弱化） */
     #muteBtn {
       padding: 4px 10px;
       font-family: inherit;
@@ -574,15 +502,111 @@
       gap: 8px;
     }
 
-    .chat-input-row input[type=text] {
+    .input-wrap {
+      position: relative;
       flex: 1;
-      padding: 10px 14px;
+      display: flex;
+    }
+
+    .input-wrap input[type=text] {
+      flex: 1;
+      padding: 10px 44px 10px 14px; /* 右侧留出麦克风图标位 */
       border: 1px solid var(--rule);
       background: #fff;
       color: var(--ink);
       font-family: inherit;
       font-size: 14px;
       outline: none;
+    }
+
+    .input-wrap input[type=text]:focus {
+      border-color: var(--ink);
+    }
+
+    /* 麦克风：输入框内右缘的幽灵图标按钮，贴合整体线性图标语言 */
+    #micBtn {
+      position: absolute;
+      right: 8px;
+      top: 50%;
+      transform: translateY(-50%);
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 30px;
+      height: 30px;
+      padding: 0;
+      font-family: inherit;
+      background: transparent;
+      color: var(--muted);
+      border: none;
+      border-radius: 6px;
+      cursor: pointer;
+      transition: color .15s, background .15s;
+    }
+
+    #micBtn:hover {
+      color: var(--ink);
+      background: var(--soft);
+    }
+
+    #micBtn svg {
+      display: block;
+    }
+
+    #micBtn.recording {
+      color: #dc2626;
+      background: rgba(220, 38, 38, .08);
+      animation: micPulse 1.6s ease-out infinite;
+    }
+
+    #micBtn.recording:hover {
+      color: #dc2626;
+      background: rgba(220, 38, 38, .12);
+    }
+
+    /* 免提对话态：绿色图标 + 柔和绿呼吸（区别于采集中的红色脉冲） */
+    #micBtn.conversation {
+      color: #059669;
+      background: rgba(5, 150, 105, .07);
+    }
+
+    #micBtn.conversation:hover {
+      color: #059669;
+      background: rgba(5, 150, 105, .12);
+    }
+
+    #micBtn.listening {
+      animation: micPulseGreen 2.4s ease-out infinite;
+    }
+
+    @keyframes micPulseGreen {
+
+      0% {
+        box-shadow: 0 0 0 0 rgba(5, 150, 105, .25);
+      }
+
+      75% {
+        box-shadow: 0 0 0 7px rgba(5, 150, 105, 0);
+      }
+
+      100% {
+        box-shadow: 0 0 0 0 rgba(5, 150, 105, 0);
+      }
+    }
+
+    @keyframes micPulse {
+
+      0% {
+        box-shadow: 0 0 0 0 rgba(220, 38, 38, .30);
+      }
+
+      75% {
+        box-shadow: 0 0 0 7px rgba(220, 38, 38, 0);
+      }
+
+      100% {
+        box-shadow: 0 0 0 0 rgba(220, 38, 38, 0);
+      }
     }
 
     .chat-input-row button,
@@ -2041,19 +2065,21 @@
       </div>
 
       <div class="chat-input-row">
-        <button type="button" id="micBtn" onclick="toggleMicRecording()" style="display:none" title="语音输入" aria-label="语音输入">
-          <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-            <path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3z"></path>
-            <path d="M19 10v2a7 7 0 0 1-14 0v-2"></path>
-            <line x1="12" y1="19" x2="12" y2="22"></line>
-          </svg>
-        </button>
-        <input type="text" id="messageInput" placeholder="输入你的感受或问题…" onkeypress="handleKeyPress(event)">
+        <div class="input-wrap">
+          <input type="text" id="messageInput" placeholder="输入你的感受或问题…" onkeypress="handleKeyPress(event)">
+          <button type="button" id="micBtn" onclick="toggleMicRecording()" style="display:none" title="语音输入" aria-label="语音输入">
+            <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3z"></path>
+              <path d="M19 10v2a7 7 0 0 1-14 0v-2"></path>
+              <line x1="12" y1="19" x2="12" y2="22"></line>
+            </svg>
+          </button>
+        </div>
         <button id="sendBtn" onclick="sendMessage()">发送</button>
         <button type="button" class="reset-btn" onclick="resetSession()">重置会话</button>
       </div>
       <div id="voiceRow" style="display:none; margin-top:6px; font-size:12px; color:var(--muted);">
-        <button type="button" id="muteBtn" aria-pressed="false" title="当前开声；点击静音（静音时不合成语音，节省成本）" style="display:none">🔊 静音</button>
+        <button type="button" id="muteBtn" aria-pressed="false" title="当前开声；点击静音（静音时不合成语音，节省成本）" style="display:none"></button>
         <span id="micHint" style="margin-left:12px"></span>
       </div>
 
@@ -2836,12 +2862,27 @@
       }
     }
 
+    // 静音按钮双态图标（音量开 ⇄ 静音叉），与麦克风按钮同一线性图标语言
+    const SPEAKER_ON_SVG =
+      '<svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' +
+      '<path d="M11 5 6 9H2v6h4l5 4V5z" fill="currentColor" stroke="none"></path>' +
+      '<path d="M15.5 8.5a5 5 0 0 1 0 7"></path>' +
+      '</svg>';
+    const SPEAKER_OFF_SVG =
+      '<svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' +
+      '<path d="M11 5 6 9H2v6h4l5 4V5z" fill="currentColor" stroke="none"></path>' +
+      '<line x1="16" y1="9" x2="22" y2="15"></line>' +
+      '<line x1="22" y1="9" x2="16" y2="15"></line>' +
+      '</svg>';
+
     function renderMuteBtn() {
       const btn = document.getElementById('muteBtn');
       if (!btn) return;
       // aria-pressed=true 表示「已静音」
       btn.setAttribute('aria-pressed', VOICE.ttsPref ? 'false' : 'true');
-      btn.textContent = VOICE.ttsPref ? '🔊 静音' : '🔇 已静音';
+      btn.innerHTML = VOICE.ttsPref
+        ? SPEAKER_ON_SVG + '<span> 静音</span>'
+        : SPEAKER_OFF_SVG + '<span> 已静音</span>';
       btn.title = VOICE.ttsPref
         ? '点击静音（静音时不合成语音，节省成本）'
         : '已静音：回复不朗读（危机求助信息仍会照读）。点击恢复开声';
