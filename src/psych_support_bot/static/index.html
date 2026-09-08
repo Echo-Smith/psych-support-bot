@@ -417,6 +417,47 @@
       }
     }
 
+    /* 麦克风按钮：图标化；录音态红色描边 + 呼吸脉冲 */
+    #micBtn {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 42px;
+      padding: 10px 0;
+      flex: 0 0 auto;
+    }
+
+    #micBtn svg {
+      display: block;
+    }
+
+    #micBtn.recording {
+      color: #dc2626;
+      border-color: #dc2626;
+      animation: micPulse 1.6s ease-out infinite;
+    }
+
+    #micBtn.recording:hover {
+      background: #fff;
+      color: #dc2626;
+      border-color: #dc2626;
+    }
+
+    @keyframes micPulse {
+
+      0% {
+        box-shadow: 0 0 0 0 rgba(220, 38, 38, .30);
+      }
+
+      75% {
+        box-shadow: 0 0 0 10px rgba(220, 38, 38, 0);
+      }
+
+      100% {
+        box-shadow: 0 0 0 0 rgba(220, 38, 38, 0);
+      }
+    }
+
     .msg-header {
       font-size: 11px;
       margin-bottom: 4px;
@@ -494,10 +535,10 @@
 
     .chat-input-row button,
     button.btn {
-      padding: 10px 18px;
       font-family: inherit;
       font-size: 14px;
       font-weight: 600;
+      padding: 10px 18px;
       background: var(--ink);
       color: #fff;
       border: 1px solid var(--ink);
@@ -1948,7 +1989,13 @@
       </div>
 
       <div class="chat-input-row">
-        <button type="button" id="micBtn" onclick="toggleMicRecording()" style="display:none" title="语音输入">🎙</button>
+        <button type="button" id="micBtn" onclick="toggleMicRecording()" style="display:none" title="语音输入" aria-label="语音输入">
+          <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3z"></path>
+            <path d="M19 10v2a7 7 0 0 1-14 0v-2"></path>
+            <line x1="12" y1="19" x2="12" y2="22"></line>
+          </svg>
+        </button>
         <input type="text" id="messageInput" placeholder="输入你的感受或问题…" onkeypress="handleKeyPress(event)">
         <button id="sendBtn" onclick="sendMessage()">发送</button>
         <button type="button" class="reset-btn" onclick="resetSession()">重置会话</button>
@@ -2573,6 +2620,7 @@
 
     // 等待占位气泡：sendWaiting=发送后的等待期（回声文案）；气泡间打字节奏用"正在输入"。
     function showTyping(text) {
+      hideTyping(); // 同一时刻只保留一个等待气泡（录音/转写/回复渲染共用）
       const chatArea = document.getElementById('chatArea');
       const d = document.createElement('div');
       d.className = 'msg bot';
@@ -2706,7 +2754,7 @@
       if (VOICE.sttAvailable) {
         micBtn.style.display = '';
         voiceRow.style.display = '';
-        document.getElementById('micHint').textContent = '点麦克风开始录音，停止后自动转文字发送';
+        document.getElementById('micHint').textContent = '点麦克风开始录音，再点一下停止并转文字发送';
       } else {
         voiceRow.style.display = 'none';
       }
@@ -2728,6 +2776,26 @@
       if ('speechSynthesis' in window) window.speechSynthesis.cancel();
     }
 
+    // 麦克风按钮双态图标：麦克风（待录）⇄ 圆角方块（录音中，点按停止）
+    const MIC_ICON_SVG =
+      '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' +
+      '<path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3z"></path>' +
+      '<path d="M19 10v2a7 7 0 0 1-14 0v-2"></path>' +
+      '<line x1="12" y1="19" x2="12" y2="22"></line>' +
+      '</svg>';
+    const STOP_ICON_SVG =
+      '<svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor" stroke="none" aria-hidden="true">' +
+      '<rect x="6" y="6" width="12" height="12" rx="2"></rect>' +
+      '</svg>';
+
+    function setMicIcon(recording) {
+      const btn = document.getElementById('micBtn');
+      if (!btn) return;
+      btn.innerHTML = recording ? STOP_ICON_SVG : MIC_ICON_SVG;
+      btn.classList.toggle('recording', !!recording);
+      btn.title = recording ? '停止录音' : '语音输入';
+    }
+
     function toggleMicRecording() {
       if (VOICE.recording) { VOICE.recorder && VOICE.recorder.stop(); return; }
       if (!navigator.mediaDevices || !window.MediaRecorder) {
@@ -2747,7 +2815,8 @@
         recorder.onstop = () => {
           VOICE.recording = false;
           stream.getTracks().forEach((t) => t.stop());
-          document.getElementById('micBtn').textContent = '🎙';
+          setMicIcon(false);
+          hideTyping();
           const blob = new Blob(VOICE.chunks, { type: mime || 'audio/webm' });
           if (blob.size > 1000) {
             // 各家 ASR 支持的容器不一（如 MiniMax 不吃 Chrome 的 opus-in-mp4），
@@ -2759,9 +2828,9 @@
         };
         recorder.start();
         VOICE.recording = true;
-        document.getElementById('micBtn').textContent = '⏹';
-        showTyping('正在聆听…（再点一次结束）');
-        setTimeout(hideTyping, 1500);
+        setMicIcon(true);
+        // 录音中的持续反馈；停止方式即按钮本身的红色停止态
+        showTyping('正在聆听');
       }).catch(() => addMessage('bot', '无法访问麦克风，请检查浏览器权限后重试。'));
     }
 
@@ -2800,7 +2869,7 @@
     }
 
     async function uploadForTranscribe(blob, mime) {
-      showTyping('正在转写…');
+      showTyping('正在转写');
       try {
         const ext = mime.includes('wav') ? 'wav' : mime.includes('ogg') ? 'ogg' : (mime.includes('mp4') || mime.includes('m4a')) ? 'm4a' : 'webm';
         const fd = new FormData();
