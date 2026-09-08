@@ -2737,7 +2737,10 @@
       stopVoicePlayback();
       navigator.mediaDevices.getUserMedia({ audio: true }).then((stream) => {
         VOICE.chunks = [];
-        const mime = MediaRecorder.isTypeSupported('audio/webm') ? 'audio/webm' : '';
+        // 编码优先级：MiniMax ASR 支持 mp4/aac 与 ogg/opus，不支持 webm 容器；
+        // Chrome 新版支持 audio/mp4，Safari 原生 mp4，Firefox 走 ogg，webm 仅兜底。
+        const mime = ['audio/mp4', 'audio/ogg;codecs=opus', 'audio/webm']
+          .find((m) => MediaRecorder.isTypeSupported(m)) || '';
         const recorder = new MediaRecorder(stream, mime ? { mimeType: mime } : undefined);
         VOICE.recorder = recorder;
         recorder.ondataavailable = (e) => { if (e.data.size) VOICE.chunks.push(e.data); };
@@ -2746,7 +2749,13 @@
           stream.getTracks().forEach((t) => t.stop());
           document.getElementById('micBtn').textContent = '🎙';
           const blob = new Blob(VOICE.chunks, { type: mime || 'audio/webm' });
-          if (blob.size > 1000) uploadForTranscribe(blob, mime || 'audio/webm');
+          if (blob.size > 1000) {
+            // 各家 ASR 支持的容器不一（如 MiniMax 不吃 Chrome 的 opus-in-mp4），
+            // 统一转 16kHz 单声道 WAV 上传——供应商无关，杜绝容器兼容问题。
+            transcodeToWav(blob)
+              .then((wav) => { if (wav.size > 1000) uploadForTranscribe(wav, 'audio/wav'); })
+              .catch(() => addMessage('bot', '录音处理失败，请直接打字或再试一次。'));
+          }
         };
         recorder.start();
         VOICE.recording = true;
@@ -2756,15 +2765,53 @@
       }).catch(() => addMessage('bot', '无法访问麦克风，请检查浏览器权限后重试。'));
     }
 
+    async function transcodeToWav(blob) {
+      // 浏览器内转码：decodeAudioData 解任意 MediaRecorder 容器 →
+      // OfflineAudioContext 重采样 16kHz 单声道 → 手工编码 16-bit PCM WAV。
+      const arrayBuf = await blob.arrayBuffer();
+      const ctx = new (window.AudioContext || window.webkitAudioContext)();
+      let decoded;
+      try {
+        decoded = await ctx.decodeAudioData(arrayBuf);
+      } finally {
+        ctx.close && ctx.close();
+      }
+      const targetRate = 16000;
+      const offline = new OfflineAudioContext(1, Math.max(1, Math.ceil(decoded.duration * targetRate)), targetRate);
+      const src = offline.createBufferSource();
+      src.buffer = decoded;
+      src.connect(offline.destination);
+      src.start();
+      const rendered = await offline.startRendering();
+      const ch = rendered.getChannelData(0);
+      const buf = new ArrayBuffer(44 + ch.length * 2);
+      const view = new DataView(buf);
+      const wstr = (off, s) => { for (let i = 0; i < s.length; i++) view.setUint8(off + i, s.charCodeAt(i)); };
+      wstr(0, 'RIFF'); view.setUint32(4, 36 + ch.length * 2, true); wstr(8, 'WAVE');
+      wstr(12, 'fmt '); view.setUint32(16, 16, true); view.setUint16(20, 1, true); view.setUint16(22, 1, true);
+      view.setUint32(24, targetRate, true); view.setUint32(28, targetRate * 2, true);
+      view.setUint16(32, 2, true); view.setUint16(34, 16, true);
+      wstr(36, 'data'); view.setUint32(40, ch.length * 2, true);
+      for (let i = 0, off = 44; i < ch.length; i++, off += 2) {
+        const s = Math.max(-1, Math.min(1, ch[i]));
+        view.setInt16(off, s < 0 ? s * 0x8000 : s * 0x7FFF, true);
+      }
+      return new Blob([buf], { type: 'audio/wav' });
+    }
+
     async function uploadForTranscribe(blob, mime) {
       showTyping('正在转写…');
       try {
-        const ext = mime.includes('ogg') ? 'ogg' : (mime.includes('mp4') || mime.includes('m4a')) ? 'm4a' : 'webm';
+        const ext = mime.includes('wav') ? 'wav' : mime.includes('ogg') ? 'ogg' : (mime.includes('mp4') || mime.includes('m4a')) ? 'm4a' : 'webm';
         const fd = new FormData();
         fd.append('file', blob, 'recording.' + ext);
+        // multipart 上传不能带固定 Content-Type：authHeaders 注入的
+        // application/json 会覆盖浏览器自动生成的 boundary，服务端解析 422。
+        const uploadHeaders = authHeaders();
+        delete uploadHeaders['Content-Type'];
         const res = await fetch(API_BASE + '/v1/voice/transcribe', {
           method: 'POST',
-          headers: authHeaders(),
+          headers: uploadHeaders,
           body: fd,
         });
         hideTyping();

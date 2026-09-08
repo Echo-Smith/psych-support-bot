@@ -2,14 +2,15 @@
 
 - POST /transcribe：multipart 音频 → 转写文本。音频即转即弃（不落库、
   不写日志）；转写文本作为普通聊天消息的输入由前端走既有 /respond。
-- POST /speak：文本 → audio/mpeg（OpenAI 兼容）。未配置 503，前端降级
-  浏览器朗读。危机回复照读（热线号码读出来更可达）。
+- POST /speak：文本 → audio/mpeg。未配置 503，前端降级浏览器朗读。
+  危机回复照读（热线号码读出来更可达）。
 - GET /status：前端探测（是否配置 STT/TTS），决定麦克风按钮显隐与朗读开关。
-- GET /tmp/{token}：dots STT 的一次性音频下载端点（模型拉取用；单次
-  有效 + TTL）。须鉴权吗？——不给：模型侧无凭据可带，安全性由 token
-  不可枚举 + 单次有效 + 短 TTL 保证，且该端点只出音频、不落任何状态。
+
+阻塞的上游调用走 asyncio.to_thread：适配层是同步 httpx / asyncio.run 包裹
+的 WS 会话，事件循环内直调会卡死（minimax 路径还会 RuntimeError）。
 """
 
+import asyncio
 import logging
 from typing import Any
 
@@ -17,7 +18,6 @@ from fastapi import APIRouter, Depends, HTTPException, Request, UploadFile
 from fastapi.responses import Response
 
 from psych_support_bot.api.auth import request_user_id, require_auth
-from psych_support_bot.infra.voice import media_store
 from psych_support_bot.infra.voice.adapter import (
     MAX_AUDIO_BYTES,
     VoiceNotConfigured,
@@ -31,9 +31,6 @@ from psych_support_bot.infra.voice.adapter import (
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/v1/voice", tags=["voice"])
-
-# 公开路由（dots 模型侧拉取用，无凭据设计见 fetch_tmp_media docstring）
-public_router = APIRouter(prefix="/v1/voice", tags=["voice"], include_in_schema=False)
 
 # 允许的音频格式（MediaRecorder 常见输出 + 常见手机录音格式）
 _ALLOWED_AUDIO_TYPES = {
@@ -83,7 +80,7 @@ async def transcribe_audio(request: Request, file: UploadFile, _sub: str = Depen
         raise HTTPException(status_code=413, detail="Audio file too large (max 25MB)")
     filename = file.filename or "audio.webm"
     try:
-        text = transcribe(audio, filename)
+        text = await asyncio.to_thread(transcribe, audio, filename)
     except VoiceNotConfigured as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
     except VoiceProviderError as exc:
@@ -100,27 +97,10 @@ async def speak_text(request: Request, payload: dict[str, Any], _sub: str = Depe
     if len(text) > _TTS_MAX_CHARS:
         raise HTTPException(status_code=422, detail=f"Text too long (max {_TTS_MAX_CHARS} chars)")
     try:
-        audio = synthesize(text)
+        audio = await asyncio.to_thread(synthesize, text)
     except VoiceNotConfigured as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
     except VoiceProviderError as exc:
         logger.warning("Voice speak failed: %s", exc)
         raise HTTPException(status_code=502, detail=f"Speech synthesis failed: {exc}") from exc
     return Response(content=audio, media_type="audio/mpeg")
-
-
-@public_router.get("/tmp/{token}")
-def fetch_tmp_media(token: str) -> Response:
-    """dots STT 一次性音频下载（模型侧拉取；无凭据设计，见模块 docstring）。"""
-    entry = media_store.consume(token)
-    if entry is None:
-        raise HTTPException(status_code=404, detail="Media not found or expired")
-    audio, filename = entry
-    return Response(
-        content=audio,
-        media_type="application/octet-stream",
-        headers={
-            "Content-Disposition": f'attachment; filename="{filename}"',
-            "Cache-Control": "no-store",
-        },
-    )

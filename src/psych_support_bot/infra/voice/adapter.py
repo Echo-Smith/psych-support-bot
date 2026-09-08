@@ -5,21 +5,22 @@
   便于独立换模型供应商；STT 缺省回落 OPENAI_* 兼容旧行为，dots 模式必须显式配置。
 - 供应商双模式 STT：
   - openai：multipart POST {base}/audio/transcriptions（OpenAI/兼容网关）
-  - dots：chat completions + audio_url 内容块——dots 无 /audio/transcriptions，
-    且只接受「模型服务可直接访问」的公网音频 URL，故服务端内存暂存音频、
-    签发一次性下载 token（media_store），转写请求即拉即用
+  - dots：chat completions + audio_url 内容块——dots 无 /audio/transcriptions；
+    audio_url 直接用 base64 data URI 内联（实测网关支持），音频随请求
+    即发即逝，无需公网可达的托管 URL，也不落任何服务端状态
 - TTS：OpenAI 兼容 POST {base}/audio/speech；dots 平台暂无 TTS 端点，
   未配置时路由返回 503、前端降级浏览器 SpeechSynthesis。
 - 音频即转即弃：不落库、不写日志，转写文本走既有消息持久化边界。
 
-安全（Mimosa 约束）：适配器对用户可见的 URL 输入（audio_url 的 host）
-做 SSRF 防护——仅 http/https、拒绝环回/私有/保留地址。媒体托管 URL 由
-服务端自签发（VOICE_MEDIA_PUBLIC_BASE_URL），不取自用户输入。
+安全（Mimosa 约束）：适配器对外连的 URL（MiniMax WS 地址）做 SSRF 防护——
+仅 ws/wss、拒绝环回/私有/保留地址；纯服务端配置的 base_url 不经过此检查
+（部署方自担内网网关场景）。audio_url 为服务端自构造的 data URI，无外拉取。
 """
 
 from __future__ import annotations
 
 import asyncio
+import base64
 import ipaddress
 import logging
 from dataclasses import dataclass
@@ -103,7 +104,7 @@ def _is_forbidden_ip(addr: ipaddress.IPv4Address | ipaddress.IPv6Address) -> boo
 
 @dataclass(frozen=True)
 class SttConfig:
-    provider: str  # "openai" | "dots"
+    provider: str  # "openai" | "dots" | "minimax"
     base_url: str
     api_key: str
     model: str
@@ -157,6 +158,20 @@ def get_stt_config() -> SttConfig | None:
             base_url=base_url.rstrip("/"),
             api_key=api_key,
             model=model,
+            language=s.voice_stt_language,
+        )
+    if provider == "minimax":
+        # minimax ASR：Bearer + multipart /speech_to_text。凭据必须显式，
+        # base_url 缺省用国内站（与 TTS 的 ws 默认域名一致）。
+        api_key = s.voice_stt_api_key
+        if not api_key:
+            return None
+        base_url = s.voice_stt_base_url or "https://api.minimax.cn/v1"
+        return SttConfig(
+            provider="minimax",
+            base_url=base_url.rstrip("/"),
+            api_key=api_key,
+            model=s.voice_stt_model or "asr-1.0",
             language=s.voice_stt_language,
         )
     return None
@@ -224,6 +239,8 @@ def transcribe(
         return _transcribe_openai(config, audio_bytes, filename, language_hint)
     if config.provider == "dots":
         return _transcribe_dots(config, audio_bytes, filename, language_hint)
+    if config.provider == "minimax":
+        return _transcribe_minimax(config, audio_bytes, filename, language_hint)
     raise VoiceNotConfigured(f"Unknown STT provider: {config.provider}")
 
 
@@ -255,19 +272,34 @@ def _transcribe_openai(config: SttConfig, audio_bytes: bytes, filename: str, lan
     return text
 
 
+def _audio_media_type(filename: str) -> str:
+    """按扩展名推断 data URI 的 MIME（MediaRecorder 输出 + 常见录音格式）。"""
+    ext = filename.rsplit(".", 1)[-1].lower() if "." in filename else ""
+    return {
+        "webm": "audio/webm",
+        "ogg": "audio/ogg",
+        "oga": "audio/ogg",
+        "opus": "audio/ogg",
+        "mp3": "audio/mpeg",
+        "mpeg": "audio/mpeg",
+        "mp4": "audio/mp4",
+        "m4a": "audio/mp4",
+        "aac": "audio/aac",
+        "wav": "audio/wav",
+        "wave": "audio/wav",
+    }.get(ext, "audio/webm")
+
+
 def _transcribe_dots(config: SttConfig, audio_bytes: bytes, filename: str, language_hint: str) -> str:
-    """dots chat completions + audio_url 内容块。
+    """dots chat completions + audio_url 内容块（base64 data URI 内联）。
 
-    dots 只接受模型服务可直接访问的公网 URL：音频先入 media_store（内存，
-    单次下载即焚），以服务端自签发 URL 交给 dots 拉取。language 提示拼进
-    转写指令文本。
+    audio_url 用 data URI 直接内嵌音频（实测 dots 网关支持，2026-09-08）：
+    转写请求即发即逝，无公网托管 URL、无服务端暂存状态。language 提示
+    拼进转写指令文本。
     """
-    from psych_support_bot.infra.voice import media_store
-
-    media_url = media_store.issue_url(audio_bytes, filename)
-    # 自签发 URL 也过一遍 SSRF 校验：公网 base 配置错误（内网地址）时
-    # 宁可失败也不把内网地址暴露给上游。
-    validate_public_http_url(media_url)
+    mime = _audio_media_type(filename)
+    encoded = base64.b64encode(audio_bytes).decode("ascii")
+    media_url = f"data:{mime};base64,{encoded}"
     instruction = (
         "请转写这段音频，只输出转写文本，不加任何解释。"
         if (language_hint or config.language) != "en"
@@ -296,10 +328,6 @@ def _transcribe_dots(config: SttConfig, audio_bytes: bytes, filename: str, langu
         )
     except httpx.HTTPError as exc:
         raise VoiceProviderError(f"STT request failed: {exc}") from exc
-    finally:
-        # 音频 URL 即用即焚：无论请求成败都销毁暂存（含失败重试由前端
-        # 重新录音触发新上传，不复用旧音频）。
-        media_store.discard_url(media_url)
     if response.status_code >= 400:
         raise VoiceProviderError(f"STT upstream error {response.status_code}")
     try:
@@ -309,6 +337,44 @@ def _transcribe_dots(config: SttConfig, audio_bytes: bytes, filename: str, langu
         raise VoiceProviderError("STT upstream returned unexpected shape") from exc
     # dots 思考模型可能把 reasoning 混入 content：剥掉思维链痕迹
     text = _strip_reasoning_artifacts(text)
+    if not text:
+        raise VoiceProviderError("STT upstream returned empty text")
+    return text
+
+
+def _transcribe_minimax(config: SttConfig, audio_bytes: bytes, filename: str, language_hint: str) -> str:
+    """MiniMax 语音转文字：multipart POST {base}/speech_to_text（Bearer）。
+
+    平台文档（platform.minimax.io/docs/api-reference/speech-to-text）：
+    form 字段 model（asr-1.0）+ file + response_format=json；可选 language
+    提示（BCP-47）。响应 {"text": ..., "duration": ...}；MiniMax 风格的
+    base_resp.status_code 非 0 视为上游错误。
+    """
+    data: dict[str, str] = {"model": config.model, "response_format": "json", "stream": "false"}
+    language = language_hint or config.language
+    if language:
+        data["language"] = language
+    try:
+        response = httpx.post(
+            f"{config.base_url}/speech_to_text",
+            headers={"Authorization": f"Bearer {config.api_key}"},
+            files={"file": (filename, audio_bytes)},
+            data=data,
+            timeout=_REQUEST_TIMEOUT,
+        )
+    except httpx.HTTPError as exc:
+        raise VoiceProviderError(f"STT request failed: {exc}") from exc
+    if response.status_code >= 400:
+        raise VoiceProviderError(f"STT upstream error {response.status_code}")
+    try:
+        body = response.json() or {}
+    except ValueError as exc:
+        raise VoiceProviderError("STT upstream returned non-JSON") from exc
+    base = body.get("base_resp") or {}
+    status = base.get("status_code", 0)
+    if status not in (0, None):
+        raise VoiceProviderError(f"MiniMax ASR error {status}: {base.get('status_msg')}")
+    text = (body.get("text") or "").strip()
     if not text:
         raise VoiceProviderError("STT upstream returned empty text")
     return text

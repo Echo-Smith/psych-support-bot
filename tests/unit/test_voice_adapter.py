@@ -1,19 +1,18 @@
 """语音 I/O 适配层单测。
 
-覆盖：配置解析（openai/dots/未配置/回落）、SSRF 防护、media_store
-（一次性 token + TTL + 即焚）、openai/dots STT 调用（mock httpx）、
-TTS 调用与未配置 503 语义。不发真实网络请求。
+覆盖：配置解析（openai/dots/未配置/回落）、SSRF 防护、openai/dots STT
+调用（mock httpx）、TTS 调用与未配置 503 语义。不发真实网络请求。
 
 凭据值经 _fake_key() 现场生成（非硬编码），仅用于断言配置透传。
 """
 
+import base64
 import secrets
 
 import httpx
 import pytest
 
 from psych_support_bot.infra.config.settings import get_settings
-from psych_support_bot.infra.voice import media_store
 from psych_support_bot.infra.voice.adapter import (
     VoiceNotConfigured,
     VoiceProviderError,
@@ -26,11 +25,9 @@ from psych_support_bot.infra.voice.adapter import (
 
 
 @pytest.fixture(autouse=True)
-def _clear_media_store():
-    media_store.reset_for_tests()
+def _clear_settings_cache():
     get_settings.cache_clear()
     yield
-    media_store.reset_for_tests()
     get_settings.cache_clear()
 
 
@@ -171,67 +168,6 @@ def test_ssrf_accepts_public_https() -> None:
 
 
 # ---------------------------------------------------------------------------
-# media_store（dots 模式的临时音频托管）
-# ---------------------------------------------------------------------------
-
-
-def test_media_store_single_use_and_discard() -> None:
-    import os
-
-    os.environ["VOICE_MEDIA_PUBLIC_BASE_URL"] = "https://pub.example.com"
-    url = media_store.issue_url(b"audio-bytes", "a.webm")
-    token = url.rsplit("/", 1)[-1]
-    assert url.startswith("https://pub.example.com/v1/voice/tmp/")
-    assert len(token) >= 32  # token 不可枚举
-
-    audio, filename = media_store.consume(token)
-    assert audio == b"audio-bytes" and filename == "a.webm"
-    # 单次有效：第二次取不到
-    assert media_store.consume(token) is None
-
-    # discard_url 主动销毁
-    url2 = media_store.issue_url(b"x", "b.webm")
-    media_store.discard_url(url2)
-    assert media_store.consume(url2.rsplit("/", 1)[-1]) is None
-
-
-def test_media_store_requires_public_base_url() -> None:
-    _configure(VOICE_MEDIA_PUBLIC_BASE_URL="")
-    with pytest.raises(VoiceProviderError):
-        media_store.issue_url(b"x", "a.webm")
-
-
-def test_media_store_ttl_expiry(monkeypatch) -> None:
-    import os
-
-    os.environ["VOICE_MEDIA_PUBLIC_BASE_URL"] = "https://pub.example.com"
-    url = media_store.issue_url(b"y", "c.webm")
-    token = url.rsplit("/", 1)[-1]
-    # 时间快进超过 TTL
-    real_monotonic = __import__("time").monotonic
-    monkeypatch.setattr(
-        "psych_support_bot.infra.voice.media_store.time.monotonic",
-        lambda: real_monotonic() + 10_000,
-    )
-    assert media_store.consume(token) is None
-
-
-def test_media_store_issue_url_rejects_private_base() -> None:
-    # 自签发 URL 的 base 配置为内网地址时应被 SSRF 校验拒绝
-    # （校验发生在 adapter._transcribe_dots；此处验证校验函数行为）。
-    import os
-
-    os.environ["VOICE_MEDIA_PUBLIC_BASE_URL"] = "http://127.0.0.1:8000"
-    with pytest.raises(VoiceProviderError):
-        validate_public_http_url(media_store.issue_url(b"z", "d.webm"))
-
-
-def _store_tokens_remaining() -> bool:
-    with media_store._lock:
-        return bool(media_store._store)
-
-
-# ---------------------------------------------------------------------------
 # STT 调用（mock httpx）
 # ---------------------------------------------------------------------------
 
@@ -265,6 +201,61 @@ def test_transcribe_openai_upstream_error(stt_key, monkeypatch) -> None:
         transcribe(b"audio", "a.webm")
 
 
+def test_transcribe_minimax_success(monkeypatch, tts_key) -> None:
+    _configure(
+        stt_key=tts_key,
+        VOICE_STT_PROVIDER="minimax",
+        VOICE_STT_BASE_URL="",
+        VOICE_STT_MODEL="",
+    )
+    config = get_stt_config()
+    assert config is not None and config.provider == "minimax"
+    # base_url/model 缺省值：国内站 + asr-1.0
+    assert config.base_url == "https://api.minimax.cn/v1"
+    assert config.model == "asr-1.0"
+
+    def fake_post(url, **kwargs):
+        assert url == "https://api.minimax.cn/v1/speech_to_text"
+        assert kwargs["headers"]["Authorization"] == f"Bearer {tts_key}"
+        assert kwargs["data"]["model"] == "asr-1.0"
+        assert kwargs["data"]["language"] == "zh"
+        filename, content = kwargs["files"]["file"][0], kwargs["files"]["file"][1]
+        assert filename == "a.m4a" and content == b"audio"
+        return httpx.Response(
+            200,
+            json={"text": " 我现在心跳很快 ", "duration": 2.1, "base_resp": {"status_code": 0}},
+            request=httpx.Request("POST", url),
+        )
+
+    monkeypatch.setattr("psych_support_bot.infra.voice.adapter.httpx.post", fake_post)
+    assert transcribe(b"audio", "a.m4a") == "我现在心跳很快"
+
+
+def test_transcribe_minimax_upstream_error(monkeypatch, tts_key) -> None:
+    _configure(
+        stt_key=tts_key,
+        VOICE_STT_PROVIDER="minimax",
+        VOICE_STT_MODEL="",
+    )
+
+    def fake_post(url, **kwargs):
+        # MiniMax 风格业务错误：HTTP 200 但 base_resp.status_code 非 0
+        return httpx.Response(
+            200,
+            json={"base_resp": {"status_code": 1004, "status_msg": "invalid params"}},
+            request=httpx.Request("POST", url),
+        )
+
+    monkeypatch.setattr("psych_support_bot.infra.voice.adapter.httpx.post", fake_post)
+    with pytest.raises(VoiceProviderError):
+        transcribe(b"audio", "a.m4a")
+
+
+def test_transcribe_minimax_requires_key() -> None:
+    _configure(VOICE_STT_PROVIDER="minimax", VOICE_STT_API_KEY="")
+    assert get_stt_config() is None
+
+
 def test_transcribe_dots_mode_full_flow(monkeypatch, dots_key) -> None:
 
     _configure(
@@ -272,7 +263,6 @@ def test_transcribe_dots_mode_full_flow(monkeypatch, dots_key) -> None:
         VOICE_STT_PROVIDER="dots",
         VOICE_STT_BASE_URL="https://dots.example.com/v1",
         VOICE_STT_MODEL="dots3-note-prev",
-        VOICE_MEDIA_PUBLIC_BASE_URL="https://pub.example.com",
     )
 
     captured: dict = {}
@@ -281,11 +271,11 @@ def test_transcribe_dots_mode_full_flow(monkeypatch, dots_key) -> None:
         captured["url"] = url
         if url.endswith("/chat/completions"):
             audio_url = kwargs["json"]["messages"][0]["content"][0]["audio_url"]["url"]
-            assert audio_url.startswith("https://pub.example.com/v1/voice/tmp/")
+            # audio_url 为 base64 data URI 内联：header + 可逆解码
+            scheme, b64 = audio_url.split(";base64,", 1)
+            assert scheme == "data:audio/webm"
+            assert base64.b64decode(b64) == b"audio-bytes"
             assert kwargs["headers"]["api-key"] == dots_key
-            # 模拟 dots 拉取音频
-            fetched = media_store.consume(audio_url.rsplit("/", 1)[-1])
-            assert fetched is not None and fetched[0] == b"audio-bytes"
             return httpx.Response(
                 200,
                 json={"choices": [{"message": {"content": "我心跳好快。"}}]},
@@ -296,18 +286,40 @@ def test_transcribe_dots_mode_full_flow(monkeypatch, dots_key) -> None:
     monkeypatch.setattr("psych_support_bot.infra.voice.adapter.httpx.post", fake_post)
     assert transcribe(b"audio-bytes", "a.webm") == "我心跳好快。"
     assert captured["url"].endswith("/chat/completions")
-    # 转写完成后音频即焚（无论成败）
-    assert not _store_tokens_remaining()
 
 
-def test_transcribe_dots_discards_media_on_failure(monkeypatch, dots_key) -> None:
+def test_transcribe_dots_media_type_by_extension(monkeypatch, dots_key) -> None:
+    _configure(
+        stt_key=dots_key,
+        VOICE_STT_PROVIDER="dots",
+        VOICE_STT_BASE_URL="https://dots.example.com/v1",
+        VOICE_STT_MODEL="m",
+    )
+    mimes: list[str] = []
+
+    def fake_post(url, **kwargs):
+        audio_url = kwargs["json"]["messages"][0]["content"][0]["audio_url"]["url"]
+        mimes.append(audio_url.split(";base64,", 1)[0])
+        return httpx.Response(
+            200,
+            json={"choices": [{"message": {"content": "好"}}]},
+            request=httpx.Request("POST", url),
+        )
+
+    monkeypatch.setattr("psych_support_bot.infra.voice.adapter.httpx.post", fake_post)
+    transcribe(b"a", "clip.m4a")
+    transcribe(b"a", "note.mp3")
+    transcribe(b"a", "noext")
+    assert mimes == ["data:audio/mp4", "data:audio/mpeg", "data:audio/webm"]
+
+
+def test_transcribe_dots_upstream_error(monkeypatch, dots_key) -> None:
 
     _configure(
         stt_key=dots_key,
         VOICE_STT_PROVIDER="dots",
         VOICE_STT_BASE_URL="https://dots.example.com/v1",
         VOICE_STT_MODEL="m",
-        VOICE_MEDIA_PUBLIC_BASE_URL="https://pub.example.com",
     )
 
     def fake_post(url, **kwargs):
@@ -316,20 +328,6 @@ def test_transcribe_dots_discards_media_on_failure(monkeypatch, dots_key) -> Non
     monkeypatch.setattr("psych_support_bot.infra.voice.adapter.httpx.post", fake_post)
     with pytest.raises(VoiceProviderError):
         transcribe(b"audio-bytes", "a.webm")
-    assert not _store_tokens_remaining()
-
-
-def test_transcribe_dots_rejects_private_public_base() -> None:
-
-    _configure(
-        stt_key="ignored",
-        VOICE_STT_PROVIDER="dots",
-        VOICE_STT_BASE_URL="https://dots.example.com/v1",
-        VOICE_STT_MODEL="m",
-        VOICE_MEDIA_PUBLIC_BASE_URL="http://127.0.0.1:8000",
-    )
-    with pytest.raises(VoiceProviderError):
-        transcribe(b"audio", "a.webm")
 
 
 # ---------------------------------------------------------------------------

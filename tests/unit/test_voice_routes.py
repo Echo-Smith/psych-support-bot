@@ -1,15 +1,13 @@
 """语音路由契约测试（TestClient，mock 适配器，无真实网络）。
 
 覆盖：/status 探测、/transcribe 格式与大小校验、/speak 长度校验与
-未配置 503、/tmp 一次性下载 404。AUTH_ENABLED=false（游客直进）与
-既有集成测试同口径。
+未配置 503。AUTH_ENABLED=false（游客直进）与既有集成测试同口径。
 """
 
 import pytest
 from fastapi.testclient import TestClient
 
 from psych_support_bot.app import create_app
-from psych_support_bot.infra.voice import media_store
 
 
 @pytest.fixture(autouse=True)
@@ -30,7 +28,6 @@ def _isolated_voice_env(monkeypatch):
         "VOICE_TTS_VOICE",
         "VOICE_TTS_WS_URL",
         "VOICE_TTS_LANGUAGE_BOOST",
-        "VOICE_MEDIA_PUBLIC_BASE_URL",
         "OPENAI_API_KEY",
         "OPENAI_BASE_URL",
     ):
@@ -44,11 +41,9 @@ def _isolated_voice_env(monkeypatch):
 
 @pytest.fixture()
 def client():
-    media_store.reset_for_tests()
     app = create_app()
     with TestClient(app) as test_client:
         yield test_client
-    media_store.reset_for_tests()
 
 
 def test_voice_status_contract(client, monkeypatch):
@@ -166,17 +161,6 @@ def test_speak_success_returns_audio(client, monkeypatch):
     assert res.headers["content-type"].startswith("audio/mpeg")
 
 
-def test_tmp_media_single_download(client, monkeypatch):
-    monkeypatch.setenv("VOICE_MEDIA_PUBLIC_BASE_URL", "https://pub.example.com")
-    from psych_support_bot.infra.config.settings import get_settings
-
-    get_settings.cache_clear()  # client fixture 已缓存启动期 settings
-    url = media_store.issue_url(b"audio", "a.webm")
-    token = url.rsplit("/", 1)[-1]
-    # 无鉴权直取（模型侧拉取设计）
-    first = client.get(f"/v1/voice/tmp/{token}")
-    assert first.status_code == 200 and first.content == b"audio"
-    # 单次有效
-    assert client.get(f"/v1/voice/tmp/{token}").status_code == 404
-    # 未知 token
+def test_tmp_media_endpoint_removed(client):
+    # dots STT 已改为 base64 data URI 内联，无鉴权的 /tmp 拉取端点不复存在
     assert client.get("/v1/voice/tmp/deadbeef").status_code == 404
