@@ -19,12 +19,14 @@
 
 from __future__ import annotations
 
+import asyncio
 import ipaddress
 import logging
 from dataclasses import dataclass
 from urllib.parse import urlparse
 
 import httpx
+import websockets
 
 from psych_support_bot.infra.config.settings import get_settings
 
@@ -46,18 +48,18 @@ class VoiceProviderError(Exception):
 
 
 def validate_public_http_url(url: str) -> str:
-    """SSRF 防护：仅 http/https 且 host 不得是环回/私有/保留地址。
+    """SSRF 防护：仅 http/https/ws/wss 且 host 不得是环回/私有/保留地址。
 
-    用于任何「可能受用户输入影响」的 URL 校验（dots audio_url 场景）；
-    纯服务端配置的 base_url 不经过此检查（部署方自担内网网关场景）。
-    返回规范化 URL，不合法抛 VoiceProviderError。
+    用于任何「可能受用户输入影响」的 URL 校验（dots audio_url 场景、
+    MiniMax WS URL 自检）；纯服务端配置的 base_url 不经过此检查
+    （部署方自担内网网关场景）。返回规范化 URL，不合法抛 VoiceProviderError。
     """
     try:
         parsed = urlparse(url)
     except ValueError as exc:
         raise VoiceProviderError(f"Invalid URL: {exc}") from exc
-    if parsed.scheme not in {"http", "https"}:
-        raise VoiceProviderError("Only http/https URLs are allowed")
+    if parsed.scheme not in {"http", "https", "ws", "wss"}:
+        raise VoiceProviderError("Only http/https/ws/wss URLs are allowed")
     host = parsed.hostname or ""
     if not host:
         raise VoiceProviderError("URL has no host")
@@ -110,10 +112,13 @@ class SttConfig:
 
 @dataclass(frozen=True)
 class TtsConfig:
-    base_url: str
+    provider: str  # "openai" | "minimax"
+    base_url: str  # openai: REST base；minimax: ""（用 ws_url）
+    ws_url: str  # minimax: wss://api.minimax.cn/ws/v1/t2a_v2_bidi
     api_key: str
     model: str
     voice: str
+    language_boost: str = ""
 
 
 def get_stt_config() -> SttConfig | None:
@@ -159,16 +164,41 @@ def get_stt_config() -> SttConfig | None:
 
 def get_tts_config() -> TtsConfig | None:
     s = get_settings()
-    base_url = s.voice_tts_base_url
     api_key = s.voice_tts_api_key
-    if not (base_url and api_key):
+    if not api_key:
         return None
-    return TtsConfig(
-        base_url=base_url.rstrip("/"),
-        api_key=api_key,
-        model=s.voice_tts_model or "tts-1",
-        voice=s.voice_tts_voice or "alloy",
-    )
+    provider = (s.voice_tts_provider or "").strip().lower()
+    if not provider:
+        # 缺省按 base_url 判定（旧行为兼容：配了 base_url 即 openai 兼容模式）
+        provider = "openai" if s.voice_tts_base_url else ""
+        if not provider:
+            return None
+    if provider == "openai":
+        base_url = s.voice_tts_base_url
+        if not base_url:
+            return None
+        return TtsConfig(
+            provider="openai",
+            base_url=base_url.rstrip("/"),
+            ws_url="",
+            api_key=api_key,
+            model=s.voice_tts_model or "tts-1",
+            voice=s.voice_tts_voice or "alloy",
+        )
+    if provider == "minimax":
+        ws_url = (s.voice_tts_ws_url or "wss://api.minimax.cn/ws/v1/t2a_v2_bidi").strip()
+        if not ws_url.startswith(("wss://", "ws://")):
+            raise VoiceProviderError("VOICE_TTS_WS_URL must start with wss:// or ws://")
+        return TtsConfig(
+            provider="minimax",
+            base_url="",
+            ws_url=ws_url,
+            api_key=api_key,
+            model=s.voice_tts_model or "speech-2.8-hd",
+            voice=s.voice_tts_voice or "male-qn-qingse",
+            language_boost=s.voice_tts_language_boost or "",
+        )
+    return None
 
 
 # ---------------------------------------------------------------------------
@@ -299,13 +329,25 @@ def _strip_reasoning_artifacts(text: str) -> str:
 
 
 def synthesize(text: str, *, language: str = "") -> bytes:
-    """文本 → mp3 音频（OpenAI 兼容 /audio/speech）。未配置抛 VoiceNotConfigured。"""
+    """文本 → mp3 音频。供应商由 VOICE_TTS_PROVIDER 决定；未配置抛 VoiceNotConfigured。
+
+    同步接口（路由端点在线程池中运行）：minimax 走 asyncio.run 包裹的
+    WS 会话，openai 走 REST。两类失败都收敛为 VoiceProviderError。
+    """
     config = get_tts_config()
     if config is None:
         raise VoiceNotConfigured("Voice TTS is not configured")
     cleaned = (text or "").strip()
     if not cleaned:
         raise VoiceProviderError("Empty TTS input")
+    if config.provider == "minimax":
+        return _synthesize_minimax(config, cleaned)
+    if config.provider == "openai":
+        return _synthesize_openai(config, cleaned)
+    raise VoiceNotConfigured(f"Unknown TTS provider: {config.provider}")
+
+
+def _synthesize_openai(config: TtsConfig, cleaned: str) -> bytes:
     try:
         response = httpx.post(
             f"{config.base_url}/audio/speech",
@@ -327,3 +369,101 @@ def synthesize(text: str, *, language: str = "") -> bytes:
     if not audio:
         raise VoiceProviderError("TTS upstream returned empty audio")
     return audio
+
+
+# MiniMax T2A 双向流式（wss /ws/v1/t2a_v2_bidi）参数
+_MINIMAX_SAMPLE_RATE = 32000
+_MINIMAX_BITRATE = 128000
+_MINIMAX_WS_OPEN_TIMEOUT = 10.0
+_MINIMAX_WS_IDLE_TIMEOUT = 30.0
+_MINIMAX_MAX_AUDIO_BYTES = 20 * 1024 * 1024  # 单次合成输出兜底上限
+
+
+def _synthesize_minimax(config: TtsConfig, cleaned: str) -> bytes:
+    """MiniMax speech TTS（双向流式 WebSocket）。
+
+    事件流（platform.minimax.cn/docs api-reference/speech-t2a-websocket-bidi）：
+    wss 握手（Bearer）→ connected_success → task_start（音色/音频参数）
+    → task_started → task_continue（全文一次发送，服务端攒句）→
+    task_continued 分块返回 hex 音频（is_final=true 表示本次音频结束）
+    → task_finish → task_finished → 连接关闭。音频按序拼接为完整 mp3。
+    """
+    import json as _json
+
+    # 配置自检：SSRF 约束同样适用于我们即将外连的 WS 地址
+    validate_public_http_url(config.ws_url)
+
+    async def _run() -> bytes:
+        audio_chunks: list[bytes] = []
+        async with websockets.connect(
+            config.ws_url,
+            additional_headers={"Authorization": f"Bearer {config.api_key}"},
+            open_timeout=_MINIMAX_WS_OPEN_TIMEOUT,
+            close_timeout=5,
+        ) as ws:
+            connected = _json.loads(await asyncio.wait_for(ws.recv(), _MINIMAX_WS_IDLE_TIMEOUT))
+            if connected.get("event") != "connected_success":
+                raise VoiceProviderError(f"MiniMax handshake failed: {connected.get('base_resp')}")
+
+            await ws.send(
+                _json.dumps(
+                    {
+                        "event": "task_start",
+                        "model": config.model,
+                        **({"language_boost": config.language_boost} if config.language_boost else {}),
+                        "voice_setting": {"voice_id": config.voice, "speed": 0.95, "vol": 1, "pitch": 0},
+                        "audio_setting": {
+                            "sample_rate": _MINIMAX_SAMPLE_RATE,
+                            "bitrate": _MINIMAX_BITRATE,
+                            "format": "mp3",
+                            "channel": 1,
+                        },
+                    }
+                )
+            )
+            started = _json.loads(await asyncio.wait_for(ws.recv(), _MINIMAX_WS_IDLE_TIMEOUT))
+            if started.get("event") != "task_started":
+                raise VoiceProviderError(f"MiniMax task_start failed: {started.get('base_resp')}")
+
+            await ws.send(_json.dumps({"event": "task_continue", "text": cleaned}))
+
+            audio_done = False
+            while not audio_done:
+                message = _json.loads(await asyncio.wait_for(ws.recv(), _MINIMAX_WS_IDLE_TIMEOUT))
+                base = message.get("base_resp") or {}
+                status = base.get("status_code", 0)
+                if status != 0:
+                    raise VoiceProviderError(f"MiniMax TTS error {status}: {base.get('status_msg')}")
+                data = message.get("data") or {}
+                hex_audio = data.get("audio")
+                if hex_audio:
+                    audio_chunks.append(bytes.fromhex(hex_audio))
+                    if sum(len(c) for c in audio_chunks) > _MINIMAX_MAX_AUDIO_BYTES:
+                        raise VoiceProviderError("MiniMax TTS audio exceeds size cap") from None
+                if message.get("is_final"):
+                    audio_done = True
+
+            await ws.send(_json.dumps({"event": "task_finish"}))
+            # task_finished 到达前连接可能已被服务端关闭——尽力而为
+            try:
+                while True:
+                    final = _json.loads(await asyncio.wait_for(ws.recv(), _MINIMAX_WS_IDLE_TIMEOUT))
+                    if final.get("event") in {"task_finished", "task_failed"}:
+                        break
+            except (TimeoutError, websockets.ConnectionClosed):
+                pass
+
+        audio = b"".join(audio_chunks)
+        if not audio:
+            raise VoiceProviderError("MiniMax TTS returned empty audio")
+        return audio
+
+    try:
+        return asyncio.run(_run())
+    except VoiceProviderError:
+        raise
+    except (OSError, websockets.WebSocketException) as exc:
+        raise VoiceProviderError(f"MiniMax WS failed: {exc}") from exc
+    except ValueError as exc:
+        # bytes.fromhex 对畸形分块的失败
+        raise VoiceProviderError(f"MiniMax TTS malformed audio chunk: {exc}") from exc

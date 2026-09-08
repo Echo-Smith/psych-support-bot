@@ -141,6 +141,8 @@ def test_speak_contract_and_validation(client, monkeypatch):
 
 
 def test_speak_success_returns_audio(client, monkeypatch):
+    # 显式 openai 路径（adapter 测试可能残留 VOICE_TTS_PROVIDER=minimax）
+    monkeypatch.setenv("VOICE_TTS_PROVIDER", "openai")
     monkeypatch.setenv("VOICE_TTS_BASE_URL", "https://tts.example.com/v1")
     monkeypatch.setenv("VOICE_TTS_API_KEY", "k" * 8)
     from psych_support_bot.infra.config.settings import get_settings

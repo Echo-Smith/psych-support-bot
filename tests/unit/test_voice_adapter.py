@@ -357,3 +357,141 @@ def test_synthesize_rejects_empty_text(tts_key) -> None:
     _configure(tts_key=tts_key)
     with pytest.raises(VoiceProviderError):
         synthesize("   ")
+
+
+# ---------------------------------------------------------------------------
+# MiniMax TTS（wss /ws/v1/t2a_v2_bidi，mock websockets）
+# ---------------------------------------------------------------------------
+
+
+class _FakeWebSocket:
+    """按脚本回放的假 WS：recv 依次弹出（dict→json 帧，Exception→抛出）。"""
+
+    def __init__(self, script: list) -> None:
+        self._script = list(script)
+        self.sent: list[dict] = []
+
+    async def send(self, raw: str) -> None:
+        import json as _json
+
+        self.sent.append(_json.loads(raw))
+
+    async def recv(self) -> str:
+        import json as _json
+
+        if not self._script:
+            raise TimeoutError("script exhausted")
+        item = self._script.pop(0)
+        if isinstance(item, Exception):
+            raise item
+        return _json.dumps(item)
+
+    async def __aenter__(self) -> "_FakeWebSocket":
+        return self
+
+    async def __aexit__(self, *args) -> None:
+        return None
+
+
+def _configure_minimax(tts_key: str, ws_url: str = "wss://api.minimax.cn/ws/v1/t2a_v2_bidi", **overrides) -> None:
+
+    _configure(
+        tts_key=tts_key,
+        VOICE_TTS_PROVIDER="minimax",
+        VOICE_TTS_WS_URL=ws_url,
+        VOICE_TTS_MODEL="speech-2.8-hd",
+        VOICE_TTS_VOICE="male-qn-qingse",
+        **overrides,
+    )
+
+
+def test_tts_config_minimax(tts_key) -> None:
+    _configure_minimax(tts_key)
+    config = get_tts_config()
+    assert config is not None and config.provider == "minimax"
+    assert config.model == "speech-2.8-hd"
+    assert config.voice == "male-qn-qingse"
+
+
+def test_tts_config_minimax_requires_key() -> None:
+    _configure(VOICE_TTS_PROVIDER="minimax", VOICE_TTS_API_KEY="", VOICE_TTS_BASE_URL="")
+    assert get_tts_config() is None
+
+
+def test_synthesize_minimax_success(monkeypatch, tts_key) -> None:
+    _configure_minimax(tts_key)
+    hex_a = b"chunk-a".hex()
+    hex_b = b"chunk-b".hex()
+    fake = _FakeWebSocket(
+        [
+            {"event": "connected_success", "base_resp": {"status_code": 0}},
+            {"event": "task_started", "base_resp": {"status_code": 0}},
+            {"data": {"audio": hex_a}, "is_final": False, "base_resp": {"status_code": 0}},
+            {"data": {"audio": hex_b}, "is_final": True, "base_resp": {"status_code": 0}},
+            {"event": "task_finished", "base_resp": {"status_code": 0}},
+        ]
+    )
+
+    def fake_connect(url, **kwargs):
+        assert url == "wss://api.minimax.cn/ws/v1/t2a_v2_bidi"
+        assert kwargs["additional_headers"]["Authorization"] == f"Bearer {tts_key}"
+        return fake
+
+    import psych_support_bot.infra.voice.adapter as _adapter
+
+    monkeypatch.setattr(_adapter.websockets, "connect", fake_connect)
+    assert synthesize("慢慢来") == b"chunk-a" + b"chunk-b"
+    events = [frame.get("event") for frame in fake.sent]
+    assert events[0] == "task_start"
+    assert events[1] == "task_continue"
+    assert fake.sent[1]["text"] == "慢慢来"
+    assert events[-1] == "task_finish"
+
+
+def test_synthesize_minimax_task_failed(monkeypatch, tts_key) -> None:
+    _configure_minimax(tts_key)
+    fake = _FakeWebSocket(
+        [
+            {"event": "connected_success", "base_resp": {"status_code": 0}},
+            {"event": "task_started", "base_resp": {"status_code": 0}},
+            {"event": "task_failed", "base_resp": {"status_code": 1004, "status_msg": "bad voice"}},
+        ]
+    )
+
+    def fake_connect(url, **kwargs):
+        return fake
+
+    import psych_support_bot.infra.voice.adapter as _adapter
+
+    monkeypatch.setattr(_adapter.websockets, "connect", fake_connect)
+    with pytest.raises(VoiceProviderError):
+        synthesize("你好")
+
+
+def test_synthesize_minimax_handshake_failure(monkeypatch, tts_key) -> None:
+    _configure_minimax(tts_key)
+    fake = _FakeWebSocket([{"event": "connected_failed", "base_resp": {"status_code": 401}}])
+
+    def fake_connect(url, **kwargs):
+        return fake
+
+    import psych_support_bot.infra.voice.adapter as _adapter
+
+    monkeypatch.setattr(_adapter.websockets, "connect", fake_connect)
+    with pytest.raises(VoiceProviderError):
+        synthesize("你好")
+
+
+def test_synthesize_minimax_ws_url_ssrf_guard(tts_key) -> None:
+    """WS URL 指向内网/环回时拒绝外连（SSRF 约束对 wss 同样生效）。"""
+    import websockets
+
+    for bad in (
+        "wss://127.0.0.1/ws/v1/t2a_v2_bidi",
+        "wss://10.0.0.9/ws/v1/t2a_v2_bidi",
+        "ws://localhost/ws/v1/t2a_v2_bidi",
+    ):
+        _configure_minimax(tts_key, ws_url=bad)
+        with pytest.raises(VoiceProviderError):
+            synthesize("你好")  # validate 在建连前抛出，不会触达 fake connect
+    del websockets

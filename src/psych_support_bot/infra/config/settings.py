@@ -58,8 +58,13 @@ class Settings(BaseSettings):
     voice_stt_api_key: str = Field(default="", alias="VOICE_STT_API_KEY")
     voice_stt_model: str = Field(default="", alias="VOICE_STT_MODEL")
     voice_stt_language: str = Field(default="", alias="VOICE_STT_LANGUAGE")
-    # TTS：OpenAI 兼容 POST /audio/speech（dots 平台暂无 TTS 端点；
-    # 未配置时前端降级浏览器 SpeechSynthesis）。
+    # TTS：provider = "minimax"（wss /ws/v1/t2a_v2_bidi 双向流式，用户指定）
+    # | "openai"（POST /audio/speech，OpenAI 兼容）。api_key/model/voice
+    # 两家共用；minimax 另需 ws_url。provider 缺省时按 base_url 是否配置
+    # 回落 openai（旧行为兼容）；dots 平台无 TTS 端点。
+    voice_tts_provider: str = Field(default="", alias="VOICE_TTS_PROVIDER")
+    voice_tts_ws_url: str = Field(default="", alias="VOICE_TTS_WS_URL")
+    voice_tts_language_boost: str = Field(default="Chinese", alias="VOICE_TTS_LANGUAGE_BOOST")
     voice_tts_base_url: str = Field(default="", alias="VOICE_TTS_BASE_URL")
     voice_tts_api_key: str = Field(default="", alias="VOICE_TTS_API_KEY")
     voice_tts_model: str = Field(default="", alias="VOICE_TTS_MODEL")
