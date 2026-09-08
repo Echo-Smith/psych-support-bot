@@ -74,11 +74,9 @@
     .meta-bar {
       display: grid;
       grid-template-columns: repeat(4, minmax(0, 1fr));
-      gap: 10px;
+      gap: 6px;
       font-size: 12px;
-      padding: 10px 0;
-      border-bottom: 1px solid var(--rule);
-      margin-bottom: 16px;
+      margin-bottom: 8px;
     }
 
     .meta-item {
@@ -2026,13 +2024,6 @@
       <div class="risk-pill risk-low" id="riskIndicator">就绪</div>
     </div>
 
-    <div class="meta-bar">
-      <div class="meta-item"><span class="k">页面版本</span><span class="v" id="uiVersion">np-v1</span></div>
-      <div class="meta-item"><span class="k">当前模型</span><span class="v" id="modelName">加载中…</span></div>
-      <div class="meta-item"><span class="k">当前模式</span><span class="v" id="currentMode">未开始</span></div>
-      <div class="meta-item"><span class="k">回复来源</span><span class="v" id="replySource">未开始</span></div>
-    </div>
-
     <nav class="tabs" role="tablist">
       <button class="tab active" data-tab="chat" role="tab">聊天</button>
       <button class="tab" data-tab="tools" role="tab">工具</button>
@@ -2089,6 +2080,12 @@
 
       <div class="debug-box">
         <h4>调试信息</h4>
+        <div class="meta-bar">
+          <div class="meta-item"><span class="k">页面版本</span><span class="v" id="uiVersion">dev-v1</span></div>
+          <div class="meta-item"><span class="k">模型</span><span class="v" id="modelName">加载中…</span></div>
+          <div class="meta-item"><span class="k">当前模式</span><span class="v" id="currentMode">未开始</span></div>
+          <div class="meta-item"><span class="k">回复来源</span><span class="v" id="replySource">未开始</span></div>
+        </div>
         <div class="debug-log" id="debugLog">等待发送消息…
         </div>
       </div>
@@ -2636,7 +2633,13 @@
       try {
         const res = await fetch(API_BASE + '/system/info');
         const data = await res.json();
-        document.getElementById('modelName').textContent = data.default_model || '未知';
+        // 模型实况：主 LLM + 语音 STT/TTS（未配置语音时只显示主模型）
+        const m = data.models || {};
+        const lines = ['对话 ' + (m.llm || data.default_model || '未知')];
+        if (m.stt) lines.push('转写 ' + m.stt);
+        if (m.tts) lines.push('朗读 ' + m.tts);
+        document.getElementById('modelName').innerHTML =
+          lines.map((l) => '<div style="font-weight:600">' + escapeHtml(l) + '</div>').join('');
         appendDebug('system/info => ' + JSON.stringify(data, null, 2));
       } catch (err) {
         document.getElementById('modelName').textContent = '加载失败';
