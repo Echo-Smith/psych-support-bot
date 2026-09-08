@@ -15,20 +15,26 @@ from psych_support_bot.infra.voice import media_store
 @pytest.fixture(autouse=True)
 def _isolated_voice_env(monkeypatch):
     """隔离仓库 .env 与上一个用例残留：语音配置默认全空（未配置态）。"""
+    # 空字符串覆盖而非 delenv：env var 优先级高于 .env 文件值——
+    # 开发机的 .env 可能带真实语音 key（pydantic-settings 会读 env_file），
+    # delenv 挡不住它，空串才能强制「未配置」基线。
     for var in (
         "VOICE_STT_PROVIDER",
         "VOICE_STT_BASE_URL",
         "VOICE_STT_API_KEY",
         "VOICE_STT_MODEL",
+        "VOICE_TTS_PROVIDER",
         "VOICE_TTS_BASE_URL",
         "VOICE_TTS_API_KEY",
         "VOICE_TTS_MODEL",
         "VOICE_TTS_VOICE",
+        "VOICE_TTS_WS_URL",
+        "VOICE_TTS_LANGUAGE_BOOST",
         "VOICE_MEDIA_PUBLIC_BASE_URL",
         "OPENAI_API_KEY",
         "OPENAI_BASE_URL",
     ):
-        monkeypatch.delenv(var, raising=False)
+        monkeypatch.setenv(var, "")
     from psych_support_bot.infra.config.settings import get_settings
 
     get_settings.cache_clear()

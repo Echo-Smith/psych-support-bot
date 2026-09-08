@@ -63,6 +63,9 @@ def _configure(stt_key: str = "", tts_key: str = "", **overrides) -> None:
         "VOICE_STT_BASE_URL": "https://stt.example.com/v1",
         "VOICE_STT_API_KEY": stt_key,
         "VOICE_STT_MODEL": "whisper-1",
+        # 显式钉住 provider：开发机 .env 可能带真实 minimax 配置，
+        # 不钉会把 openai 用例的 mock 请求路由到 WS 路径。
+        "VOICE_TTS_PROVIDER": "openai",
         "VOICE_TTS_BASE_URL": "https://tts.example.com/v1",
         "VOICE_TTS_API_KEY": tts_key,
         "VOICE_TTS_MODEL": "tts-1",
