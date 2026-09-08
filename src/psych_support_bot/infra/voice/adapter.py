@@ -23,6 +23,9 @@ import asyncio
 import base64
 import ipaddress
 import logging
+import threading
+import time
+from collections import OrderedDict
 from dataclasses import dataclass
 from urllib.parse import urlparse
 
@@ -394,11 +397,48 @@ def _strip_reasoning_artifacts(text: str) -> str:
 # ---------------------------------------------------------------------------
 
 
+# TTS 文本缓存：练习须知等固定文案每次 offer 都原文重读，属纯重复支出。
+# 进程内 LRU + TTL，key 含供应商配置（换音色/模型即失效）；只缓存成功
+# 路径，错误每次照实抛出。内存态即可——重启清零，无需持久化。
+_TTS_CACHE_MAX_ENTRIES = 64
+_TTS_CACHE_TTL_SECONDS = 30 * 60
+_tts_cache_lock = threading.Lock()
+_tts_cache: "OrderedDict[tuple, tuple[float, bytes]]" = OrderedDict()
+
+
+def _tts_cache_get(key: tuple) -> bytes | None:
+    with _tts_cache_lock:
+        entry = _tts_cache.get(key)
+        if entry is None:
+            return None
+        stored_at, audio = entry
+        if time.monotonic() - stored_at > _TTS_CACHE_TTL_SECONDS:
+            del _tts_cache[key]
+            return None
+        # LRU 触碰：移到末尾
+        _tts_cache.move_to_end(key)
+        return audio
+
+
+def _tts_cache_put(key: tuple, audio: bytes) -> None:
+    with _tts_cache_lock:
+        _tts_cache[key] = (time.monotonic(), audio)
+        _tts_cache.move_to_end(key)
+        while len(_tts_cache) > _TTS_CACHE_MAX_ENTRIES:
+            _tts_cache.popitem(last=False)
+
+
+def _reset_tts_cache_for_tests() -> None:
+    with _tts_cache_lock:
+        _tts_cache.clear()
+
+
 def synthesize(text: str, *, language: str = "") -> bytes:
     """文本 → mp3 音频。供应商由 VOICE_TTS_PROVIDER 决定；未配置抛 VoiceNotConfigured。
 
     同步接口（路由端点在线程池中运行）：minimax 走 asyncio.run 包裹的
     WS 会话，openai 走 REST。两类失败都收敛为 VoiceProviderError。
+    相同文本 + 相同合成配置直接返回缓存音频（练习须知等重复文案零成本）。
     """
     config = get_tts_config()
     if config is None:
@@ -406,11 +446,25 @@ def synthesize(text: str, *, language: str = "") -> bytes:
     cleaned = (text or "").strip()
     if not cleaned:
         raise VoiceProviderError("Empty TTS input")
+    cache_key = (
+        config.provider,
+        config.model,
+        config.voice,
+        config.language_boost,
+        language,
+        cleaned,
+    )
+    cached = _tts_cache_get(cache_key)
+    if cached is not None:
+        return cached
     if config.provider == "minimax":
-        return _synthesize_minimax(config, cleaned)
-    if config.provider == "openai":
-        return _synthesize_openai(config, cleaned)
-    raise VoiceNotConfigured(f"Unknown TTS provider: {config.provider}")
+        audio = _synthesize_minimax(config, cleaned)
+    elif config.provider == "openai":
+        audio = _synthesize_openai(config, cleaned)
+    else:
+        raise VoiceNotConfigured(f"Unknown TTS provider: {config.provider}")
+    _tts_cache_put(cache_key, audio)
+    return audio
 
 
 def _synthesize_openai(config: TtsConfig, cleaned: str) -> bytes:

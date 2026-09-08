@@ -8,6 +8,7 @@
 
 import base64
 import secrets
+import time
 
 import httpx
 import pytest
@@ -26,8 +27,12 @@ from psych_support_bot.infra.voice.adapter import (
 
 @pytest.fixture(autouse=True)
 def _clear_settings_cache():
+    from psych_support_bot.infra.voice import adapter as _voice_adapter
+
+    _voice_adapter._reset_tts_cache_for_tests()
     get_settings.cache_clear()
     yield
+    _voice_adapter._reset_tts_cache_for_tests()
     get_settings.cache_clear()
 
 
@@ -358,6 +363,102 @@ def test_synthesize_rejects_empty_text(tts_key) -> None:
     _configure(tts_key=tts_key)
     with pytest.raises(VoiceProviderError):
         synthesize("   ")
+
+
+# ---------------------------------------------------------------------------
+# TTS 文本缓存（练习须知等重复文案零成本）
+# ---------------------------------------------------------------------------
+
+
+def test_tts_cache_hits_same_text(monkeypatch, tts_key) -> None:
+    _configure(tts_key=tts_key)
+    calls = {"n": 0}
+
+    def fake_post(url, **kwargs):
+        calls["n"] += 1
+        return httpx.Response(200, content=b"ID3mp3", request=httpx.Request("POST", url))
+
+    monkeypatch.setattr("psych_support_bot.infra.voice.adapter.httpx.post", fake_post)
+    first = synthesize("你好")
+    second = synthesize("你好")
+    assert first == second == b"ID3mp3"
+    assert calls["n"] == 1  # 第二次命中缓存，不打上游
+    # 文本不同 → 不同 key，照打上游
+    synthesize("再见")
+    assert calls["n"] == 2
+
+
+def test_tts_cache_key_includes_voice_config(monkeypatch, tts_key) -> None:
+    _configure(tts_key=tts_key)
+    calls = {"n": 0}
+
+    def fake_post(url, **kwargs):
+        calls["n"] += 1
+        return httpx.Response(200, content=b"x", request=httpx.Request("POST", url))
+
+    monkeypatch.setattr("psych_support_bot.infra.voice.adapter.httpx.post", fake_post)
+    synthesize("你好")
+    # 换音色 → key 不同 → 不吃旧缓存
+    _configure(tts_key=tts_key, VOICE_TTS_VOICE="nova")
+    get_settings.cache_clear()
+    synthesize("你好")
+    assert calls["n"] == 2
+
+
+def test_tts_cache_does_not_cache_errors(monkeypatch, tts_key) -> None:
+    _configure(tts_key=tts_key)
+    calls = {"n": 0}
+
+    def fake_post(url, **kwargs):
+        calls["n"] += 1
+        return httpx.Response(500, request=httpx.Request("POST", url))
+
+    monkeypatch.setattr("psych_support_bot.infra.voice.adapter.httpx.post", fake_post)
+    with pytest.raises(VoiceProviderError):
+        synthesize("你好")
+    with pytest.raises(VoiceProviderError):
+        synthesize("你好")
+    assert calls["n"] == 2  # 失败不缓存，每次照打
+
+
+def test_tts_cache_lru_eviction(monkeypatch, tts_key) -> None:
+    import psych_support_bot.infra.voice.adapter as _adapter
+
+    _configure(tts_key=tts_key)
+    monkeypatch.setattr(_adapter, "_TTS_CACHE_MAX_ENTRIES", 2)
+
+    def fake_post(url, **kwargs):
+        return httpx.Response(200, content=b"x", request=httpx.Request("POST", url))
+
+    monkeypatch.setattr("psych_support_bot.infra.voice.adapter.httpx.post", fake_post)
+    synthesize("一")
+    synthesize("二")
+    synthesize("三")  # 容量 2："一" 被逐出
+    assert len(_adapter._tts_cache) == 2
+    synthesize("一")  # 缓存未命中重建
+    assert len(_adapter._tts_cache) == 2
+
+
+def test_tts_cache_ttl_expiry(monkeypatch, tts_key) -> None:
+    import psych_support_bot.infra.voice.adapter as _adapter
+
+    _configure(tts_key=tts_key)
+    calls = {"n": 0}
+
+    def fake_post(url, **kwargs):
+        calls["n"] += 1
+        return httpx.Response(200, content=b"x", request=httpx.Request("POST", url))
+
+    monkeypatch.setattr("psych_support_bot.infra.voice.adapter.httpx.post", fake_post)
+    synthesize("你好")
+    real_monotonic = time.monotonic
+    monkeypatch.setattr(
+        _adapter.time,
+        "monotonic",
+        lambda: real_monotonic() + _adapter._TTS_CACHE_TTL_SECONDS + 1,
+    )
+    synthesize("你好")  # TTL 过期 → 重打
+    assert calls["n"] == 2
 
 
 # ---------------------------------------------------------------------------

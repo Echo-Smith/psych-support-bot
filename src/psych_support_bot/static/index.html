@@ -458,6 +458,27 @@
       }
     }
 
+    /* 静音按钮：文字态（开声）与静音态（muted 样式） */
+    #muteBtn {
+      padding: 4px 10px;
+      font-family: inherit;
+      font-size: 12px;
+      background: #fff;
+      color: var(--ink);
+      border: 1px solid var(--rule);
+      cursor: pointer;
+    }
+
+    #muteBtn:hover {
+      border-color: var(--ink);
+    }
+
+    #muteBtn[aria-pressed="true"] {
+      color: var(--muted);
+      border-style: dashed;
+      background: var(--soft);
+    }
+
     .msg-header {
       font-size: 11px;
       margin-bottom: 4px;
@@ -2000,8 +2021,8 @@
         <button id="sendBtn" onclick="sendMessage()">发送</button>
         <button type="button" class="reset-btn" onclick="resetSession()">重置会话</button>
       </div>
-      <div id="voiceRow" style="display:none; margin-top:6px; font-size:12px; color:var(--muted); display:none;">
-        <label style="cursor:pointer"><input type="checkbox" id="ttsToggle"> 语音朗读回复</label>
+      <div id="voiceRow" style="display:none; margin-top:6px; font-size:12px; color:var(--muted);">
+        <button type="button" id="muteBtn" aria-pressed="false" title="当前开声；点击静音（静音时不合成语音，节省成本）" style="display:none">🔊 静音</button>
         <span id="micHint" style="margin-left:12px"></span>
       </div>
 
@@ -2540,8 +2561,9 @@
             renderScaleChips(data.question_options);
           }
         });
-        // 语音朗读（气泡渲染与朗读并行；危机/高风险回复照读——热线读出来更可达）
-        speakReply(data.reply);
+        // 语音朗读（气泡渲染与朗读并行）。危机回复绕过静音强制照读——
+        // 热线号码读出来更可达，安全设计优先于成本开关。
+        speakReply(data.reply, data.mode === 'crisis' || !!(data.risk && data.risk.needs_crisis_mode));
       } catch (err) {
         console.error(err);
         addMessage('bot', '抱歉，遇到了问题：' + err.message + '。请确认后端服务正在运行。');
@@ -2735,7 +2757,8 @@
       chunks: [],
       audioEl: null,
       usedMic: localStorage.getItem('np_voice_used') === '1',
-      ttsPref: localStorage.getItem('np_tts_pref') === '1',
+      // ttsPref 语义=「开声」。默认开声：仅显式存过 '0'（用户点过静音）才关
+      ttsPref: localStorage.getItem('np_tts_pref') !== '0',
     };
 
     async function initVoice() {
@@ -2754,21 +2777,43 @@
       if (VOICE.sttAvailable) {
         micBtn.style.display = '';
         voiceRow.style.display = '';
-        document.getElementById('micHint').textContent = '点麦克风开始录音，再点一下停止并转文字发送';
+        document.getElementById('micHint').textContent = '点麦克风开启免提对话；说完自动发送';
       } else {
         voiceRow.style.display = 'none';
       }
-      const toggle = document.getElementById('ttsToggle');
-      toggle.checked = VOICE.ttsPref && effectiveTtsOn();
-      toggle.onchange = (e) => {
-        VOICE.ttsPref = e.target.checked;
-        localStorage.setItem('np_tts_pref', VOICE.ttsPref ? '1' : '0');
-      };
+      // 静音按钮（成本开关）：静音时回复不调 TTS（危机回复除外，照读热线）。
+      const muteBtn = document.getElementById('muteBtn');
+      if (VOICE.ttsAvailable) {
+        muteBtn.style.display = '';
+        renderMuteBtn();
+        muteBtn.onclick = () => {
+          VOICE.ttsPref = !VOICE.ttsPref; // ttsPref 语义=「开声」
+          localStorage.setItem('np_tts_pref', VOICE.ttsPref ? '1' : '0');
+          renderMuteBtn();
+          if (!VOICE.ttsPref) stopVoicePlayback(); // 静音即时生效：掐掉当前朗读
+        };
+      } else {
+        muteBtn.style.display = 'none';
+      }
     }
 
-    function effectiveTtsOn() {
-      // 朗读生效条件：用户偏好开 + （服务端 TTS 可用 或 浏览器支持合成）。
-      return VOICE.ttsPref && (VOICE.ttsAvailable || 'speechSynthesis' in window);
+    function renderMuteBtn() {
+      const btn = document.getElementById('muteBtn');
+      if (!btn) return;
+      // aria-pressed=true 表示「已静音」
+      btn.setAttribute('aria-pressed', VOICE.ttsPref ? 'false' : 'true');
+      btn.textContent = VOICE.ttsPref ? '🔊 静音' : '🔇 已静音';
+      btn.title = VOICE.ttsPref
+        ? '点击静音（静音时不合成语音，节省成本）'
+        : '已静音：回复不朗读（危机求助信息仍会照读）。点击恢复开声';
+    }
+
+    function effectiveTtsOn(isCrisis) {
+      // 朗读生效条件：非静音，或危机回复强制朗读（热线可达性优先于静音）；
+      // 且需有可用的合成通道（服务端 TTS 或浏览器合成）。
+      const canSpeak = VOICE.ttsAvailable || 'speechSynthesis' in window;
+      if (!canSpeak) return false;
+      return (isCrisis || VOICE.ttsPref);
     }
 
     function stopVoicePlayback() {
@@ -2890,11 +2935,6 @@
         if (!text) throw new Error('empty transcript');
         VOICE.usedMic = true;
         localStorage.setItem('np_voice_used', '1');
-        if (!localStorage.getItem('np_tts_pref')) {
-          VOICE.ttsPref = true;
-          const toggle = document.getElementById('ttsToggle');
-          if (toggle) toggle.checked = effectiveTtsOn();
-        }
         document.getElementById('messageInput').value = text;
         sendMessage();
       } catch (err) {
@@ -2903,8 +2943,9 @@
       }
     }
 
-    async function speakReply(reply) {
-      if (!effectiveTtsOn()) return;
+    async function speakReply(reply, isCrisis) {
+      // 静音闸门（成本开关）：静音时零 TTS 请求；危机回复例外（强制照读）
+      if (!effectiveTtsOn(isCrisis)) return;
       const parts = (reply && Array.isArray(reply.messages) && reply.messages.length)
         ? reply.messages.slice(0, 3)
         : [(reply && reply.text) || ''];

@@ -33,9 +33,12 @@ def _isolated_voice_env(monkeypatch):
     ):
         monkeypatch.setenv(var, "")
     from psych_support_bot.infra.config.settings import get_settings
+    from psych_support_bot.infra.voice import adapter as _voice_adapter
 
+    _voice_adapter._reset_tts_cache_for_tests()
     get_settings.cache_clear()
     yield
+    _voice_adapter._reset_tts_cache_for_tests()
     get_settings.cache_clear()
 
 
