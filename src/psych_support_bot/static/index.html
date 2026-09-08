@@ -441,6 +441,18 @@
       border: 1px dotted var(--muted);
     }
 
+    /* 图内练习进度徽标：气泡流左侧对齐的小标签，弱视觉、不打断对话 */
+    .practice-badge {
+      font-size: 11px;
+      padding: 3px 10px;
+      border: 1px solid var(--muted);
+      border-radius: 12px;
+      display: inline-block;
+      background: var(--bg, transparent);
+      opacity: .85;
+      margin: 2px 0;
+    }
+
     .quick-row {
       display: flex;
       flex-wrap: wrap;
@@ -2466,6 +2478,10 @@
           if (data.mode === 'assessment' && dbg.source === 'assessment_card' && dbg.assessment_type) {
             renderAssessDeepLink(dbg.assessment_type);
           }
+          // 图内练习进度标签（GPT Voice 式陪伴练习的可见进度）
+          if (dbg.source === 'practice_guide' && dbg.practice_action) {
+            renderPracticeBadge(dbg.practice_action, dbg.practice_step);
+          }
           if (Array.isArray(data.question_options) && data.question_options.length) {
             renderScaleChips(data.question_options);
           }
@@ -2618,9 +2634,18 @@
       d.className = 'msg bot';
       let btns = '';
       options.forEach(o => {
-        btns += '<button type="button" class="chip" data-value="' + o.value + '" style="margin:3px"' +
-          ' onclick="pickScale(' + Number(o.value) + ')">' +
-          escapeHtml(String(o.value) + ' · ' + (o.label || '')) + '</button>';
+        // 动作 chip（练习同意/暂停等）：send 为回传文本，label 为展示文案；
+        // 数值 chip（问卷选项）维持原 scale 回传。
+        if (typeof o.send === 'string' && o.send) {
+          const sendText = o.send.replace(/'/g, "\\'");
+          btns += '<button type="button" class="chip" style="margin:3px"' +
+            ' onclick="pickChip(\'' + sendText + '\')">' +
+            escapeHtml(o.label || o.send) + '</button>';
+        } else {
+          btns += '<button type="button" class="chip" data-value="' + o.value + '" style="margin:3px"' +
+            ' onclick="pickScale(' + Number(o.value) + ')">' +
+            escapeHtml(String(o.value) + ' · ' + (o.label || '')) + '</button>';
+        }
       });
       d.innerHTML = '<div class="bubble"><div class="scale-options" data-live="1">' + btns + '</div></div>';
       chatArea.appendChild(d);
@@ -2631,6 +2656,38 @@
       clearStaleChips();
       document.getElementById('messageInput').value = String(value);
       sendMessage();
+    }
+
+    // 动作 chip（图内练习同意/暂停）：回传固定文本，气泡显示该文本。
+    function pickChip(text) {
+      clearStaleChips();
+      document.getElementById('messageInput').value = text;
+      sendMessage();
+    }
+
+    // 图内练习进度标签：气泡流上方的小徽标（🪨 5-4-3-2-1 · 第 N/5 步）。
+    // 动作语义映射为进度文案；完成/暂停显示状态而非步数。
+    function renderPracticeBadge(action, step) {
+      const chatArea = document.getElementById('chatArea');
+      const d = document.createElement('div');
+      d.className = 'msg bot';
+      let label = '';
+      if (action === 'advance' || action === 'resume') {
+        const n = (typeof step === 'number' ? step : 0) + 1;
+        label = '5-4-3-2-1 · 第 ' + n + '/5 步';
+      } else if (action === 'offer') {
+        label = '5-4-3-2-1 接地练习';
+      } else if (action === 'start' || action === 'restart') {
+        label = '5-4-3-2-1 · 第 1/5 步';
+      } else if (action === 'complete') {
+        label = '5-4-3-2-1 · 完成 🌿';
+      } else if (action === 'pause') {
+        label = '5-4-3-2-1 · 已暂停';
+      }
+      if (!label) return;
+      d.innerHTML = '<div class="practice-badge">🪨 ' + escapeHtml(label) + '</div>';
+      chatArea.appendChild(d);
+      chatArea.scrollTop = chatArea.scrollHeight;
     }
 
     function updateRiskIndicator(risk) {

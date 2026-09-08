@@ -1,3 +1,4 @@
+import json
 import logging
 from typing import Any, cast
 from uuid import uuid4
@@ -5,6 +6,11 @@ from uuid import uuid4
 from sqlalchemy.orm import Session
 
 from psych_support_bot.ai.graphs.conversation import conversation_graph
+from psych_support_bot.ai.practice_flow import (
+    PRACTICE_OFFER_MARKER,
+    PRACTICE_PAUSE_CHIP,
+    PRACTICE_TAG,
+)
 from psych_support_bot.ai.schemas.messages import (
     ConversationMode,
     ConversationRequest,
@@ -15,7 +21,17 @@ from psych_support_bot.ai.schemas.messages import (
 from psych_support_bot.ai.schemas.state import GraphState
 from psych_support_bot.ai.tools.exercises import detect_completed_exercise
 from psych_support_bot.domain.assessments.service import classify_disengage
+from psych_support_bot.domain.consents import DISCLAIMER_VERSION
 from psych_support_bot.infra.db.exercise_repositories import save_exercise_record
+from psych_support_bot.infra.db.practice_repositories import (
+    complete_practice_session,
+    create_practice_session,
+    get_active_practice_session,
+    get_paused_practice_session,
+    pause_practice_session,
+    record_practice_step,
+    reset_practice_session,
+)
 from psych_support_bot.infra.db.repositories import (
     build_memory_snapshot,
     build_user_history_text,
@@ -36,6 +52,12 @@ SAFETY_FLOOR_WINDOW_DAYS = 7
 # 逐字近史条数：以标准 API 格式进 prompt 的最近 user/assistant 消息上限。
 # 覆盖最近 3 个完整问答对——「换个方向吧」这类指代性消息的可解读窗口。
 RECENT_HISTORY_TURNS = 6
+
+# 「先停一下」chip（练习进行中的每轮都带——退出练习与进入同样容易）。
+PRACTICE_PAUSE_CHIP_OPTION = {
+    "label": PRACTICE_PAUSE_CHIP,
+    "send": PRACTICE_PAUSE_CHIP,
+}
 
 
 logger = logging.getLogger(__name__)
@@ -85,6 +107,113 @@ class ConversationService:
         行为逐字保留）：进行中作答/暂停/放弃/情绪倾诉/无效重推/完成结算，
         以及恢复/冷却拦截/新开。"""
         return QuestionnaireFlow(self._build_response).handle(payload, session)
+
+    def _load_active_practice(self, session: Session, user_id: str) -> dict[str, Any] | None:
+        """预注入图内练习状态（active 优先，其次 paused）。
+
+        GraphState 每轮从 DB 重建，多轮练习的推进状态必须每轮重读
+        （与问卷会话同一模式）；图内不持 DB 会话，落库在图结束后。
+        """
+
+        record = get_active_practice_session(session, user_id)
+        if record is None:
+            record = get_paused_practice_session(session, user_id, PRACTICE_TAG)
+        if record is None:
+            return None
+        try:
+            responses = json.loads(record.step_responses_json or "[]")
+            transcript = json.loads(record.guidance_transcript_json or "[]")
+        except (TypeError, ValueError):
+            responses, transcript = [], []
+        return {
+            "id": record.id,
+            "tag": record.exercise_tag,
+            "step": record.current_step,
+            "responses": responses,
+            "transcript": transcript,
+            "status": record.status,
+        }
+
+    def _apply_practice_transition(
+        self,
+        session: Session,
+        result: GraphState,
+        payload: ConversationRequest,
+        response: ConversationResponse,
+    ) -> None:
+        """图结束后的练习状态落库（practice_responder 的裁决在此执行）。
+
+        危机支配：本轮走危机路径时 practice_responder 未被调用，
+        进行中的练习在此自动暂停。练习轮附「先停一下」chip——
+        退出练习必须和进入一样容易。
+        """
+        from psych_support_bot.infra.db.models import PracticeSessionRecord
+
+        action = str(result.get("practice_action") or "")
+        practice = result.get("active_practice") or {}
+        record_id = practice.get("id")
+        reply_text = result["generated_reply"].text
+
+        if result["mode"] == "crisis":
+            if record_id and practice.get("status") == "active":
+                record = session.get(PracticeSessionRecord, record_id)
+                if record is not None and record.status == "active":
+                    pause_practice_session(session, record)
+            return
+
+        if not action:
+            return
+
+        if action == "offer":
+            response.question_options = [{"label": PRACTICE_OFFER_MARKER, "send": PRACTICE_OFFER_MARKER}]
+        elif action == "start":
+            create_practice_session(session, payload.user_id, PRACTICE_TAG, disclaimer_version=DISCLAIMER_VERSION)
+            response.question_options = [dict(PRACTICE_PAUSE_CHIP_OPTION)]
+        elif action == "advance":
+            record = session.get(PracticeSessionRecord, record_id) if record_id else None
+            if record is not None and record.status == "active":
+                record_practice_step(session, record, user_reply=payload.message, guide_reply=reply_text)
+            response.question_options = [dict(PRACTICE_PAUSE_CHIP_OPTION)]
+        elif action == "complete":
+            record = session.get(PracticeSessionRecord, record_id) if record_id else None
+            if record is not None and record.status == "active":
+                record_practice_step(session, record, user_reply=payload.message, guide_reply=reply_text)
+                complete_practice_session(session, record)
+                # 练习记录落库（ExerciseRecord）：guidance_transcript 首次由
+                # 对话内完成路径填充；收尾语即 ai_feedback。
+                save_exercise_record(
+                    session,
+                    payload.user_id,
+                    PRACTICE_TAG,
+                    source="chat",
+                    step_responses=json.loads(record.step_responses_json or "[]"),
+                    guidance_transcript=json.loads(record.guidance_transcript_json or "[]"),
+                    ai_feedback=reply_text,
+                )
+        elif action == "pause":
+            record = session.get(PracticeSessionRecord, record_id) if record_id else None
+            if record is not None and record.status == "active":
+                pause_practice_session(session, record)
+        elif action == "resume":
+            record = session.get(PracticeSessionRecord, record_id) if record_id else None
+            if record is not None and record.status == "paused":
+                record.status = "active"
+                session.commit()
+                session.refresh(record)
+            response.question_options = [dict(PRACTICE_PAUSE_CHIP_OPTION)]
+        elif action == "restart":
+            record = session.get(PracticeSessionRecord, record_id) if record_id else None
+            if record is not None:
+                reset_practice_session(session, record)
+            else:
+                create_practice_session(session, payload.user_id, PRACTICE_TAG, disclaimer_version=DISCLAIMER_VERSION)
+            response.question_options = [dict(PRACTICE_PAUSE_CHIP_OPTION)]
+
+        # debug 契约（assessment_card 同款模式）：前端与巡检可辨识练习轮
+        if action:
+            response.debug["source"] = "practice_guide"
+            response.debug["practice_action"] = action
+            response.debug["practice_step"] = practice.get("step")
 
     def respond(
         self,
@@ -183,6 +312,12 @@ class ConversationService:
             ),
             # M2 投机并行：risk_classifier 决定是否填充（None=无投机）。
             "speculative_reply": None,
+            # 图内引导练习：预注入进行中/暂停中的练习会话（无则 None）。
+            "active_practice": self._load_active_practice(session, payload.user_id),
+            # practice_responder 的路由输入（intent_router 裁决写入）与
+            # 裁决输出（服务层落库读取），默认空。
+            "practice_route": "",
+            "practice_action": "",
         }
         with trace_span(
             "conversation_graph.invoke",
@@ -234,6 +369,14 @@ class ConversationService:
                         "fallback_used": True,
                     },
                 )
+                # 图挂了意味着本轮练习裁决不可得：进行中的练习一并暂停，
+                # 避免用户收到兜底回复后仍被下一轮的过期状态推着做步骤。
+                if state["active_practice"] and state["active_practice"].get("status") == "active":
+                    from psych_support_bot.infra.db.models import PracticeSessionRecord
+
+                    practice_record = session.get(PracticeSessionRecord, state["active_practice"]["id"])
+                    if practice_record is not None and practice_record.status == "active":
+                        pause_practice_session(session, practice_record)
                 save_conversation_result(
                     session=session,
                     response=fallback_response,
@@ -279,6 +422,10 @@ class ConversationService:
                 "refusal_history": result.get("refusal_history", []),
             },
         )
+        # 图内练习状态落库（advance/pause/complete/start/resume/restart）+
+        # crisis 自动暂停 + 练习 chips/进度 debug。在 save_conversation_result
+        # 之前执行，让练习状态迁移与本轮消息同批持久化。
+        self._apply_practice_transition(session, result, payload, response)
         # NOTE: root trace output/session fields are written inside the
         # trace_span block above; the span is already closed here, so any
         # update after it would be silently dropped.

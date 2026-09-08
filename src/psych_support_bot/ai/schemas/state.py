@@ -1,4 +1,4 @@
-from typing import TypedDict
+from typing import Any, TypedDict
 
 from psych_support_bot.ai.schemas.messages import (
     ConversationMode,
@@ -69,3 +69,14 @@ class GraphState(TypedDict):
     # API 格式追加在消息列表末尾——「换个方向吧」这类上下文依赖型消息
     # 此前因模型看不到逐字近史而被误读（Langfuse 2026-09-06 实证）。
     recent_history: list[dict[str, str]]
+    # 图内引导练习（对话式 54321）：服务层预注入 {"tag", "current_step",
+    # "step_responses", "transcript"}（practice_sessions 表，每轮从 DB 重建
+    # 的状态由此进图）；无练习会话时为 None。practice_responder 据此路由。
+    active_practice: dict[str, Any] | None
+    # intent_router 的练习路由裁决（offer/consent/continue/pause/resume/
+    # restart；""=本轮与练习无关）。条件边据此改道 practice_responder。
+    practice_route: str
+    # practice_responder 的裁决输出：advance（记录回答→下一步）/ pause
+    # （软着陆暂停）/ complete（第 5 步已答→收尾）；""=本轮非练习轮。
+    # 落库由服务层在图结束后执行（图内不持 DB 会话）。
+    practice_action: str
