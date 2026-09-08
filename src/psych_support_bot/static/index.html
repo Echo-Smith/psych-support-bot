@@ -3231,34 +3231,43 @@
       if (!text) { scheduleResumeListening(); return; }
       beginSpeaking();
       if (VOICE.ttsAvailable) {
-        // 首选流式：边合成边播（感知延迟≈上游首块，实测 ~0.5s）；
-        // 浏览器不支持 MSE 或流式失败 → 整段合成后播放
+        // 服务端 TTS 链路：流式 → 整段（重试一次）；全失败则静默跳过朗读
+        // （文字照常显示）——浏览器合成发音生硬，仅在未配置服务端 TTS 时
+        // 作为最后手段保留，绝不与 MiniMax 混用。
         if (window.MediaSource && MediaSource.isTypeSupported('audio/mpeg')) {
           try {
             await speakStreamMse(text);
             return;
           } catch (err) { /* 降级整段合成 */ }
         }
-        try {
-          const res = await fetch(API_BASE + '/v1/voice/speak', {
-            method: 'POST',
-            headers: { ...authHeaders(), 'Content-Type': 'application/json' },
-            body: JSON.stringify({ text }),
-          });
-          if (!res.ok) throw new Error('HTTP ' + res.status);
-          const blob = await res.blob();
-          const url = URL.createObjectURL(blob);
-          const audio = new Audio(url);
-          // 生命周期清理：播完释放（免提循环靠它回到聆听态）
-          audio.onended = () => { URL.revokeObjectURL(url); endSpeaking(); };
-          audio.onerror = () => { URL.revokeObjectURL(url); endSpeaking(); };
-          VOICE.audioEl = audio;
-          audio.play().catch(() => { URL.revokeObjectURL(url); speakWithBrowser(text); });
-          return;
-        } catch (err) {
-          // 服务端 TTS 失败 → 浏览器合成降级
+        for (let attempt = 0; attempt < 2; attempt++) {
+          try {
+            const res = await fetch(API_BASE + '/v1/voice/speak', {
+              method: 'POST',
+              headers: { ...authHeaders(), 'Content-Type': 'application/json' },
+              body: JSON.stringify({ text }),
+            });
+            if (!res.ok) throw new Error('HTTP ' + res.status);
+            const blob = await res.blob();
+            const url = URL.createObjectURL(blob);
+            const audio = new Audio(url);
+            // 生命周期清理：播完释放（免提循环靠它回到聆听态）
+            audio.onended = () => { URL.revokeObjectURL(url); endSpeaking(); };
+            audio.onerror = () => { URL.revokeObjectURL(url); endSpeaking(); };
+            VOICE.audioEl = audio;
+            await audio.play();
+            return;
+          } catch (err) {
+            if (attempt === 1) {
+              // 服务端 TTS 彻底失败：静默跳过朗读（绝不降级浏览器合成）
+              appendDebug('tts skipped (server unavailable): ' + err.message);
+              endSpeaking();
+            }
+          }
         }
+        return;
       }
+      // 未配置服务端 TTS 的部署：浏览器合成是仅有的朗读手段
       speakWithBrowser(text);
     }
 
@@ -3299,7 +3308,7 @@
           await waitUpdate();
           if (!played) {
             played = true;
-            audio.play().catch(() => speakWithBrowser(text));
+            audio.play().catch(() => endSpeaking());
           }
         }
       } catch (err) {
@@ -3308,7 +3317,7 @@
       try { if (ms.readyState === 'open') ms.endOfStream(); } catch (err) { /* 已关闭 */ }
       if (!played) {
         if (!received) throw new Error('empty stream'); // 触发整段合成降级
-        audio.play().catch(() => speakWithBrowser(text));
+        audio.play().catch(() => endSpeaking());
       }
     }
 
