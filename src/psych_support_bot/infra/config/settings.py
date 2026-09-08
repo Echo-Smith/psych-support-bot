@@ -48,6 +48,27 @@ class Settings(BaseSettings):
     auth_enabled: bool = Field(default=False, alias="AUTH_ENABLED")
     jwt_secret_key: str = Field(default="", alias="JWT_SECRET_KEY")
 
+    # ── 语音 I/O（与主 LLM 完全分离的供应商配置，便于独立换模型）────────
+    # STT：provider = "openai"（multipart /audio/transcriptions，OpenAI/兼容
+    # 网关）| "dots"（chat completions + audio_url 内容块，需模型可拉取的
+    # 公网音频 URL，服务端临时托管）。base_url/key/model 独立配置；缺省
+    # 回落 OPENAI_*（行为兼容旧部署），但 dots 模式必须显式配置。
+    voice_stt_provider: str = Field(default="", alias="VOICE_STT_PROVIDER")
+    voice_stt_base_url: str = Field(default="", alias="VOICE_STT_BASE_URL")
+    voice_stt_api_key: str = Field(default="", alias="VOICE_STT_API_KEY")
+    voice_stt_model: str = Field(default="", alias="VOICE_STT_MODEL")
+    voice_stt_language: str = Field(default="", alias="VOICE_STT_LANGUAGE")
+    # TTS：OpenAI 兼容 POST /audio/speech（dots 平台暂无 TTS 端点；
+    # 未配置时前端降级浏览器 SpeechSynthesis）。
+    voice_tts_base_url: str = Field(default="", alias="VOICE_TTS_BASE_URL")
+    voice_tts_api_key: str = Field(default="", alias="VOICE_TTS_API_KEY")
+    voice_tts_model: str = Field(default="", alias="VOICE_TTS_MODEL")
+    voice_tts_voice: str = Field(default="", alias="VOICE_TTS_VOICE")
+    # dots STT 临时音频托管：内存暂存 + 单次下载 token，TTL 秒；
+    # 公网可达要求由部署方保证（反代/隧道）。
+    voice_media_public_base_url: str = Field(default="", alias="VOICE_MEDIA_PUBLIC_BASE_URL")
+    voice_media_ttl_seconds: int = Field(default=120, alias="VOICE_MEDIA_TTL_SECONDS")
+
     @model_validator(mode="after")
     def apply_dashscope_fallbacks(self) -> "Settings":
         if not self.openai_api_key:

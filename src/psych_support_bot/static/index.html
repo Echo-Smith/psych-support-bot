@@ -1948,9 +1948,14 @@
       </div>
 
       <div class="chat-input-row">
+        <button type="button" id="micBtn" onclick="toggleMicRecording()" style="display:none" title="语音输入">🎙</button>
         <input type="text" id="messageInput" placeholder="输入你的感受或问题…" onkeypress="handleKeyPress(event)">
         <button id="sendBtn" onclick="sendMessage()">发送</button>
         <button type="button" class="reset-btn" onclick="resetSession()">重置会话</button>
+      </div>
+      <div id="voiceRow" style="display:none; margin-top:6px; font-size:12px; color:var(--muted); display:none;">
+        <label style="cursor:pointer"><input type="checkbox" id="ttsToggle"> 语音朗读回复</label>
+        <span id="micHint" style="margin-left:12px"></span>
       </div>
 
       <p class="disclaimer">
@@ -2395,6 +2400,7 @@
         bindTabs();
         bindQuickChips();
         loadSystemInfo();
+        initVoice();
         renderExerciseGrid();
         renderScaleList();
         renderTrend();
@@ -2458,6 +2464,7 @@
       // 多条气泡之间的打字节奏恢复"正在输入"（见 renderBotParts）。
       showTyping(ECHO_WAIT_TEXT);
       clearStaleChips();
+      stopVoicePlayback();
       try {
         const res = await fetch(API_BASE + '/v1/conversations/respond', {
           method: 'POST',
@@ -2486,6 +2493,8 @@
             renderScaleChips(data.question_options);
           }
         });
+        // 语音朗读（气泡渲染与朗读并行；危机/高风险回复照读——热线读出来更可达）
+        speakReply(data.reply);
       } catch (err) {
         console.error(err);
         addMessage('bot', '抱歉，遇到了问题：' + err.message + '。请确认后端服务正在运行。');
@@ -2663,6 +2672,157 @@
       clearStaleChips();
       document.getElementById('messageInput').value = text;
       sendMessage();
+    }
+
+    // ===== 语音 I/O（GPT Voice 式陪伴的语音层）=====
+    // STT：MediaRecorder 录音 → /v1/voice/transcribe → 文本自动发送（转写文本
+    // 就是普通聊天消息，完整走对话管线与风险筛查）。TTS：回复到达后拼接
+    // messages 走 /v1/voice/speak，未配置降级浏览器 SpeechSynthesis；新一轮
+    // 发送/录音即中断播放。隐私：音频即转即弃，不落任何存储。
+    const VOICE = {
+      sttAvailable: false,
+      ttsAvailable: false,
+      recording: false,
+      recorder: null,
+      chunks: [],
+      audioEl: null,
+      usedMic: localStorage.getItem('np_voice_used') === '1',
+      ttsPref: localStorage.getItem('np_tts_pref') === '1',
+    };
+
+    async function initVoice() {
+      try {
+        const res = await fetch(API_BASE + '/v1/voice/status', { headers: authHeaders() });
+        if (!res.ok) return;
+        const data = await res.json();
+        VOICE.sttAvailable = !!data.stt;
+        VOICE.ttsAvailable = !!data.tts;
+      } catch (err) {
+        appendDebug('voice/status error => ' + err.message);
+        return;
+      }
+      const micBtn = document.getElementById('micBtn');
+      const voiceRow = document.getElementById('voiceRow');
+      if (VOICE.sttAvailable) {
+        micBtn.style.display = '';
+        voiceRow.style.display = '';
+        document.getElementById('micHint').textContent = '点麦克风开始录音，停止后自动转文字发送';
+      } else {
+        voiceRow.style.display = 'none';
+      }
+      const toggle = document.getElementById('ttsToggle');
+      toggle.checked = VOICE.ttsPref && effectiveTtsOn();
+      toggle.onchange = (e) => {
+        VOICE.ttsPref = e.target.checked;
+        localStorage.setItem('np_tts_pref', VOICE.ttsPref ? '1' : '0');
+      };
+    }
+
+    function effectiveTtsOn() {
+      // 朗读生效条件：用户偏好开 + （服务端 TTS 可用 或 浏览器支持合成）。
+      return VOICE.ttsPref && (VOICE.ttsAvailable || 'speechSynthesis' in window);
+    }
+
+    function stopVoicePlayback() {
+      if (VOICE.audioEl) { VOICE.audioEl.pause(); VOICE.audioEl = null; }
+      if ('speechSynthesis' in window) window.speechSynthesis.cancel();
+    }
+
+    function toggleMicRecording() {
+      if (VOICE.recording) { VOICE.recorder && VOICE.recorder.stop(); return; }
+      if (!navigator.mediaDevices || !window.MediaRecorder) {
+        addMessage('bot', '当前浏览器不支持录音，请直接打字。');
+        return;
+      }
+      stopVoicePlayback();
+      navigator.mediaDevices.getUserMedia({ audio: true }).then((stream) => {
+        VOICE.chunks = [];
+        const mime = MediaRecorder.isTypeSupported('audio/webm') ? 'audio/webm' : '';
+        const recorder = new MediaRecorder(stream, mime ? { mimeType: mime } : undefined);
+        VOICE.recorder = recorder;
+        recorder.ondataavailable = (e) => { if (e.data.size) VOICE.chunks.push(e.data); };
+        recorder.onstop = () => {
+          VOICE.recording = false;
+          stream.getTracks().forEach((t) => t.stop());
+          document.getElementById('micBtn').textContent = '🎙';
+          const blob = new Blob(VOICE.chunks, { type: mime || 'audio/webm' });
+          if (blob.size > 1000) uploadForTranscribe(blob, mime || 'audio/webm');
+        };
+        recorder.start();
+        VOICE.recording = true;
+        document.getElementById('micBtn').textContent = '⏹';
+        showTyping('正在聆听…（再点一次结束）');
+        setTimeout(hideTyping, 1500);
+      }).catch(() => addMessage('bot', '无法访问麦克风，请检查浏览器权限后重试。'));
+    }
+
+    async function uploadForTranscribe(blob, mime) {
+      showTyping('正在转写…');
+      try {
+        const ext = mime.includes('ogg') ? 'ogg' : (mime.includes('mp4') || mime.includes('m4a')) ? 'm4a' : 'webm';
+        const fd = new FormData();
+        fd.append('file', blob, 'recording.' + ext);
+        const res = await fetch(API_BASE + '/v1/voice/transcribe', {
+          method: 'POST',
+          headers: authHeaders(),
+          body: fd,
+        });
+        hideTyping();
+        if (!res.ok) throw new Error('HTTP ' + res.status);
+        const data = await res.json();
+        const text = (data.text || '').trim();
+        if (!text) throw new Error('empty transcript');
+        VOICE.usedMic = true;
+        localStorage.setItem('np_voice_used', '1');
+        if (!localStorage.getItem('np_tts_pref')) {
+          VOICE.ttsPref = true;
+          const toggle = document.getElementById('ttsToggle');
+          if (toggle) toggle.checked = effectiveTtsOn();
+        }
+        document.getElementById('messageInput').value = text;
+        sendMessage();
+      } catch (err) {
+        hideTyping();
+        addMessage('bot', '转写失败（' + err.message + '），请直接打字或再试一次。');
+      }
+    }
+
+    async function speakReply(reply) {
+      if (!effectiveTtsOn()) return;
+      const parts = (reply && Array.isArray(reply.messages) && reply.messages.length)
+        ? reply.messages.slice(0, 3)
+        : [(reply && reply.text) || ''];
+      const text = parts.join(' ').trim();
+      if (!text) return;
+      if (VOICE.ttsAvailable) {
+        try {
+          const res = await fetch(API_BASE + '/v1/voice/speak', {
+            method: 'POST',
+            headers: { ...authHeaders(), 'Content-Type': 'application/json' },
+            body: JSON.stringify({ text }),
+          });
+          if (!res.ok) throw new Error('HTTP ' + res.status);
+          const blob = await res.blob();
+          const audio = new Audio(URL.createObjectURL(blob));
+          VOICE.audioEl = audio;
+          audio.play().catch(() => speakWithBrowser(text));
+          return;
+        } catch (err) {
+          // 服务端 TTS 失败 → 浏览器合成降级
+        }
+      }
+      speakWithBrowser(text);
+    }
+
+    function speakWithBrowser(text) {
+      if (!('speechSynthesis' in window)) return;
+      try {
+        const utter = new SpeechSynthesisUtterance(text);
+        utter.lang = 'zh-CN';
+        utter.rate = 0.95;
+        window.speechSynthesis.cancel();
+        window.speechSynthesis.speak(utter);
+      } catch (err) { /* 静默降级：语音不可用不影响文字 */ }
     }
 
     // 图内练习进度标签：气泡流上方的小徽标（🪨 5-4-3-2-1 · 第 N/5 步）。
