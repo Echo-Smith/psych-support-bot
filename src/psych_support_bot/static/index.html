@@ -2803,13 +2803,17 @@
 
     function handleStreamRevise(text) {
       // 全文审查与已朗读内容不一致（或投机快路径无 sentence）：停读 + 用审查后
-      // 文本重新入队朗读。文本气泡仍由 final 渲染。
+      // 文本重新入队朗读（分句渐进，首句 ~0.5s 出声）。文本气泡仍由 final 渲染。
       TTS_QUEUE.aborted = true;
       TTS_QUEUE.items = [];
       stopVoicePlayback();
       TTS_QUEUE.aborted = false;
       TTS_QUEUE.reviseText = text;
-      TTS_QUEUE.items.push(text);
+      const sentences = splitIntoSentences(text);
+      for (const s of sentences) {
+        TTS_QUEUE.items.push(s);
+        prefetchTts(s);
+      }
       pumpTtsQueue();
     }
 
@@ -3660,94 +3664,66 @@
       if (!text) { scheduleResumeListening(); return; }
       beginSpeaking();
       if (VOICE.ttsAvailable) {
-        // 服务端 TTS 链路：流式 → 整段（重试一次）；全失败则静默跳过朗读
-        // （文字照常显示）——浏览器合成发音生硬，仅在未配置服务端 TTS 时
-        // 作为最后手段保留，绝不与 MiniMax 混用。
-        if (window.MediaSource && MediaSource.isTypeSupported('audio/mpeg')) {
-          try {
-            await speakStreamMse(text);
-            return;
-          } catch (err) { /* 降级整段合成 */ }
+        // 统一走「客户端分句 → 句级 TTS 队列 + 预取流水线」：
+        // 首句合成完（~0.5s）即出声，后续句在播放中预取——不等整段。
+        // 三处收益：① 投机快路径整段合成的主延迟消除；② iOS MSE 不可用
+        // 的回退路径（全量下载再播）同款提速；③ 句级缓存命中率更高。
+        TTS_QUEUE.items = [];
+        TTS_QUEUE.playing = false;
+        TTS_QUEUE.aborted = false;
+        TTS_QUEUE.anySpoken = false;
+        const sentences = splitIntoSentences(text);
+        for (const sent of sentences) {
+          TTS_QUEUE.items.push(sent);
+          prefetchTts(sent);
         }
-        for (let attempt = 0; attempt < 2; attempt++) {
-          try {
-            const res = await fetch(API_BASE + '/v1/voice/speak', {
-              method: 'POST',
-              headers: { ...authHeaders(), 'Content-Type': 'application/json' },
-              body: JSON.stringify({ text }),
-            });
-            if (!res.ok) throw new Error('HTTP ' + res.status);
-            const blob = await res.blob();
-            const url = URL.createObjectURL(blob);
-            const audio = new Audio(url);
-            // 生命周期清理：播完释放（免提循环靠它回到聆听态）
-            audio.onended = () => { URL.revokeObjectURL(url); endSpeaking(); };
-            audio.onerror = () => { URL.revokeObjectURL(url); endSpeaking(); };
-            VOICE.audioEl = audio;
-            await audio.play();
-            return;
-          } catch (err) {
-            if (attempt === 1) {
-              // 服务端 TTS 彻底失败：静默跳过朗读（绝不降级浏览器合成）
-              appendDebug('tts skipped (server unavailable): ' + err.message);
-              endSpeaking();
-            }
-          }
-        }
+        pumpTtsQueueUntilDone().then(() => endSpeaking());
         return;
       }
       // 未配置服务端 TTS 的部署：浏览器合成是仅有的朗读手段
       speakWithBrowser(text);
     }
 
-    async function speakStreamMse(text) {
-      // 流式朗读：chunked mp3 → MediaSource 边下边播；首个 appendBuffer
-      // 后立即 play，之后每块到达自动续播
-      const res = await fetch(API_BASE + '/v1/voice/speak/stream', {
-        method: 'POST',
-        headers: { ...authHeaders(), 'Content-Type': 'application/json' },
-        body: JSON.stringify({ text }),
-      });
-      if (!res.ok || !res.body) throw new Error('HTTP ' + res.status);
-      const ms = new MediaSource();
-      const url = URL.createObjectURL(ms);
-      const audio = new Audio(url);
-      const cleanup = () => { URL.revokeObjectURL(url); if (VOICE.audioEl === audio) VOICE.audioEl = null; };
-      audio.onended = () => { cleanup(); endSpeaking(); };
-      audio.onerror = () => { cleanup(); endSpeaking(); };
-      VOICE.audioEl = audio;
-      await new Promise((resolve, reject) => {
-        ms.addEventListener('sourceopen', resolve, { once: true });
-        setTimeout(resolve, 1000); // sourceopen 兜底
-      });
-      const sb = ms.addSourceBuffer('audio/mpeg');
-      sb.mode = 'sequence';
-      const waitUpdate = () => new Promise((r) => sb.addEventListener('updateend', r, { once: true }));
-      const reader = res.body.getReader();
-      let played = false;
-      let received = 0;
-      try {
-        for (;;) {
-          const { done, value } = await reader.read();
-          if (done) break;
-          if (!value || !value.length) continue;
-          received += value.length;
-          if (sb.updating) await waitUpdate();
-          sb.appendBuffer(value);
-          await waitUpdate();
-          if (!played) {
-            played = true;
-            audio.play().catch(() => endSpeaking());
-          }
+    // 客户端分句：句末标点优先，无标点长段按长度切（与服务端 respond_stream
+    // 的切分语义一致，阈值略宽——这里是朗读粒度不是渲染粒度）
+    function splitIntoSentences(text) {
+      const out = [];
+      let cur = '';
+      for (const ch of text) {
+        cur += ch;
+        const stripped = cur.trim();
+        if ('。！？；!?;\n'.includes(ch)) {
+          if (stripped) out.push(stripped);
+          cur = '';
+        } else if ('，、：, '.includes(ch) && stripped.length >= 40) {
+          out.push(stripped);
+          cur = '';
         }
-      } catch (err) {
-        // 中途截断：播放已收到的部分
       }
-      try { if (ms.readyState === 'open') ms.endOfStream(); } catch (err) { /* 已关闭 */ }
-      if (!played) {
-        if (!received) throw new Error('empty stream'); // 触发整段合成降级
-        audio.play().catch(() => endSpeaking());
-      }
+      if (cur.trim()) out.push(cur.trim());
+      return out.filter(Boolean);
+    }
+
+    // 队列顺序播完（speakReply 专用）：不依赖免提状态机——打字轮（idle 态）
+    // 也要能完整朗读；会话态收尾由调用方的 endSpeaking 处理
+    function pumpTtsQueueUntilDone() {
+      return new Promise((resolve) => {
+        const step = () => {
+          if (TTS_QUEUE.aborted) { resolve(); return; }
+          const text = TTS_QUEUE.items.shift();
+          if (!text) { resolve(); return; }
+          TTS_QUEUE.playing = true;
+          TTS_QUEUE.anySpoken = true;
+          speakSentenceStream(text)
+            .catch((err) => appendDebug('tts skip: ' + err.message)) // 单句失败不阻塞
+            .then(() => {
+              TTS_QUEUE.playing = false;
+              if (TTS_QUEUE.items.length && !TTS_QUEUE.aborted) setTimeout(step, 120); // 句间小喘息，自然感
+              else resolve();
+            });
+        };
+        step();
+      });
     }
 
     function speakWithBrowser(text) {
