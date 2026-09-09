@@ -47,6 +47,25 @@ vi .env   # 填入真实密钥
 | `OPENAI_MODEL` | 模型名 |
 | `LANGFUSE_*` | 可观测性（可留占位，不影响运行，仅无追踪数据） |
 
+语音功能（可选，不配则前端自动降级为纯文字/浏览器朗读）：
+
+| 变量 | 说明 |
+|---|---|
+| `VOICE_STT_PROVIDER` | `minimax`（推荐，语音转文字）/ `dots` / `openai` |
+| `VOICE_STT_API_KEY` | STT 密钥（minimax 与 TTS 可同一把；base_url/model 有缺省） |
+| `VOICE_TTS_PROVIDER` | `minimax`（双向流式合成）/ `openai` |
+| `VOICE_TTS_API_KEY` | TTS 密钥 |
+| `VOICE_TTS_VOICE` | 音色，如 `Chinese (Mandarin)_Warm_Bestie` |
+
+> 完整语音变量见 `.env.example` 的「语音 I/O」段（STT/TTS 与主 LLM 分离配置，便于换供应商）。
+
+访问控制（生产建议开启）：
+
+| 变量 | 说明 |
+|---|---|
+| `AUTH_ENABLED` | `true` 启用 JWT 鉴权（游客进入前端仍自动静默注册，无需表单） |
+| `JWT_SECRET_KEY` | 开启鉴权时必填；留空则每次启动随机生成（重启使旧 token 失效） |
+
 ### 3. 在 1Panel 创建编排
 
 1Panel → **容器 → 编排 → 创建编排**：
@@ -94,6 +113,8 @@ curl -D - -o me.json "http://127.0.0.1:9958/v1/me/export?user_id=demo"  # 全量
 
 ## 安全提示
 
-- 当前版本**未含鉴权**（demo 阶段决策）：请勿将 9958 暴露给不可信网络；建议仅内网/VPN 访问，或前置 Nginx 加 Basic Auth
+- 访问控制：设 `AUTH_ENABLED=true` + `JWT_SECRET_KEY=<随机长串>` 启用 JWT 鉴权（前端游客静默注册，无需表单；后端接口无 token 一律 401）。demo 阶段默认关闭，公网部署务必开启
+- 语音接口 `/v1/voice/*` 同样受鉴权守卫保护（音频即转即弃，不落库）
 - `.env` 含密钥，注意权限（`chmod 600 .env`），不要提交到 git
 - `ALLOWED_ORIGINS` 生产环境建议从 `*` 收紧为实际前端地址
+- compose 用 `env_file: .env` 整体透传，新增环境变量只改 `.env` 即可，无需改 compose
