@@ -2720,9 +2720,11 @@
       const hasText = parts.some((p) => (p || '').trim());
       const dbg = data.debug || {};
       const postRender = () => {
-        if (dbg.source === 'assessment_card' && dbg.assessment_type) {
+        // 聊天入口卡片化：评估引导轮附「打开评估页」深链卡（与 fallback 路径同条件）
+        if (data.mode === 'assessment' && dbg.source === 'assessment_card' && dbg.assessment_type) {
           renderAssessDeepLink(dbg.assessment_type);
         }
+        // 图内练习进度标签（GPT Voice 式陪伴练习的可见进度）
         if (dbg.source === 'practice_guide' && dbg.practice_action) {
           renderPracticeBadge(dbg.practice_action, dbg.practice_step);
         }

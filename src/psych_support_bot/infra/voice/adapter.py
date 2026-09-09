@@ -520,7 +520,7 @@ def _synthesize_openai(config: TtsConfig, cleaned: str) -> bytes:
                 "voice": config.voice,
                 "input": cleaned,
                 "response_format": "mp3",
-                "speed": 0.95,
+                "speed": 1.05,
             },
             timeout=_REQUEST_TIMEOUT,
         )
@@ -570,7 +570,7 @@ async def _run_minimax_session(config: TtsConfig, cleaned: str, emit) -> None:
                     "event": "task_start",
                     "model": config.model,
                     **({"language_boost": config.language_boost} if config.language_boost else {}),
-                    "voice_setting": {"voice_id": config.voice, "speed": 0.95, "vol": 1, "pitch": 0},
+                    "voice_setting": {"voice_id": config.voice, "speed": 1.05, "vol": 1, "pitch": 0},
                     "audio_setting": {
                         "sample_rate": _MINIMAX_SAMPLE_RATE,
                         "bitrate": _MINIMAX_BITRATE,

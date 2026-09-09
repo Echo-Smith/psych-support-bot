@@ -47,9 +47,11 @@ MODE_LIMITS: dict[str, "ModelCallLimits"] = {
     "support": ModelCallLimits(max_tokens=1024, timeout=30.0),
     "planning": ModelCallLimits(max_tokens=1024, timeout=30.0),
     "intervention": ModelCallLimits(max_tokens=1024, timeout=30.0),
-    # 风险分类是安全关键判定：evals 基线对照（2026-09-09）证实关思考后
-    # routing 大面积退化（11 失败 vs 基线 4），思考链对分级判定有实际价值，
-    # 此路径必须保持思考开。1024 预算备注见下。
+    # 风险分类两级（2026-09-09）：risk_screen 关思考快筛（~1s，高危用例
+    # 6/6 正确识别且规则通道独立兜底）；risk_classification 思考开二次确认
+    # （安全关键分级依赖思维链，evals 基线对照：关思考 routing 大面积滑向
+    # support/低危）。快筛判 low 直接采纳，非 low 升级确认。
+    "risk_screen": ModelCallLimits(max_tokens=512, timeout=10.0),
     "risk_classification": ModelCallLimits(max_tokens=1024, timeout=15.0),
 }
 
