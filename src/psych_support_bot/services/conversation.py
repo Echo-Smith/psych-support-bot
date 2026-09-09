@@ -1,11 +1,14 @@
 import json
 import logging
+import re
+from collections.abc import Iterator
 from typing import Any, cast
 from uuid import uuid4
 
 from sqlalchemy.orm import Session
 
 from psych_support_bot.ai.graphs.conversation import conversation_graph
+from psych_support_bot.ai.nodes.safety_reviewer import scan_sentence_speakable
 from psych_support_bot.ai.practice_flow import (
     PRACTICE_OFFER_MARKER,
     PRACTICE_PAUSE_CHIP,
@@ -61,6 +64,36 @@ PRACTICE_PAUSE_CHIP_OPTION = {
 
 
 logger = logging.getLogger(__name__)
+
+# LLM→TTS 句子级流式：从累积 token 缓冲切「已完整」句子。句末标点为界；
+# 无句末标点但已攒够长度时按软标点兜底切，避免首句迟迟不出声。
+_SENTENCE_END = "。！？；!?;\n"
+_SENTENCE_SOFT = "，、：,: "
+_FIRST_SENTENCE_MIN = 24   # 首句兜底切阈值（字）——尽快出声
+_LATER_SENTENCE_MIN = 48   # 后续句兜底切阈值
+
+
+def _split_complete_sentences(buffer: str, *, first: bool) -> tuple[list[str], str]:
+    """返回 (完整句列表, 剩余未完成尾部)。调用方以 remainder 作为新缓冲续累。"""
+    sentences: list[str] = []
+    cur = ""
+    soft_min = _FIRST_SENTENCE_MIN if first else _LATER_SENTENCE_MIN
+    for ch in buffer:
+        cur += ch
+        stripped = cur.strip()
+        if ch in _SENTENCE_END:
+            if stripped:
+                sentences.append(stripped)
+            cur = ""
+        elif ch in _SENTENCE_SOFT and len(stripped) >= soft_min:
+            sentences.append(stripped)
+            cur = ""
+    return sentences, cur
+
+
+def _normalize_for_compare(text: str) -> str:
+    """审查前后文本比对归一化：去空白，避免仅空格差异误触发 revise。"""
+    return re.sub(r"\s+", "", text or "")
 
 
 class ConversationService:
@@ -215,21 +248,13 @@ class ConversationService:
             response.debug["practice_action"] = action
             response.debug["practice_step"] = practice.get("step")
 
-    def respond(
-        self,
-        payload: ConversationRequest,
-        session: Session,
-    ) -> ConversationResponse:
-        questionnaire_response = self._handle_questionnaire_flow(payload, session)
-        if questionnaire_response is not None:
-            save_conversation_result(
-                session=session,
-                response=questionnaire_response,
-                user_message=payload.message,
-                user_id=payload.user_id,
-            )
-            return questionnaire_response
+    def _build_state(
+        self, payload: ConversationRequest, session: Session
+    ) -> tuple[GraphState, str, str]:
+        """从 DB 重建本轮 GraphState（respond 与 respond_stream 共用）。
 
+        返回 (state, session_id, expected_language)。
+        """
         session_id = payload.session_id or str(uuid4())
 
         # 语言检测前移：记录层记忆模块需按语言口径渲染，必须先于
@@ -318,7 +343,27 @@ class ConversationService:
             # 裁决输出（服务层落库读取），默认空。
             "practice_route": "",
             "practice_action": "",
+            # LLM→TTS 句子级流式开关（默认关；respond_stream 置真）。
+            "stream_tokens": False,
         }
+        return state, session_id, expected_language
+
+    def respond(
+        self,
+        payload: ConversationRequest,
+        session: Session,
+    ) -> ConversationResponse:
+        questionnaire_response = self._handle_questionnaire_flow(payload, session)
+        if questionnaire_response is not None:
+            save_conversation_result(
+                session=session,
+                response=questionnaire_response,
+                user_message=payload.message,
+                user_id=payload.user_id,
+            )
+            return questionnaire_response
+
+        state, session_id, expected_language = self._build_state(payload, session)
         with trace_span(
             "conversation_graph.invoke",
             input={
@@ -327,7 +372,7 @@ class ConversationService:
                 "message": payload.message,
                 "mode": "support",
             },
-            metadata={"memory_summary": memory_summary},
+            metadata={"memory_summary": state["memory_summary"]},
             session_id=session_id,
             user_id=payload.user_id,
         ) as root_obs:
@@ -397,6 +442,89 @@ class ConversationService:
                 },
             )
         result: GraphState = cast(GraphState, raw_result)
+        return self._finalize(result, payload, session, session_id)
+
+    def respond_stream(
+        self, payload: ConversationRequest, session: Session
+    ) -> Iterator[dict[str, Any]]:
+        """LLM→TTS 句子级流式：产出 {type: sentence|revise|final} 事件序列。
+
+        仅常规 support 普通 LLM 路径流式（response_generator 经 get_stream_writer
+        推 token）；问卷/危机/会诊等确定性或非流式路径直接单发 final。每句先过
+        与全文审查同源的纯规则扫描决定是否朗读；图跑完 _finalize 后，若最终审查
+        文本与已朗读内容实质不同则发 revise（前端停读+替换）。任何流式异常回退到
+        非流式 respond（此时尚未持久化，无重复副作用）。
+        """
+        # 问卷流是确定性的（分页卡片），不流式：整段处理并单发 final
+        questionnaire_response = self._handle_questionnaire_flow(payload, session)
+        if questionnaire_response is not None:
+            save_conversation_result(
+                session=session,
+                response=questionnaire_response,
+                user_message=payload.message,
+                user_id=payload.user_id,
+            )
+            yield {"type": "final", "response": questionnaire_response}
+            return
+
+        state, session_id, expected_language = self._build_state(payload, session)
+        state["stream_tokens"] = True
+        # 逐句扫描保守取 challenge_allowed=False：质问式句子未确认放行前不抢跑朗读
+        pending = ""
+        spoken: list[str] = []
+        final_state: GraphState | None = None
+        try:
+            for mode, chunk in conversation_graph.stream(
+                cast(Any, state), stream_mode=["custom", "values"]
+            ):
+                if mode == "custom":
+                    text = chunk.get("text", "") if isinstance(chunk, dict) else ""
+                    if not text:
+                        continue
+                    pending += text
+                    sentences, pending = _split_complete_sentences(pending, first=not spoken)
+                    for sent in sentences:
+                        spoken.append(sent)
+                        if scan_sentence_speakable(sent, challenge_allowed=False, expected_language=expected_language):
+                            yield {"type": "sentence", "text": sent}
+                elif mode == "values":
+                    final_state = cast(GraphState, chunk)
+        except Exception:
+            logger.exception("respond_stream graph failed; falling back to non-streaming respond.")
+            yield {"type": "final", "response": self.respond(payload, session)}
+            return
+
+        if final_state is None:
+            yield {"type": "final", "response": self.respond(payload, session)}
+            return
+
+        # 收尾残留（无句末标点结束的尾句）
+        tail = pending.strip()
+        if tail:
+            spoken.append(tail)
+            if scan_sentence_speakable(tail, challenge_allowed=False, expected_language=expected_language):
+                yield {"type": "sentence", "text": tail}
+
+        response = self._finalize(final_state, payload, session, session_id)
+
+        # 全文兜底审查差异 → revise（前端停读并用审查后文本替换气泡）
+        reviewed = (response.reply.text or "").strip()
+        if reviewed and _normalize_for_compare(reviewed) != _normalize_for_compare("".join(spoken)):
+            yield {"type": "revise", "text": reviewed}
+
+        yield {"type": "final", "response": response}
+
+    def _finalize(
+        self,
+        result: GraphState,
+        payload: ConversationRequest,
+        session: Session,
+        session_id: str,
+    ) -> ConversationResponse:
+        """图跑完后的统一收尾：构建响应 + 练习状态迁移 + 消息/练习持久化。
+
+        respond 与 respond_stream 共用，保证两条路径落库与响应结构逐字一致。
+        """
         response = ConversationResponse(
             session_id=session_id,
             mode=result["mode"],
@@ -426,9 +554,6 @@ class ConversationService:
         # crisis 自动暂停 + 练习 chips/进度 debug。在 save_conversation_result
         # 之前执行，让练习状态迁移与本轮消息同批持久化。
         self._apply_practice_transition(session, result, payload, response)
-        # NOTE: root trace output/session fields are written inside the
-        # trace_span block above; the span is already closed here, so any
-        # update after it would be silently dropped.
         save_conversation_result(
             session=session,
             response=response,

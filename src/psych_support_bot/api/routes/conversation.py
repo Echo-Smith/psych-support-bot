@@ -1,5 +1,9 @@
+import json
+
 from fastapi import APIRouter, Depends, Request
+from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
+from starlette.concurrency import iterate_in_threadpool
 
 from psych_support_bot.ai.schemas.messages import (
     ConversationRequest,
@@ -28,6 +32,38 @@ def respond(
 ) -> ConversationResponse:
     payload.user_id = request_user_id(request, payload.user_id)
     return conversation_service.respond(payload, session=session)
+
+
+@router.post("/respond/stream")
+async def respond_stream(
+    payload: ConversationRequest,
+    request: Request,
+    session: Session = Depends(get_db_session),
+) -> StreamingResponse:
+    """LLM→TTS 句子级流式（SSE）。事件帧：data {type: sentence|revise|final}。
+
+    - sentence：LLM 生成中切出的完整句（已过逐句规则扫描），前端可即时朗读/渲染
+    - revise：全文 safety_reviewer 与已朗读内容不一致，前端停读并用 text 替换气泡
+    - final：完整 ConversationResponse（结构化，与 /respond 同形状），收尾用
+    同步服务生成器经 threadpool 驱动；X-Accel-Buffering:no 关代理缓冲保证逐帧下发。
+    """
+    payload.user_id = request_user_id(request, payload.user_id)
+    gen = conversation_service.respond_stream(payload, session=session)
+
+    async def _sse():
+        async for event in iterate_in_threadpool(gen):
+            etype = event.get("type")
+            if etype == "final":
+                data = {"type": "final", "response": event["response"].model_dump(mode="json")}
+            else:
+                data = {k: v for k, v in event.items()}
+            yield f"data: {json.dumps(data, ensure_ascii=False)}\n\n"
+
+    return StreamingResponse(
+        _sse(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
 
 
 @router.get("/history", response_model=list[SessionHistoryItem])

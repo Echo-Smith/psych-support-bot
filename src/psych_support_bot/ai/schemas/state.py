@@ -80,3 +80,7 @@ class GraphState(TypedDict):
     # （软着陆暂停）/ complete（第 5 步已答→收尾）；""=本轮非练习轮。
     # 落库由服务层在图结束后执行（图内不持 DB 会话）。
     practice_action: str
+    # LLM→TTS 句子级流式开关：True 时 response_generator 普通路径经
+    # get_stream_writer 逐块吐 token，供 /respond/stream SSE 消费。
+    # 仅影响是否推流式事件，不改变最终 state 文本（safety_reviewer/持久化不变）。
+    stream_tokens: bool

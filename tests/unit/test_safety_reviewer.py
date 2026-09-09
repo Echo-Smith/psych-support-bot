@@ -4,6 +4,7 @@ from typing import cast
 
 from psych_support_bot.ai.nodes.safety_reviewer import (
     _detect_challenge,
+    scan_sentence_speakable,
     _detect_redline,
     _fallback_text,
     _sanitize_challenge,
@@ -428,3 +429,28 @@ def test_review_mixed_diagnosis_and_pathologization() -> None:
     assert "你患有抑郁症" not in result["generated_reply"].text
     assert "你的大脑在扭曲" not in result["generated_reply"].text
     assert "我们一起想想办法" in result["generated_reply"].text
+
+
+# ---------------------------------------------------------------------------
+# 句子级流式扫描（scan_sentence_speakable）
+# ---------------------------------------------------------------------------
+
+
+def test_scan_sentence_speakable_accepts_clean() -> None:
+    assert scan_sentence_speakable("嗯，我听到了，也在认真想怎么回你。") is True
+    assert scan_sentence_speakable("") is True
+
+
+def test_scan_sentence_speakable_rejects_redline() -> None:
+    # 诊断/病理归因红线：不得在全文审查前抢跑朗读
+    assert scan_sentence_speakable("你得了抑郁症，需要看医生。") is False
+
+
+def test_scan_sentence_speakable_rejects_vendor() -> None:
+    assert scan_sentence_speakable("我是由智谱训练的模型。") is False
+    assert scan_sentence_speakable("Powered by chatgpt.") is False
+
+
+def test_scan_sentence_speakable_rejects_internal_labels() -> None:
+    # 内部临床脚手架标签整段会被清洗，含标签的句子不抢跑朗读
+    assert scan_sentence_speakable("观察：用户情绪低落。") is False

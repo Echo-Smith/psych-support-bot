@@ -2,8 +2,7 @@ import time
 from typing import cast
 
 from psych_support_bot.ai.nodes.response_generator import generate_response
-from psych_support_bot.ai.schemas.messages import (
-    ConversationMode,
+from psych_support_bot.ai.schemas.messages import (    ConversationMode,
     GeneratedReply,
     RiskLevel,
     RiskResult,
@@ -190,3 +189,61 @@ def test_multidisciplinary_consultation_runs_agents_concurrently(monkeypatch) ->
     assert reply == "synthesized reply"
     assert [item["agent"] for item in opinions] == ["A", "B", "C"]
     assert elapsed < 0.35
+
+
+# ---------------------------------------------------------------------------
+# 句子级流式分支（stream_tokens=True 的普通 LLM 路径）
+# ---------------------------------------------------------------------------
+
+
+def test_stream_tokens_emits_chunks_and_fills_state(monkeypatch) -> None:
+    """流式开关：token 经 writer 逐块推出，完整文本照常写入 state。"""
+    events: list = []
+
+    def fake_stream(**kwargs):
+        yield "嗯，我听到了。"
+        yield "慢慢来，我陪你。"
+
+    monkeypatch.setattr(
+        "psych_support_bot.ai.nodes.response_generator.generate_clinically_bounded_reply_stream_sync",
+        fake_stream,
+    )
+
+    class _FakeWriter:
+        def __call__(self, payload):
+            events.append(payload)
+
+    monkeypatch.setattr(
+        "psych_support_bot.ai.nodes.response_generator.get_stream_writer",
+        lambda: _FakeWriter(),
+    )
+    state = _build_state(mode="support", user_message="我心里有点乱")
+    state["stream_tokens"] = True
+    generate_response(state)
+    assert events == [
+        {"type": "token", "text": "嗯，我听到了。"},
+        {"type": "token", "text": "慢慢来，我陪你。"},
+    ]
+    assert state["generated_reply"].text == "嗯，我听到了。慢慢来，我陪你。"
+
+
+def test_stream_tokens_off_uses_plain_invoke(monkeypatch) -> None:
+    """默认（非流式）路径行为零变化：不触发流式原语。"""
+    stream_called = {"n": 0}
+
+    def fake_stream(**_):
+        stream_called["n"] += 1
+        yield "x"
+
+    monkeypatch.setattr(
+        "psych_support_bot.ai.nodes.response_generator.generate_clinically_bounded_reply_stream_sync",
+        fake_stream,
+    )
+    monkeypatch.setattr(
+        "psych_support_bot.ai.nodes.response_generator.generate_clinically_bounded_reply",
+        lambda **_: "整段回复。",
+    )
+    state = _build_state(mode="support", user_message="我有点累")
+    generate_response(state)
+    assert stream_called["n"] == 0
+    assert state["generated_reply"].text == "整段回复。"

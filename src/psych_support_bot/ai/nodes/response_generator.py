@@ -1,6 +1,8 @@
 import logging
 import re
 
+from langgraph.config import get_stream_writer
+
 from psych_support_bot.ai.consultation import consultation_agent_descriptions
 from psych_support_bot.ai.prompts.templates import build_crisis_safety_prompt
 from psych_support_bot.ai.safety.crisis import build_crisis_reply
@@ -8,6 +10,7 @@ from psych_support_bot.ai.schemas.messages import GeneratedReply
 from psych_support_bot.ai.schemas.state import GraphState
 from psych_support_bot.infra.llm.generation import (
     generate_clinically_bounded_reply,
+    generate_clinically_bounded_reply_stream_sync,
     generate_multidisciplinary_consultation,
 )
 from psych_support_bot.infra.telemetry.tracing import trace_span, update_span_output
@@ -168,7 +171,7 @@ def _generate_normal_reply(state: GraphState, risk_level: str, no_question_mode:
             )
             state["consultation_opinions"] = opinions
         else:
-            reply_text = generate_clinically_bounded_reply(
+            gen_kwargs = dict(
                 user_message=state["user_message"],
                 mode=state["mode"],
                 risk_level=state["risk_result"].risk_level,
@@ -189,6 +192,18 @@ def _generate_normal_reply(state: GraphState, risk_level: str, no_question_mode:
                 emotional_state=state.get("emotional_state", ""),
                 history=[dict(turn) for turn in (state.get("recent_history") or [])],
             )
+            if state.get("stream_tokens"):
+                # 句子级流式：普通 LLM 路径逐块经 get_stream_writer 推 token，
+                # 供 /respond/stream SSE 消费喂 TTS。同时累积完整文本写入
+                # reply_text——下游 safety_reviewer/持久化与非流式路径完全一致。
+                writer = get_stream_writer()
+                pieces: list[str] = []
+                for chunk in generate_clinically_bounded_reply_stream_sync(**gen_kwargs):
+                    pieces.append(chunk)
+                    writer({"type": "token", "text": chunk})
+                reply_text = "".join(pieces)
+            else:
+                reply_text = generate_clinically_bounded_reply(**gen_kwargs)
             state["consultation_opinions"] = []
     except Exception:
         logger.exception("LLM generation failed; using template fallback.")
