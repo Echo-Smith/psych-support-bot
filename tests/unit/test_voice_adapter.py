@@ -337,6 +337,100 @@ def test_transcribe_dots_upstream_error(monkeypatch, dots_key) -> None:
 
 
 # ---------------------------------------------------------------------------
+# STT 上下文词表（VOICE_STT_PROMPT：内置默认 / 覆盖 / 禁用 / 各供应商差异）
+# ---------------------------------------------------------------------------
+
+
+def test_stt_prompt_default_vocab_attached_to_openai(monkeypatch, stt_key) -> None:
+    _configure(stt_key=stt_key, VOICE_STT_PROMPT="")
+    captured: dict = {}
+
+    def fake_post(url, **kwargs):
+        captured.update(kwargs["data"])
+        return httpx.Response(200, json={"text": "好"}, request=httpx.Request("POST", url))
+
+    monkeypatch.setattr("psych_support_bot.infra.voice.adapter.httpx.post", fake_post)
+    transcribe(b"a", "a.webm")
+    assert "正念" in captured.get("prompt", "")  # 缺省即用内置心理陪伴词表
+
+
+def test_stt_prompt_override_and_disable_openai(monkeypatch, stt_key) -> None:
+    import os
+
+    captured: dict = {}
+
+    def fake_post(url, **kwargs):
+        captured.clear()
+        captured.update(kwargs["data"])
+        return httpx.Response(200, json={"text": "好"}, request=httpx.Request("POST", url))
+
+    monkeypatch.setattr("psych_support_bot.infra.voice.adapter.httpx.post", fake_post)
+    _configure(stt_key=stt_key, VOICE_STT_PROMPT="呼吸 肌肉")
+    get_settings.cache_clear()
+    transcribe(b"a", "a.webm")
+    assert captured.get("prompt") == "呼吸 肌肉"  # 显式配置覆盖内置
+    os.environ["VOICE_STT_PROMPT"] = "off"
+    get_settings.cache_clear()
+    transcribe(b"a", "a.webm")
+    assert "prompt" not in captured  # off 即禁用，不发该字段
+
+
+def test_stt_prompt_in_dots_instruction(monkeypatch, dots_key) -> None:
+    _configure(
+        stt_key=dots_key,
+        VOICE_STT_PROVIDER="dots",
+        VOICE_STT_BASE_URL="https://dots.example.com/v1",
+        VOICE_STT_MODEL="m",
+        VOICE_STT_PROMPT="",
+    )
+    texts: list[str] = []
+
+    def fake_post(url, **kwargs):
+        content = kwargs["json"]["messages"][0]["content"]
+        texts.append(content[1]["text"])
+        return httpx.Response(
+            200,
+            json={"choices": [{"message": {"content": "好"}}]},
+            request=httpx.Request("POST", url),
+        )
+
+    monkeypatch.setattr("psych_support_bot.infra.voice.adapter.httpx.post", fake_post)
+    transcribe(b"a", "a.webm")
+    assert "讲话者可能用到这些词" in texts[0] and "恐慌" in texts[0]
+
+
+def test_stt_prompt_not_sent_to_minimax(monkeypatch, tts_key) -> None:
+    """minimax /speech_to_text 无 prompt 参数：词表不得混进 form data。"""
+    _configure(
+        stt_key=tts_key,
+        VOICE_STT_PROVIDER="minimax",
+        VOICE_STT_MODEL="",
+        VOICE_STT_PROMPT="",
+    )
+    captured: dict = {}
+
+    def fake_post(url, **kwargs):
+        captured.update(kwargs["data"])
+        return httpx.Response(
+            200,
+            json={"text": "好", "base_resp": {"status_code": 0}},
+            request=httpx.Request("POST", url),
+        )
+
+    monkeypatch.setattr("psych_support_bot.infra.voice.adapter.httpx.post", fake_post)
+    transcribe(b"a", "a.m4a")
+    assert "prompt" not in captured
+
+
+def test_stt_prompt_language_selection(stt_key) -> None:
+    from psych_support_bot.infra.voice.adapter import SttConfig, _stt_prompt_for
+
+    cfg = SttConfig(provider="openai", base_url="", api_key="", model="", language="", prompt="")
+    assert "着陆练习" in _stt_prompt_for(cfg, "")  # 未标注语种 → 中文词表（产品主语种）
+    assert "mindfulness" in _stt_prompt_for(cfg, "en").lower()  # en → 英文词表
+
+
+# ---------------------------------------------------------------------------
 # TTS 调用
 # ---------------------------------------------------------------------------
 

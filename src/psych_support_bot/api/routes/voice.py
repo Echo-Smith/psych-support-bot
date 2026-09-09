@@ -15,6 +15,8 @@
 import asyncio
 import json
 import logging
+import threading
+import time
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, UploadFile, WebSocket, WebSocketDisconnect
@@ -23,9 +25,9 @@ from fastapi.responses import Response, StreamingResponse
 from psych_support_bot.api.auth import decode_access_token, request_user_id, require_auth
 from psych_support_bot.infra.config.settings import get_settings
 from psych_support_bot.infra.voice.adapter import (
-    MAX_AUDIO_BYTES,
     _MINIMAX_BITRATE,
     _MINIMAX_SAMPLE_RATE,
+    MAX_AUDIO_BYTES,
     VoiceNotConfigured,
     VoiceProviderError,
     get_stt_config,
@@ -58,6 +60,43 @@ _ALLOWED_AUDIO_TYPES = {
 _TTS_MAX_CHARS = 1000
 
 
+# ---------------------------------------------------------------------------
+# STT 故障看门狗（借鉴 WhisperLiveKit silent-backend guard：连续失败要吵闹，
+# 不能让用户对着一台已经坏了的上游反复重说）。进程内计数，重启清零；
+# degraded 标志带 TTL——上游恢复后无需成功请求也自动解除观察。
+# ---------------------------------------------------------------------------
+
+_STT_FAIL_DEGRADE_THRESHOLD = 3
+_STT_DEGRADE_TTL_SECONDS = 300.0
+_stt_fail_lock = threading.Lock()
+_stt_fail_state = {"streak": 0, "last_fail": 0.0}
+
+
+def _stt_fail_note(*, failed: bool) -> int:
+    """更新连续失败计数，返回更新后的 streak（成功归零）。"""
+    with _stt_fail_lock:
+        if failed:
+            _stt_fail_state["streak"] += 1
+            _stt_fail_state["last_fail"] = time.monotonic()
+        else:
+            _stt_fail_state["streak"] = 0
+        return _stt_fail_state["streak"]
+
+
+def _stt_degraded() -> bool:
+    with _stt_fail_lock:
+        return (
+            _stt_fail_state["streak"] >= _STT_FAIL_DEGRADE_THRESHOLD
+            and time.monotonic() - _stt_fail_state["last_fail"] < _STT_DEGRADE_TTL_SECONDS
+        )
+
+
+def _reset_stt_fail_state_for_tests() -> None:
+    with _stt_fail_lock:
+        _stt_fail_state["streak"] = 0
+        _stt_fail_state["last_fail"] = 0.0
+
+
 def _voice_user_id(request: Request, declared: str | None) -> str:
     """与 /v1/conversations 同口径的用户身份（AUTH_ENABLED 时 token 为准）。"""
 
@@ -72,6 +111,9 @@ def voice_status(request: Request, _sub: str = Depends(require_auth)) -> dict[st
     return {
         "stt": get_stt_config() is not None,
         "tts": get_tts_config() is not None,
+        # 上游连续失败观察中：前端进免提前给出「可能不可用」预期（麦克风不隐藏，
+        # 保留一次试探即恢复归零的路径）
+        "stt_degraded": _stt_degraded(),
     }
 
 
@@ -86,14 +128,60 @@ async def transcribe_audio(request: Request, file: UploadFile, _sub: str = Depen
     if len(audio) > MAX_AUDIO_BYTES:
         raise HTTPException(status_code=413, detail="Audio file too large (max 25MB)")
     filename = file.filename or "audio.webm"
+    started = time.monotonic()
     try:
         text = await asyncio.to_thread(transcribe, audio, filename)
     except VoiceNotConfigured as exc:
+        # 配置性未配置 ≠ 上游故障：不计入看门狗 streak
         raise HTTPException(status_code=503, detail=str(exc)) from exc
     except VoiceProviderError as exc:
-        logger.warning("Voice transcribe failed: %s", exc)
+        streak = _stt_fail_note(failed=True)
+        # 连续失败升格为 ERROR（WhisperLiveKit 教训：静默故障只打 warning，
+        # 用户看到的是「永远转不出来」）
+        log = logger.error if streak >= 2 else logger.warning
+        log("Voice transcribe failed (streak=%d): %s", streak, exc)
         raise HTTPException(status_code=502, detail=f"Transcription failed: {exc}") from exc
+    _stt_fail_note(failed=False)
+    # 服务端 STT 段耗时（前端 /turn_metrics 上报的是含网络的全链差值，
+    # 两行日志对账即可切分出「网络+排队」与「上游合成」各占多少）
+    config = get_stt_config()
+    logger.info(
+        "VOICE_STT dur=%.3fs bytes=%d provider=%s",
+        time.monotonic() - started,
+        len(audio),
+        config.provider if config else "?",
+    )
     return {"text": text}
+
+
+# 语音回合分阶段耗时（纯数值打点：不含文本/音频内容，隐私零增量）
+_TURN_METRIC_KEYS = (
+    "speech_end_to_stt_ms",
+    "stt_to_first_sentence_ms",
+    "first_sentence_to_final_ms",
+    "final_to_first_audio_ms",
+    "speech_end_to_first_audio_ms",
+)
+
+
+@router.post("/turn_metrics")
+async def turn_metrics(request: Request, payload: dict[str, Any], _sub: str = Depends(require_auth)) -> dict[str, bool]:
+    """前端语音回合阶段耗时上报（WhisperLiveKit remaining_time_* 分段思路）。
+
+    只收白名单数值键，异常值（≤0 或 >10min）静默丢弃；单行 INFO 日志
+    （VOICE_TURN_METRICS {...}）供离线聚合归因，不落库。
+    """
+    stages: dict[str, float | bool] = {}
+    for key in _TURN_METRIC_KEYS:
+        value = payload.get(key)
+        if isinstance(value, (int, float)) and not isinstance(value, bool) and 0 < float(value) < 600_000:
+            stages[key] = round(float(value))
+    if isinstance(payload.get("tts_enabled"), bool):
+        stages["tts_enabled"] = payload["tts_enabled"]
+    if not stages:
+        raise HTTPException(status_code=422, detail="No valid turn metrics")
+    logger.info("VOICE_TURN_METRICS %s", json.dumps(stages, sort_keys=True))
+    return {"ok": True}
 
 
 @router.post("/speak")
@@ -210,22 +298,29 @@ async def tts_live(websocket: WebSocket, token: str = Query(default="")):
             logger.info("TTS live: upstream connected")
             await websocket.send_json({"type": "ready"})
             # 上游任务开启（音色/音频参数与整段合成路径一致；64kbps 减半传输）
-            await mmws.send(json.dumps({
-                "event": "task_start",
-                "model": config.model,
-                **({"language_boost": config.language_boost} if config.language_boost else {}),
-                "voice_setting": {"voice_id": config.voice, "speed": 1.05, "vol": 1, "pitch": 0},
-                "audio_setting": {
-                    "sample_rate": _MINIMAX_SAMPLE_RATE,
-                    "bitrate": _MINIMAX_BITRATE,
-                    "format": "mp3",
-                    "channel": 1,
-                },
-            }))
+            await mmws.send(
+                json.dumps(
+                    {
+                        "event": "task_start",
+                        "model": config.model,
+                        **({"language_boost": config.language_boost} if config.language_boost else {}),
+                        "voice_setting": {"voice_id": config.voice, "speed": 1.05, "vol": 1, "pitch": 0},
+                        "audio_setting": {
+                            "sample_rate": _MINIMAX_SAMPLE_RATE,
+                            "bitrate": _MINIMAX_BITRATE,
+                            "format": "mp3",
+                            "channel": 1,
+                        },
+                    }
+                )
+            )
             started = json.loads(await asyncio.wait_for(mmws.recv(), timeout=15))
             # 网关可能重复推 connected_success（实测每次 task_start 响应前
             # 都有一条）；跳过直到看到 task_started 或明确失败。
-            while started.get("event") not in ("task_started", "task_failed") and started.get("base_resp", {}).get("status_code", 0) == 0:
+            while (
+                started.get("event") not in ("task_started", "task_failed")
+                and started.get("base_resp", {}).get("status_code", 0) == 0
+            ):
                 started = json.loads(await asyncio.wait_for(mmws.recv(), timeout=15))
             if started.get("event") != "task_started":
                 base = started.get("base_resp") or {}
@@ -274,7 +369,7 @@ async def tts_live(websocket: WebSocket, token: str = Query(default="")):
                     return
     except WebSocketDisconnect:
         logger.info("TTS live: client disconnected")
-    except Exception as exc:  # noqa: BLE001 — WS 会话任一端故障都优雅关闭
+    except Exception as exc:
         logger.warning("TTS live session ended: %s", exc, exc_info=True)
     finally:
         try:

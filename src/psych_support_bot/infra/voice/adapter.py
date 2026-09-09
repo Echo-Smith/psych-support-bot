@@ -10,6 +10,9 @@
     即发即逝，无需公网可达的托管 URL，也不落任何服务端状态
 - TTS：OpenAI 兼容 POST {base}/audio/speech；dots 平台暂无 TTS 端点，
   未配置时路由返回 503、前端降级浏览器 SpeechSynthesis。
+- STT 上下文词表（VOICE_STT_PROMPT，缺省内置心理陪伴高频词）：openai 走
+  whisper prompt 字段、dots 拼进转写指令，偏向领域专名识别；minimax
+  /speech_to_text 无该参数不透传。
 - 音频即转即弃：不落库、不写日志，转写文本走既有消息持久化边界。
 
 安全（Mimosa 约束）：适配器对外连的 URL（MiniMax WS 地址）做 SSRF 防护——
@@ -111,6 +114,7 @@ class SttConfig:
     api_key: str
     model: str
     language: str
+    prompt: str = ""  # 上下文词表（空=用内置）；off/-/none=禁用
 
 
 @dataclass(frozen=True)
@@ -146,6 +150,7 @@ def get_stt_config() -> SttConfig | None:
             api_key=api_key,
             model=model,
             language=s.voice_stt_language,
+            prompt=s.voice_stt_prompt,
         )
     if provider == "dots":
         # dots 模式必须全显式：不回落 OPENAI_*（网关语义不同，静默回落
@@ -161,6 +166,7 @@ def get_stt_config() -> SttConfig | None:
             api_key=api_key,
             model=model,
             language=s.voice_stt_language,
+            prompt=s.voice_stt_prompt,
         )
     if provider == "minimax":
         # minimax ASR：Bearer + multipart /speech_to_text。凭据必须显式，
@@ -173,9 +179,38 @@ def get_stt_config() -> SttConfig | None:
             provider="minimax",
             base_url=base_url.rstrip("/"),
             api_key=api_key,
-            model=s.voice_stt_model or "asr-1.0",            language=s.voice_stt_language,
+            model=s.voice_stt_model or "asr-1.0",
+            language=s.voice_stt_language,
+            prompt=s.voice_stt_prompt,
         )
     return None
+
+
+# ---------------------------------------------------------------------------
+# STT 上下文词表（借鉴 WhisperLiveKit 的 per-session context 注入）
+# ---------------------------------------------------------------------------
+
+# 心理陪伴领域高频词：治疗技术 + 症状体感词。空格分隔的短词表，
+# 长度受控（whisper prompt 是"前文续写"语义，词表过长反而稀释偏向效果）。
+_STT_PROMPT_ZH = (
+    "心理咨询 正念 冥想 呼吸练习 放松 焦虑 恐慌 心悸 胸闷 头晕 出汗"
+    " 失眠 抑郁 情绪 压力 创伤 着陆练习 安全岛 认知行为 肌肉放松 躯体化"
+)
+_STT_PROMPT_EN = (
+    "counseling therapy mindfulness meditation breathing exercise relaxation "
+    "anxiety panic palpitations dizziness insomnia depression stress trauma "
+    "grounding safe place CBT somatic"
+)
+
+
+def _stt_prompt_for(config: SttConfig, language: str) -> str:
+    """上下文词表解析：显式配置覆盖内置；off/-/none 禁用；未配置按语种选内置。"""
+    p = (config.prompt or "").strip()
+    if p.lower() in {"off", "-", "none"}:
+        return ""
+    if p:
+        return p
+    return _STT_PROMPT_EN if language == "en" else _STT_PROMPT_ZH
 
 
 def get_tts_config() -> TtsConfig | None:
@@ -251,6 +286,10 @@ def _transcribe_openai(config: SttConfig, audio_bytes: bytes, filename: str, lan
     language = language_hint or config.language
     if language:
         data["language"] = language
+    # whisper 的 prompt 是"前文续写"语义：领域词表放这里可偏向解码选词
+    prompt = _stt_prompt_for(config, language)
+    if prompt:
+        data["prompt"] = prompt
     try:
         response = httpx.post(
             f"{config.base_url}/audio/transcriptions",
@@ -301,11 +340,20 @@ def _transcribe_dots(config: SttConfig, audio_bytes: bytes, filename: str, langu
     mime = _audio_media_type(filename)
     encoded = base64.b64encode(audio_bytes).decode("ascii")
     media_url = f"data:{mime};base64,{encoded}"
+    language = language_hint or config.language
     instruction = (
-        "请转写这段音频，只输出转写文本，不加任何解释。"
-        if (language_hint or config.language) != "en"
-        else ("Transcribe this audio. Output only the transcription text, no explanation.")
+        "Transcribe this audio. Output only the transcription text, no explanation."
+        if language == "en"
+        else "请转写这段音频，只输出转写文本，不加任何解释。"
     )
+    # dots 无 prompt 字段：词表拼进转写指令（chat 模型对"可能用词"提示受领良好）
+    prompt = _stt_prompt_for(config, language)
+    if prompt:
+        instruction += (
+            f" The speaker may use these terms: {prompt}."
+            if language == "en"
+            else f"讲话者可能用到这些词：{prompt}。"
+        )
     payload = {
         "model": config.model,
         "messages": [
@@ -356,7 +404,8 @@ def _transcribe_minimax(config: SttConfig, audio_bytes: bytes, filename: str, la
     平台文档（platform.minimax.io/docs/api-reference/speech-to-text）：
     form 字段 model（asr-1.0）+ file + response_format=json；可选 language
     提示（BCP-47）。响应 {"text": ..., "duration": ...}；MiniMax 风格的
-    base_resp.status_code 非 0 视为上游错误。
+    base_resp.status_code 非 0 视为上游错误。上下文词表不发送：该端点
+    无 prompt 参数（未知字段有被严格网关拒绝的风险），词表仅 openai/dots 生效。
     """
     data: dict[str, str] = {"model": config.model, "response_format": "json", "stream": "false"}
     language = language_hint or config.language
@@ -408,7 +457,7 @@ def _strip_reasoning_artifacts(text: str) -> str:
 _TTS_CACHE_MAX_ENTRIES = 64
 _TTS_CACHE_TTL_SECONDS = 30 * 60
 _tts_cache_lock = threading.Lock()
-_tts_cache: "OrderedDict[tuple, tuple[float, bytes]]" = OrderedDict()
+_tts_cache: OrderedDict[tuple, tuple[float, bytes]] = OrderedDict()
 
 
 def _tts_cache_get(key: tuple) -> bytes | None:
@@ -536,7 +585,8 @@ def _synthesize_openai(config: TtsConfig, cleaned: str) -> bytes:
 
 # MiniMax T2A 双向流式（wss /ws/v1/t2a_v2_bidi）参数
 _MINIMAX_SAMPLE_RATE = 32000
-_MINIMAX_BITRATE = 128000
+# 64kbps：语音陪伴内容与 128k 听感无差别，传输量减半（移动网络受益最大）
+_MINIMAX_BITRATE = 64000
 _MINIMAX_WS_OPEN_TIMEOUT = 10.0
 _MINIMAX_WS_IDLE_TIMEOUT = 30.0
 _MINIMAX_MAX_AUDIO_BYTES = 20 * 1024 * 1024  # 单次合成输出兜底上限

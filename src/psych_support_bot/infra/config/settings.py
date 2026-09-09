@@ -58,6 +58,9 @@ class Settings(BaseSettings):
     voice_stt_api_key: str = Field(default="", alias="VOICE_STT_API_KEY")
     voice_stt_model: str = Field(default="", alias="VOICE_STT_MODEL")
     voice_stt_language: str = Field(default="", alias="VOICE_STT_LANGUAGE")
+    # STT 上下文提示词表：偏向领域高频词（正念/恐慌/心悸…），提升专名识别。
+    # 缺省用适配层内置词表（按语种选中/英版）；显式配置则覆盖；置为 off 禁用。
+    voice_stt_prompt: str = Field(default="", alias="VOICE_STT_PROMPT")
     # TTS：provider = "minimax"（wss /ws/v1/t2a_v2_bidi 双向流式，用户指定）
     # | "openai"（POST /audio/speech，OpenAI 兼容）。api_key/model/voice
     # 两家共用；minimax 另需 ws_url。provider 缺省时按 base_url 是否配置

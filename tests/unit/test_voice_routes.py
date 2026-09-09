@@ -32,13 +32,16 @@ def _isolated_voice_env(monkeypatch):
         "OPENAI_BASE_URL",
     ):
         monkeypatch.setenv(var, "")
+    from psych_support_bot.api.routes import voice as _voice_routes
     from psych_support_bot.infra.config.settings import get_settings
     from psych_support_bot.infra.voice import adapter as _voice_adapter
 
     _voice_adapter._reset_tts_cache_for_tests()
+    _voice_routes._reset_stt_fail_state_for_tests()
     get_settings.cache_clear()
     yield
     _voice_adapter._reset_tts_cache_for_tests()
+    _voice_routes._reset_stt_fail_state_for_tests()
     get_settings.cache_clear()
 
 
@@ -59,7 +62,7 @@ def test_voice_status_contract(client, monkeypatch):
 
     get_settings.cache_clear()
     data = client.get("/v1/voice/status").json()
-    assert data == {"stt": True, "tts": False}
+    assert data == {"stt": True, "tts": False, "stt_degraded": False}
 
 
 def test_voice_status_all_unconfigured(client, monkeypatch):
@@ -70,7 +73,7 @@ def test_voice_status_all_unconfigured(client, monkeypatch):
 
     get_settings.cache_clear()
     data = client.get("/v1/voice/status").json()
-    assert data == {"stt": False, "tts": False}
+    assert data == {"stt": False, "tts": False, "stt_degraded": False}
 
 
 def test_transcribe_rejects_unsupported_type(client):
@@ -203,3 +206,100 @@ def test_speak_stream_success_returns_audio_stream(client, monkeypatch):
 def test_tmp_media_endpoint_removed(client):
     # dots STT 已改为 base64 data URI 内联，无鉴权的 /tmp 拉取端点不复存在
     assert client.get("/v1/voice/tmp/deadbeef").status_code == 404
+
+
+# ---------------------------------------------------------------------------
+# STT 故障看门狗（连续失败 → status 降级标志；成功恢复）
+# ---------------------------------------------------------------------------
+
+
+def _configure_openai_stt(monkeypatch) -> None:
+    monkeypatch.setenv("VOICE_STT_PROVIDER", "openai")
+    monkeypatch.setenv("VOICE_STT_BASE_URL", "https://stt.example.com/v1")
+    monkeypatch.setenv("VOICE_STT_API_KEY", "k" * 8)
+    from psych_support_bot.infra.config.settings import get_settings
+
+    get_settings.cache_clear()
+
+
+def test_stt_fail_streak_sets_degraded_then_recovers(client, monkeypatch):
+    import httpx
+
+    _configure_openai_stt(monkeypatch)
+    fail = lambda url, **kw: httpx.Response(500, request=httpx.Request("POST", url))
+    monkeypatch.setattr("psych_support_bot.infra.voice.adapter.httpx.post", fail)
+    for _ in range(3):
+        assert (
+            client.post("/v1/voice/transcribe", files={"file": ("a.webm", b"audio", "audio/webm")}).status_code == 502
+        )
+    assert client.get("/v1/voice/status").json()["stt_degraded"] is True
+    # 上游恢复：一次成功即归零（degraded 撤销，麦克风路径不留观察态）
+    monkeypatch.setattr(
+        "psych_support_bot.infra.voice.adapter.httpx.post",
+        lambda url, **kw: httpx.Response(200, json={"text": "好"}, request=httpx.Request("POST", url)),
+    )
+    assert client.post("/v1/voice/transcribe", files={"file": ("a.webm", b"audio", "audio/webm")}).status_code == 200
+    assert client.get("/v1/voice/status").json()["stt_degraded"] is False
+
+
+def test_stt_fail_below_threshold_not_degraded(client, monkeypatch):
+    """未达阈值 3 的连续失败不置 degraded（偶发网络抖动不该掐拾音）。"""
+    import httpx
+
+    _configure_openai_stt(monkeypatch)
+    monkeypatch.setattr(
+        "psych_support_bot.infra.voice.adapter.httpx.post",
+        lambda url, **kw: httpx.Response(500, request=httpx.Request("POST", url)),
+    )
+    for _ in range(2):  # 未达阈值 3
+        assert (
+            client.post("/v1/voice/transcribe", files={"file": ("a.webm", b"audio", "audio/webm")}).status_code == 502
+        )
+    assert client.get("/v1/voice/status").json()["stt_degraded"] is False
+
+
+def test_stt_unconfigured_503_not_counted_as_failure(client, monkeypatch):
+    """配置性 503（未配置）≠ 上游故障：打满次数也不进 streak。"""
+    monkeypatch.setenv("VOICE_STT_PROVIDER", "")
+    monkeypatch.setenv("OPENAI_API_KEY", "")
+    from psych_support_bot.infra.config.settings import get_settings
+
+    get_settings.cache_clear()
+    for _ in range(4):
+        assert (
+            client.post("/v1/voice/transcribe", files={"file": ("a.webm", b"audio", "audio/webm")}).status_code == 503
+        )
+    _configure_openai_stt(monkeypatch)
+    assert client.get("/v1/voice/status").json()["stt_degraded"] is False
+
+
+# ---------------------------------------------------------------------------
+# 回合分阶段耗时打点（/turn_metrics：白名单数值 + 隐私零增量）
+# ---------------------------------------------------------------------------
+
+
+def test_turn_metrics_accepts_whitelisted_numbers(client):
+    res = client.post(
+        "/v1/voice/turn_metrics",
+        json={
+            "speech_end_to_stt_ms": 1420,
+            "stt_to_first_sentence_ms": 610.4,
+            "final_to_first_audio_ms": 900,
+            "tts_enabled": True,
+        },
+    )
+    assert res.status_code == 200
+    assert res.json() == {"ok": True}
+
+
+def test_turn_metrics_rejects_garbage(client):
+    # 全部非法（未知键/非数/负值/超界）→ 无可记录 → 422
+    assert client.post("/v1/voice/turn_metrics", json={"foo": 1}).status_code == 422
+    assert client.post("/v1/voice/turn_metrics", json={"speech_end_to_stt_ms": -5}).status_code == 422
+    assert client.post("/v1/voice/turn_metrics", json={"speech_end_to_stt_ms": "x"}).status_code == 422
+    assert client.post("/v1/voice/turn_metrics", json={}).status_code == 422
+
+
+def test_turn_metrics_bool_only_is_valid(client):
+    # 打字轮没配 TTS：只有开关布尔也值得记录（不算空上报）
+    assert client.post("/v1/voice/turn_metrics", json={"tts_enabled": False}).status_code == 200
