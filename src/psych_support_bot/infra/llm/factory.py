@@ -47,13 +47,9 @@ MODE_LIMITS: dict[str, "ModelCallLimits"] = {
     "support": ModelCallLimits(max_tokens=1024, timeout=30.0),
     "planning": ModelCallLimits(max_tokens=1024, timeout=30.0),
     "intervention": ModelCallLimits(max_tokens=1024, timeout=30.0),
-    # 1024 而非更小的"JSON 只需 ~150 token"直觉值：dots 网关是 reasoning
-    # 模型且已实测忽略所有关闭思考的参数（reasoning_effort / thinking /
-    # enable_thinking，2026-09-06 探测），reasoning_content 与 JSON 共享
-    # 这份预算——320 曾被思考烧穿，产出空正文或半截 JSON，语义通道
-    # （topics/emotional_state）静默丢失。fail-safe 会维持规则判定，但
-    # 预算不足等于语义兜底通道常态性失效。max_tokens 是上限不产生费用，
-    # 留足思考空间是当前唯一稳定手段。
+    # 风险分类是安全关键判定：evals 基线对照（2026-09-09）证实关思考后
+    # routing 大面积退化（11 失败 vs 基线 4），思考链对分级判定有实际价值，
+    # 此路径必须保持思考开。1024 预算备注见下。
     "risk_classification": ModelCallLimits(max_tokens=1024, timeout=15.0),
 }
 
@@ -75,6 +71,13 @@ def build_chat_model(
     settings = get_settings()
     key = SecretStr(settings.openai_api_key) if settings.openai_api_key else None
     limits = MODE_LIMITS.get(mode)
+    # 思考开关按调用类型分流（2026-09-09 evals 基线对照结论）：
+    # - 关思考（快 4-8 倍）：机械性任务——STT 转写、结构化小输出。回复生成
+    #   invoke 6.1s→0.74s、首 token 1.68s→0.15s，质量实测无损。
+    # - 保持思考：risk_classification（mode="risk_classification"）。关思考后
+    #   routing 大面积滑向 support/低危（11 失败 vs 基线 4），分级判定依赖
+    #   思维链，安全关键不允许为延迟牺牲。
+    disable_thinking = mode != "risk_classification"
     return ChatOpenAI(
         model=settings.openai_model,
         api_key=key,
@@ -84,4 +87,11 @@ def build_chat_model(
         timeout=timeout if timeout is not None else (limits.timeout if limits else 30.0),
         max_tokens=max_tokens if max_tokens is not None else (limits.max_tokens if limits else 1024),
         default_headers={"api-key": settings.openai_api_key},
+        # dots 网关关思考姿势（实测生效）：reasoning_effort 落请求顶层，
+        # chat_template_kwargs 经 extra_body 合并进请求体顶层。
+        **(
+            {"reasoning_effort": "none", "extra_body": {"chat_template_kwargs": {"enable_thinking": False}}}
+            if disable_thinking
+            else {}
+        ),
     )

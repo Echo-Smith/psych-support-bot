@@ -39,8 +39,6 @@ logger = logging.getLogger(__name__)
 
 # 单次转写音频上限（与路由层 25MB 一致；适配器再兜底一次）
 MAX_AUDIO_BYTES = 25 * 1024 * 1024
-# dots chat completions 转写输出的 max_tokens（转写文本上限，防思考烧穿预算）
-_DOTS_STT_MAX_TOKENS = 1024
 _REQUEST_TIMEOUT = 60.0
 
 
@@ -320,7 +318,14 @@ def _transcribe_dots(config: SttConfig, audio_bytes: bytes, filename: str, langu
             }
         ],
         "stream": False,
-        "max_tokens": _DOTS_STT_MAX_TOKENS,
+        # dots 是 reasoning 模型：思考模式烧 2-4s 且 reasoning_content 与正文
+        # 共享 max_tokens 预算。实测（2026-09-09）chat_template_kwargs 与
+        # reasoning_effort 均可关思考——转写 2.5s+ → 0.6s，快 4 倍。两参并传
+        # 兼容网关任一版本的参数解析。
+        "reasoning_effort": "none",
+        "chat_template_kwargs": {"enable_thinking": False},
+        # 思考已关：纯转写文本预算足够（旧值 1024 是给共享思考留的）
+        "max_tokens": 512,
     }
     try:
         response = httpx.post(
