@@ -13,15 +13,19 @@
 """
 
 import asyncio
+import json
 import logging
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException, Request, UploadFile
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, UploadFile, WebSocket, WebSocketDisconnect
 from fastapi.responses import Response, StreamingResponse
 
-from psych_support_bot.api.auth import request_user_id, require_auth
+from psych_support_bot.api.auth import decode_access_token, request_user_id, require_auth
+from psych_support_bot.infra.config.settings import get_settings
 from psych_support_bot.infra.voice.adapter import (
     MAX_AUDIO_BYTES,
+    _MINIMAX_BITRATE,
+    _MINIMAX_SAMPLE_RATE,
     VoiceNotConfigured,
     VoiceProviderError,
     get_stt_config,
@@ -134,3 +138,146 @@ async def speak_stream(request: Request, payload: dict[str, Any], _sub: str = De
             logger.warning("Voice speak stream interrupted: %s", exc)
 
     return StreamingResponse(_gen(), media_type="audio/mpeg")
+
+
+# ---------------------------------------------------------------------------
+# P1：整轮单会话全双工 TTS（WS）
+# 浏览器开一条 WS，LLM 流式产出的每个句子以 {"type":"say"} 推入；服务器用
+# 同一个 MiniMax bidi 会话逐句 task_continue，音频块实时回推
+# {"type":"audio","b64"}，sentence_end 为分句边界。全文结束发
+# {"type":"end"} → 上游合成残留后回 {"type":"round_end"}。
+# 打断：{"type":"abort"} → task_cancel。鉴权走 query token（浏览器 WS 无法
+# 自定义 Header）。音频仍经服务器（key 不出服务端），但一条会话服务整轮，
+# 消除句间 HTTP 往返与 WS 握手成本。
+# ---------------------------------------------------------------------------
+
+ws_router = APIRouter(prefix="/v1/voice", tags=["voice"])
+
+
+@ws_router.websocket("/tts/live")
+async def tts_live(websocket: WebSocket, token: str = Query(default="")):
+    settings = get_settings()
+    if settings.auth_enabled:
+        try:
+            decode_access_token(token)
+        except Exception:
+            await websocket.close(code=4401)
+            return
+
+    config = get_tts_config()
+    await websocket.accept()
+    if config is None or config.provider != "minimax":
+        logger.warning("TTS live: TTS not configured, closing")
+        await websocket.send_json({"type": "error", "detail": "TTS not configured"})
+        await websocket.close()
+        return
+
+    import websockets as mm_lib
+
+    text_q: asyncio.Queue = asyncio.Queue()
+
+    async def read_client() -> None:
+        try:
+            while True:
+                raw = await websocket.receive_text()
+                try:
+                    msg = json.loads(raw)
+                except ValueError:
+                    continue
+                t = msg.get("type")
+                if t == "say":
+                    text = str(msg.get("text") or "").strip()
+                    if text:
+                        await text_q.put(text)
+                elif t == "end":
+                    await text_q.put(None)
+                    return
+                elif t == "abort":
+                    await text_q.put("__abort__")
+                    return
+        except Exception:
+            pass
+        finally:
+            await text_q.put(None)
+
+    try:
+        async with mm_lib.connect(
+            config.ws_url,
+            additional_headers={"Authorization": f"Bearer {config.api_key}"},
+            open_timeout=10,
+            close_timeout=5,
+        ) as mmws:
+            logger.info("TTS live: upstream connected")
+            await websocket.send_json({"type": "ready"})
+            # 上游任务开启（音色/音频参数与整段合成路径一致；64kbps 减半传输）
+            await mmws.send(json.dumps({
+                "event": "task_start",
+                "model": config.model,
+                **({"language_boost": config.language_boost} if config.language_boost else {}),
+                "voice_setting": {"voice_id": config.voice, "speed": 1.05, "vol": 1, "pitch": 0},
+                "audio_setting": {
+                    "sample_rate": _MINIMAX_SAMPLE_RATE,
+                    "bitrate": _MINIMAX_BITRATE,
+                    "format": "mp3",
+                    "channel": 1,
+                },
+            }))
+            started = json.loads(await asyncio.wait_for(mmws.recv(), timeout=15))
+            # 网关可能重复推 connected_success（实测每次 task_start 响应前
+            # 都有一条）；跳过直到看到 task_started 或明确失败。
+            while started.get("event") not in ("task_started", "task_failed") and started.get("base_resp", {}).get("status_code", 0) == 0:
+                started = json.loads(await asyncio.wait_for(mmws.recv(), timeout=15))
+            if started.get("event") != "task_started":
+                base = started.get("base_resp") or {}
+                logger.warning("TTS live task_start failed: %s", base)
+                await websocket.send_json({"type": "round_end"})
+                return
+            # 客户端读取循环与上游音频泵并行：say 逐句喂入，音频块实时回推
+            reader_task = asyncio.ensure_future(read_client())
+
+            async def client_to_mm() -> None:
+                # 客户端句子 → MiniMax task_continue；end → task_finish；
+                # abort → task_cancel
+                sent_finish = False
+                while True:
+                    item = await text_q.get()
+                    if item == "__abort__":
+                        await mmws.send(json.dumps({"event": "task_cancel"}))
+                        return
+                    if item is None:
+                        if not sent_finish:
+                            await mmws.send(json.dumps({"event": "task_finish"}))
+                            sent_finish = True
+                        return
+                    await mmws.send(json.dumps({"event": "task_continue", "text": item}))
+
+            ct = asyncio.ensure_future(client_to_mm())
+            while True:
+                raw = await asyncio.wait_for(mmws.recv(), timeout=120)
+                msg = json.loads(raw)
+                base = msg.get("base_resp") or {}
+                status = base.get("status_code", 0)
+                if status != 0:
+                    logger.warning("TTS live upstream error %s: %s", status, base.get("status_msg"))
+                    await websocket.send_json({"type": "round_end"})
+                    return
+                event = msg.get("event")
+                data = msg.get("data") or {}
+                if data.get("audio"):
+                    await websocket.send_json({"type": "audio", "b64": data["audio"]})
+                if msg.get("is_final"):
+                    # 句级边界：前端以此切分播放单元（sentence_start/end 事件
+                    # 名沿用语义）。会话不终态，下一句 task_continue 继续喂。
+                    await websocket.send_json({"type": "sentence_end"})
+                if event in ("task_finished", "task_failed"):
+                    await websocket.send_json({"type": "round_end"})
+                    return
+    except WebSocketDisconnect:
+        logger.info("TTS live: client disconnected")
+    except Exception as exc:  # noqa: BLE001 — WS 会话任一端故障都优雅关闭
+        logger.warning("TTS live session ended: %s", exc, exc_info=True)
+    finally:
+        try:
+            await websocket.close()
+        except Exception:
+            pass

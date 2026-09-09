@@ -66,6 +66,59 @@ def test_respond_stream_sse_frames(client, monkeypatch):
     assert frames[-1]["response"]["reply"]["text"] == "嗯，我听到了。慢慢来。"
 
 
+# ---------------------------------------------------------------------------
+# P1：整轮单会话 TTS WS（/v1/voice/tts/live）
+# ---------------------------------------------------------------------------
+
+
+def test_tts_live_ws_round(client, monkeypatch):
+    """假上游 MiniMax 会话：task_start→started，say→audio+is_final，end→finished。"""
+    import json as _json
+
+    class FakeMM:
+        def __init__(self):
+            self._out = []
+
+        async def send(self, raw):
+            ev = _json.loads(raw).get("event")
+            if ev == "task_start":
+                self._out.append(_json.dumps({"event": "task_started", "base_resp": {"status_code": 0}}))
+            elif ev == "task_continue":
+                self._out.append(_json.dumps({"data": {"audio": "abcd"}, "is_final": True, "base_resp": {"status_code": 0}}))
+            elif ev == "task_finish":
+                self._out.append(_json.dumps({"event": "task_finished", "base_resp": {"status_code": 0}}))
+
+        async def recv(self):
+            # 真实 websockets.recv 会阻塞到有消息；空队列时轮询等待
+            import asyncio as _a
+            for _ in range(200):
+                if self._out:
+                    return self._out.pop(0)
+                await _a.sleep(0.01)
+            raise ConnectionError("timeout")
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *a):
+            return None
+
+    import websockets
+    monkeypatch.setattr(websockets, "connect", lambda *a, **k: FakeMM())
+
+    with client.websocket_connect("/v1/voice/tts/live") as ws:
+        assert ws.receive_json()["type"] == "ready"
+        ws.send_json({"type": "say", "text": "测试句。"})
+        ws.send_json({"type": "end"})
+        got = []
+        for _ in range(8):
+            msg = ws.receive_json()
+            got.append(msg["type"])
+            if msg["type"] == "round_end":
+                break
+        assert "audio" in got and "sentence_end" in got and "round_end" in got
+
+
 def test_respond_stream_empty_message_422(client):
     # 空 message：SSE 路由同样要求有效输入（ConversationRequest 校验）
     res = client.post(

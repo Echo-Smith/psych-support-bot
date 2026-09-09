@@ -20,6 +20,7 @@ from psych_support_bot.api.routes.reports import router as reports_router
 from psych_support_bot.api.routes.system import router as system_router
 from psych_support_bot.api.routes.users import router as users_router
 from psych_support_bot.api.routes.voice import router as voice_router
+from psych_support_bot.api.routes.voice import ws_router as voice_ws_router
 from psych_support_bot.infra.db.init_db import init_db
 from psych_support_bot.infra.telemetry.tracing import flush_langfuse, get_langfuse
 
@@ -116,6 +117,10 @@ def create_app() -> FastAPI:
         voice_router,
     ):
         app.include_router(guarded, dependencies=data_router_guard)
+
+    # P1 整轮 TTS 的 WS 端点：不能挂 HTTP 守卫（浏览器 WS 无法自定义
+    # Header），鉴权在端点内以 query token 校验（AUTH_ENABLED 时强制）。
+    app.include_router(voice_ws_router)
 
     @app.get("/")
     async def serve_index():
