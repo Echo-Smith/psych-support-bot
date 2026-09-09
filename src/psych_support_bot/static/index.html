@@ -2367,30 +2367,38 @@
       }
       return 'guest-' + userId + '-' + secret;
     }
+    // 单次认证尝试：register（409 则 login）。成功存 token 返回 true。
+    async function guestAuthAttempt(userId) {
+      const pw = guestPassword(userId);
+      let reg = await fetch(API_BASE + '/v1/auth/register', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ username: userId, password: pw })
+      });
+      if (reg.status === 409) {                               // 游客账号已存在
+        reg = await fetch(API_BASE + '/v1/auth/login', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ username: userId, password: pw })
+        });
+      }
+      if (!reg.ok) return false;
+      const data = await reg.json();
+      AUTH_TOKEN = data.access_token;
+      localStorage.setItem(STORE_KEYS.TOKEN, AUTH_TOKEN);
+      if (data.user_id) { USER_ID = data.user_id; localStorage.setItem(STORE_KEYS.UID, USER_ID); }
+      return true;
+    }
     async function ensureGuestAuth() {
       try {
         const probe = await fetch(API_BASE + '/v1/checkins?user_id=' + encodeURIComponent(USER_ID), { headers: authHeaders() });
         if (probe.status !== 401) return;                       // 认证关闭或 token 有效
         AUTH_TOKEN = null;
         localStorage.removeItem(STORE_KEYS.TOKEN);
-        // 游客 username 需 3-64 位字母数字-_；user_id 已满足（u_ 前缀 + 随机串）
-        const pw = guestPassword(USER_ID);
-        let reg = await fetch(API_BASE + '/v1/auth/register', {
-          method: 'POST', headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ username: USER_ID, password: pw })
-        });
-        if (reg.status === 409) {                               // 游客账号已存在（换设备/清缓存/重部署）
-          reg = await fetch(API_BASE + '/v1/auth/login', {
-            method: 'POST', headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ username: USER_ID, password: pw })
-          });
-        }
-        if (reg.ok) {
-          const data = await reg.json();
-          AUTH_TOKEN = data.access_token;
-          localStorage.setItem(STORE_KEYS.TOKEN, AUTH_TOKEN);
-          if (data.user_id) { USER_ID = data.user_id; localStorage.setItem(STORE_KEYS.UID, USER_ID); }
-        }
+        if (await guestAuthAttempt(USER_ID)) return;
+        // 自愈：历史版本用随机密码注册的旧账号无法登录（密码不可恢复）——
+        // 轮换新身份重新注册，保证任何情况下都不会被永久锁死。
+        USER_ID = 'u_' + Math.random().toString(36).slice(2, 10);
+        localStorage.setItem(STORE_KEYS.UID, USER_ID);
+        await guestAuthAttempt(USER_ID);
       } catch (e) { /* 探测失败（后端未起等）不阻断页面 */ }
     }
 
