@@ -605,11 +605,104 @@
       }
 
       75% {
-        box-shadow: 0 0 0 7px rgba(5, 150, 105, 0);
+        box-shadow: 0 0 0 9px rgba(5, 150, 105, 0);
       }
 
       100% {
         box-shadow: 0 0 0 0 rgba(5, 150, 105, 0);
+      }
+    }
+
+    /* ===== P2 沉浸式语音条：对话模式时替换输入框 ===== */
+    .voice-bar {
+      flex: 1;
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      padding: 10px 16px;
+      border: 1px solid var(--rule);
+      background: #fff;
+    }
+
+    .voice-orb {
+      width: 44px;
+      height: 44px;
+      flex: 0 0 auto;
+      border-radius: 50%;
+      border: none;
+      cursor: pointer;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      color: #fff;
+      transition: transform .15s, background .2s;
+    }
+
+    .voice-orb:active {
+      transform: scale(.94);
+    }
+
+    .voice-orb.listening {
+      background: #059669;
+      animation: orbPulseGreen 1.8s ease-out infinite;
+    }
+
+    .voice-orb.thinking {
+      background: #b45309;
+      animation: orbBlink 1s ease-in-out infinite;
+    }
+
+    .voice-orb.speaking {
+      background: #2563eb;
+      animation: orbBlink .9s ease-in-out infinite;
+    }
+
+    .voice-bar .vb-label {
+      font-size: 13px;
+      color: var(--muted);
+      flex: 1;
+    }
+
+    .voice-bar .vb-kbd {
+      flex: 0 0 auto;
+      padding: 6px 10px;
+      font-size: 12px;
+      background: #fff;
+      color: var(--muted);
+      border: 1px solid var(--soft);
+      border-radius: 6px;
+      cursor: pointer;
+    }
+
+    .voice-bar .vb-kbd:hover {
+      color: var(--ink);
+      border-color: var(--ink);
+    }
+
+    @keyframes orbPulseGreen {
+
+      0% {
+        box-shadow: 0 0 0 0 rgba(5, 150, 105, .4);
+      }
+
+      75% {
+        box-shadow: 0 0 0 12px rgba(5, 150, 105, 0);
+      }
+
+      100% {
+        box-shadow: 0 0 0 0 rgba(5, 150, 105, 0);
+      }
+    }
+
+    @keyframes orbBlink {
+
+      0%,
+      100% {
+        opacity: 1;
+      }
+
+      50% {
+        opacity: .55;
       }
     }
 
@@ -2076,7 +2169,7 @@
       </div>
 
       <div class="chat-input-row">
-        <div class="input-wrap">
+        <div class="input-wrap" id="inputWrap">
           <input type="text" id="messageInput" placeholder="输入你的感受或问题…" onkeypress="handleKeyPress(event)">
           <button type="button" id="micBtn" onclick="toggleMicRecording()" style="display:none" title="语音输入" aria-label="语音输入">
             <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
@@ -2085,6 +2178,11 @@
               <line x1="12" y1="19" x2="12" y2="22"></line>
             </svg>
           </button>
+        </div>
+        <div class="voice-bar" id="voiceBar" style="display:none">
+          <button type="button" class="voice-orb" id="voiceOrb" onclick="toggleMicRecording()" aria-label="语音对话开关"></button>
+          <span class="vb-label" id="voiceBarLabel">正在聆听</span>
+          <button type="button" class="vb-kbd" onclick="exitConversation()">⌨ 打字</button>
         </div>
         <button id="sendBtn" onclick="sendMessage()">发送</button>
         <button type="button" class="reset-btn" onclick="resetSession()">重置会话</button>
@@ -3182,6 +3280,7 @@
         // pause() 不触发 onended：手动收尾，防止模式卡死在 speaking
         VOICE.mode = 'idle';
         setMicState('idle');
+        syncVoiceBar();
         hideTyping();
         document.getElementById('micHint').textContent = '点麦克风开启免提对话；说完自动发送';
       }
@@ -3229,9 +3328,35 @@
       }
     }
 
+    // 沉浸式语音条：免提模式下替换输入框（orb 状态随对话模式切换）
+    const ORB_ICONS = {
+      mic: '<svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3z"></path><path d="M19 10v2a7 7 0 0 1-14 0v-2"></path><line x1="12" y1="19" x2="12" y2="22"></line></svg>',
+      speaker: '<svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M11 5 6 9H2v6h4l5 4V5z" fill="currentColor" stroke="none"></path><path d="M15.5 8.5a5 5 0 0 1 0 7"></path><path d="M18.5 5.5a9 9 0 0 1 0 13"></path></svg>',
+    };
+    const VOICE_BAR_LABELS = {
+      listening: '正在聆听，请讲…',
+      thinking: '思考中…',
+      speaking: '正在回复，点击可打断',
+    };
+
+    function syncVoiceBar() {
+      const bar = document.getElementById('voiceBar');
+      const orb = document.getElementById('voiceOrb');
+      if (!bar || !orb) return;
+      const mode = VOICE.mode;
+      const inConv = mode !== 'idle';
+      document.getElementById('inputWrap').style.display = inConv ? 'none' : '';
+      bar.style.display = inConv ? '' : 'none';
+      document.getElementById('sendBtn').style.display = inConv ? 'none' : '';
+      orb.className = 'voice-orb ' + (inConv ? mode : '');
+      orb.innerHTML = mode === 'speaking' ? ORB_ICONS.speaker : ORB_ICONS.mic;
+      document.getElementById('voiceBarLabel').textContent = VOICE_BAR_LABELS[mode] || '';
+    }
+
     function setVoiceMode(mode) {
       VOICE.mode = mode;
       setMicState(mode);
+      syncVoiceBar();
       if (mode === 'listening') showTyping('正在聆听');
       if (mode === 'speaking') hideTyping();
       syncMicPlaybackExclusion(mode);
@@ -3437,6 +3562,7 @@
       stopVoicePlayback();
       VOICE.mode = 'idle';
       setMicState('idle');
+      syncVoiceBar();
       hideTyping();
       document.getElementById('micHint').textContent = '点麦克风开启免提对话；说完自动发送';
     }
