@@ -323,6 +323,7 @@ def generate_multidisciplinary_consultation(
     expected_language: str = "",
     no_question_mode: bool = False,
     emotional_state: str = "",
+    on_token: Callable[[str], None] | None = None,
 ) -> tuple[str, list[dict[str, str]]]:
     if not expected_language:
         expected_language = _expected_language(user_message)
@@ -389,6 +390,23 @@ def generate_multidisciplinary_consultation(
             else f"Synthesis of consultation opinions ({mode} mode, risk {risk_level}):\n\n{opinions_text}"
         )
 
+    # 流式综合：on_token 回调存在时 synthesis 走 model.stream 逐块产出（LLM→TTS
+    # 句子级流式）；失败/无回调退回整段 _invoke。agent fan-out 本身不流式。
+    if on_token is not None:
+        try:
+            pieces: list[str] = []
+            for chunk in _stream_invoke(
+                synthesis_prompt,
+                user_message,
+                expected_language,
+                mode=mode,
+                fallback=_synthesis_fallback,
+            ):
+                pieces.append(chunk)
+                on_token(chunk)
+            return "".join(pieces), opinions
+        except Exception:
+            logger.exception("Streaming synthesis failed; falling back to blocking synthesis.")
     reply_text = _invoke(
         synthesis_prompt,
         user_message,
@@ -397,6 +415,35 @@ def generate_multidisciplinary_consultation(
         fallback=_synthesis_fallback,
     )
     return reply_text, opinions
+
+
+def _stream_invoke(
+    system_prompt: str,
+    user_message: str,
+    expected_language: str,
+    *,
+    mode: str = "support",
+    fallback: Callable[[], str] | None = None,
+) -> Iterator[str]:
+    """_invoke 的流式孪生：model.stream 产出文本增量。
+
+    复用 _invoke 的消息组装语义（System + Human 直投，无近史场景）；
+    任何瞬时错误直接抛出由调用方回退整段合成。
+    """
+    model = build_chat_model(temperature=get_temperature_for_mode(mode), mode=mode)
+    messages = [SystemMessage(content=system_prompt), HumanMessage(content=user_message)]
+    with trace_span(
+        "llm.stream",
+        input={"system_prompt": system_prompt[:300], "user_message": user_message[:300]},
+        as_type="generation",
+    ) as gen_obs:
+        collected: list[str] = []
+        for chunk in model.stream(messages):
+            text = _coerce_content(chunk.content)
+            if text:
+                collected.append(text)
+                yield text
+        update_span_output(gen_obs, "".join(collected)[:300])
 
 
 def _build_reply_prompt(

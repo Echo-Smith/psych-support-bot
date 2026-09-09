@@ -154,6 +154,10 @@ def _generate_normal_reply(state: GraphState, risk_level: str, no_question_mode:
         return reply_text
     try:
         if state.get("consultation_required", False):
+            # 会诊路径：agent fan-out 不流式，最终综合在 stream_tokens 开启时
+            # 经 on_token 逐块推出（intervention 轮的流式覆盖）。
+            writer = get_stream_writer() if state.get("stream_tokens") else None
+            on_token = (lambda t: writer({"type": "token", "text": t})) if writer else None
             reply_text, opinions = generate_multidisciplinary_consultation(
                 user_message=state["user_message"],
                 mode=state["mode"],
@@ -168,6 +172,7 @@ def _generate_normal_reply(state: GraphState, risk_level: str, no_question_mode:
                 expected_language=state.get("expected_language", ""),
                 no_question_mode=no_question_mode,
                 emotional_state=state.get("emotional_state", ""),
+                on_token=on_token,
             )
             state["consultation_opinions"] = opinions
         else:
