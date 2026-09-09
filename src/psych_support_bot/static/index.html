@@ -2340,7 +2340,7 @@
   <script>
     // ========== Globals ==========
     const API_BASE = window.location.origin;
-    const STORE_KEYS = { EX_HIST: 'np_ex_history', EX_DONE: 'np_ex_done', CK: 'np_checkins', UID: 'np_user_id', TOKEN: 'np_auth_token', PRIVACY_VER: 'np_privacy_ver' };
+    const STORE_KEYS = { EX_HIST: 'np_ex_history', EX_DONE: 'np_ex_done', CK: 'np_checkins', UID: 'np_user_id', TOKEN: 'np_auth_token', PRIVACY_VER: 'np_privacy_ver', GUEST_SECRET: 'np_guest_secret' };
     let USER_ID = localStorage.getItem(STORE_KEYS.UID);
     if (!USER_ID) { USER_ID = 'u_' + Math.random().toString(36).slice(2, 10); localStorage.setItem(STORE_KEYS.UID, USER_ID); }
     let SESSION_ID = null;
@@ -2356,20 +2356,33 @@
       if (AUTH_TOKEN) h['Authorization'] = 'Bearer ' + AUTH_TOKEN;
       return h;
     }
+    // 游客密码必须确定性：旧实现用 Date.now() 随机段，导致 token 失效/服务
+    // 重新部署换 JWT secret 后，register 返回 409 → login 用新随机密码 → 必然
+    // 401，永久无法再认证。改为 localStorage 存一份稳定 secret，注册与登录共用。
+    function guestPassword(userId) {
+      let secret = localStorage.getItem(STORE_KEYS.GUEST_SECRET);
+      if (!secret) {
+        secret = Math.random().toString(36).slice(2) + Math.random().toString(36).slice(2);
+        localStorage.setItem(STORE_KEYS.GUEST_SECRET, secret);
+      }
+      return 'guest-' + userId + '-' + secret;
+    }
     async function ensureGuestAuth() {
       try {
         const probe = await fetch(API_BASE + '/v1/checkins?user_id=' + encodeURIComponent(USER_ID), { headers: authHeaders() });
         if (probe.status !== 401) return;                       // 认证关闭或 token 有效
         AUTH_TOKEN = null;
+        localStorage.removeItem(STORE_KEYS.TOKEN);
         // 游客 username 需 3-64 位字母数字-_；user_id 已满足（u_ 前缀 + 随机串）
+        const pw = guestPassword(USER_ID);
         let reg = await fetch(API_BASE + '/v1/auth/register', {
           method: 'POST', headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ username: USER_ID, password: 'guest-' + USER_ID + '-' + (Date.now() % 100000) })
+          body: JSON.stringify({ username: USER_ID, password: pw })
         });
-        if (reg.status === 409) {                               // 游客账号已存在（换设备/清缓存）
+        if (reg.status === 409) {                               // 游客账号已存在（换设备/清缓存/重部署）
           reg = await fetch(API_BASE + '/v1/auth/login', {
             method: 'POST', headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ username: USER_ID, password: 'guest-' + USER_ID + '-' + (Date.now() % 100000) })
+            body: JSON.stringify({ username: USER_ID, password: pw })
           });
         }
         if (reg.ok) {
@@ -2619,9 +2632,14 @@
     }
 
     // ---- LLM→TTS 句子级流式（/respond/stream SSE）----
-    const TTS_QUEUE = { items: [], playing: false, aborted: false, bubbleEl: null, reviseText: null };
+    const TTS_QUEUE = { items: [], playing: false, aborted: false, reviseText: null, anySpoken: false };
 
     async function sendMessageStream(message) {
+      TTS_QUEUE.items = [];
+      TTS_QUEUE.playing = false;
+      TTS_QUEUE.aborted = false;
+      TTS_QUEUE.reviseText = null;
+      TTS_QUEUE.anySpoken = false;
       const res = await fetch(API_BASE + '/v1/conversations/respond/stream', {
         method: 'POST',
         headers: authHeaders(),
@@ -2629,12 +2647,6 @@
       });
       if (!res.ok || !res.body) throw new Error('HTTP ' + res.status);
       if (VOICE.mode === 'thinking') setVoiceMode('speaking'); // 首句未到先占位，防 VAD 抢录
-
-      TTS_QUEUE.items = [];
-      TTS_QUEUE.playing = false;
-      TTS_QUEUE.aborted = false;
-      TTS_QUEUE.reviseText = null;
-      TTS_QUEUE.bubbleEl = null;
 
       const reader = res.body.getReader();
       const decoder = new TextDecoder();
@@ -2661,40 +2673,21 @@
     }
 
     function handleStreamSentence(text) {
-      // 首句到达：替换回声气泡为正式 bot 气泡；后续句子增量追加同一气泡
-      hideTyping();
-      if (!TTS_QUEUE.bubbleEl) {
-        const div = addMessage('bot', text);
-        TTS_QUEUE.bubbleEl = div ? div.querySelector('.bubble') : null;
-      } else {
-        const el = TTS_QUEUE.bubbleEl;
-        el.innerHTML = renderMarkdown(el.textContent + text);
-      }
-      const chatArea = document.getElementById('chatArea');
-      chatArea.scrollTop = chatArea.scrollHeight;
-      // 句子入 TTS 队列（服务端已过逐句安全扫描）；危机回复由 revise/final 兜底
+      // 流式句子只驱动 TTS 队列（服务端已过逐句安全扫描）；文本渲染统一在
+      // final 用 renderBotParts 分气泡——避免整段回复挤进一个气泡。
       TTS_QUEUE.items.push(text);
       pumpTtsQueue();
     }
 
     function handleStreamRevise(text) {
-      // 全文审查与已朗读内容不一致（或投机快路径无 sentence 事件）：停读 +
-      // 用审查后文本渲染/替换气泡。投机轮 revise 先于任何 sentence 到达，
-      // 此时回声气泡还在——必须替换它，否则回复文字永远不出现。
+      // 全文审查与已朗读内容不一致（或投机快路径无 sentence）：停读 + 用审查后
+      // 文本重新入队朗读。文本气泡仍由 final 渲染。
       TTS_QUEUE.aborted = true;
       TTS_QUEUE.items = [];
       stopVoicePlayback();
-      hideTyping();
-      if (TTS_QUEUE.bubbleEl) {
-        TTS_QUEUE.bubbleEl.innerHTML = renderMarkdown(text);
-      } else {
-        const div = addMessage('bot', text);
-        TTS_QUEUE.bubbleEl = div ? div.querySelector('.bubble') : null;
-      }
-      TTS_QUEUE.reviseText = text;
-      // 修正后的文本重新朗读（safety_reviewer 已确认安全）
-      TTS_QUEUE.items.push(text);
       TTS_QUEUE.aborted = false;
+      TTS_QUEUE.reviseText = text;
+      TTS_QUEUE.items.push(text);
       pumpTtsQueue();
     }
 
@@ -2702,43 +2695,48 @@
       SESSION_ID = data.session_id;
       updateRiskIndicator(data.risk);
       updateDebugState(data);
+      const isCrisis = data.mode === 'crisis' || !!(data.risk && data.risk.needs_crisis_mode);
+      // 文本气泡：按 reply.messages 渲染成多个气泡（打字节奏），与旧非流式一致
+      hideTyping();
+      const parts = (data.reply && Array.isArray(data.reply.messages) && data.reply.messages.length)
+        ? data.reply.messages.slice(0, 3)
+        : [(data.reply && data.reply.text) || ''];
+      const hasText = parts.some((p) => (p || '').trim());
       const dbg = data.debug || {};
-      if (dbg.source === 'assessment_card' && dbg.assessment_type) {
-        renderAssessDeepLink(dbg.assessment_type);
-      }
-      if (dbg.source === 'practice_guide' && dbg.practice_action) {
-        renderPracticeBadge(dbg.practice_action, dbg.practice_step);
-      }
-      if (Array.isArray(data.question_options) && data.question_options.length) {
-        renderScaleChips(data.question_options);
-      }
-      // 兜底：整条流没有任何 sentence/revise（极端情况）时，用最终回复渲染气泡
-      if (!TTS_QUEUE.bubbleEl && data.reply && (data.reply.text || '').trim()) {
-        hideTyping();
-        const parts = (Array.isArray(data.reply.messages) && data.reply.messages.length)
-          ? data.reply.messages.slice(0, 3)
-          : [data.reply.text];
-        addMessage('bot', parts.join('\n\n'), data.mode, data.risk, true);
+      const postRender = () => {
+        if (dbg.source === 'assessment_card' && dbg.assessment_type) {
+          renderAssessDeepLink(dbg.assessment_type);
+        }
+        if (dbg.source === 'practice_guide' && dbg.practice_action) {
+          renderPracticeBadge(dbg.practice_action, dbg.practice_step);
+        }
+        if (Array.isArray(data.question_options) && data.question_options.length) {
+          renderScaleChips(data.question_options);
+        }
+      };
+      if (hasText) {
+        renderBotParts(parts, data.mode, data.risk, postRender);
       } else {
-        hideTyping();
+        postRender();
       }
-      // 队列播完（或没排队）时兜底收尾：回聆听/退出危机态
+      // 朗读收尾：队列播完回聆听；危机则退出对话模式
       const finish = () => {
         if (VOICE.mode === 'speaking') {
-          if (data.mode === 'crisis' || (data.risk && data.risk.needs_crisis_mode)) exitConversation();
+          if (isCrisis) exitConversation();
           else setVoiceMode('listening');
         }
       };
-      if (TTS_QUEUE.playing) {
+      const ttsActive = TTS_QUEUE.playing || TTS_QUEUE.items.length > 0 || TTS_QUEUE.anySpoken;
+      if (TTS_QUEUE.playing || TTS_QUEUE.items.length > 0) {
         const timer = setInterval(() => {
-          if (!TTS_QUEUE.playing) { clearInterval(timer); finish(); }
+          if (!TTS_QUEUE.playing && TTS_QUEUE.items.length === 0) { clearInterval(timer); finish(); }
         }, 300);
       } else {
         finish();
       }
-      // 队列全空（如全部被扫描拦下）→ 用最终文本完整朗读一遍
-      if (!TTS_QUEUE.playing && !TTS_QUEUE.reviseText) {
-        speakReply(data.reply, data.mode === 'crisis' || !!(data.risk && data.risk.needs_crisis_mode));
+      // 没有任何流式朗读发生（投机快路径/全被扫描拦下）→ 整段朗读兜底
+      if (!ttsActive && hasText) {
+        speakReply(data.reply, isCrisis);
       }
     }
 
@@ -2747,6 +2745,7 @@
       const text = TTS_QUEUE.items.shift();
       if (!text) return;
       TTS_QUEUE.playing = true;
+      TTS_QUEUE.anySpoken = true;
       try {
         await speakSentenceStream(text);
       } catch (err) {
