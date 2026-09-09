@@ -2632,7 +2632,7 @@
     }
 
     // ---- LLM→TTS 句子级流式（/respond/stream SSE）----
-    const TTS_QUEUE = { items: [], playing: false, aborted: false, reviseText: null, anySpoken: false };
+    const TTS_QUEUE = { items: [], playing: false, aborted: false, reviseText: null, anySpoken: false, prefetched: {} };
 
     async function sendMessageStream(message) {
       TTS_QUEUE.items = [];
@@ -2640,6 +2640,7 @@
       TTS_QUEUE.aborted = false;
       TTS_QUEUE.reviseText = null;
       TTS_QUEUE.anySpoken = false;
+      TTS_QUEUE.prefetched = {};
       const res = await fetch(API_BASE + '/v1/conversations/respond/stream', {
         method: 'POST',
         headers: authHeaders(),
@@ -2675,8 +2676,23 @@
     function handleStreamSentence(text) {
       // 流式句子只驱动 TTS 队列（服务端已过逐句安全扫描）；文本渲染统一在
       // final 用 renderBotParts 分气泡——避免整段回复挤进一个气泡。
+      // 句子一到立即预取合成（播放与合成流水线化，消除句间空等）。
       TTS_QUEUE.items.push(text);
+      prefetchTts(text);
       pumpTtsQueue();
+    }
+
+    function prefetchTts(text) {
+      // 预取当前句的合成音频（去重；失败静默，播放时现场重试）
+      if (TTS_QUEUE.prefetched[text] || !VOICE.ttsAvailable || !VOICE.ttsPref) return;
+      TTS_QUEUE.prefetched[text] = fetch(API_BASE + '/v1/voice/speak', {
+        method: 'POST',
+        headers: { ...authHeaders(), 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text }),
+      }).then((res) => {
+        if (!res.ok) throw new Error('HTTP ' + res.status);
+        return res.blob();
+      });
     }
 
     function handleStreamRevise(text) {
@@ -2756,9 +2772,41 @@
     }
 
     async function speakSentenceStream(text) {
-      // 单句朗读（句短，整段 blob 延迟可接受）：resolve 于播放结束（队列串行）
+      // 优先用预取的合成音频（句子到达时已开始合成，播放零等待）；
+      // 无预取（兜底/revise 场景）则现场调流式端点。resolve 于播放结束。
       return new Promise((resolve, reject) => {
         if (VOICE.mode !== 'idle' && VOICE.mode !== 'speaking') setVoiceMode('speaking');
+        const blobPromise = TTS_QUEUE.prefetched[text]
+          ? TTS_QUEUE.prefetched[text].catch(() => null)
+          : null;
+        const play = (blob) => {
+          const url = URL.createObjectURL(blob);
+          const audio = new Audio(url);
+          audio.onended = () => {
+            URL.revokeObjectURL(url);
+            if (VOICE.audioEl === audio) VOICE.audioEl = null;
+            resolve();
+          };
+          audio.onerror = () => { URL.revokeObjectURL(url); reject(new Error('audio error')); };
+          VOICE.audioEl = audio;
+          audio.play().catch((e) => { URL.revokeObjectURL(url); reject(e); });
+        };
+        if (blobPromise) {
+          blobPromise.then((blob) => {
+            delete TTS_QUEUE.prefetched[text];
+            if (blob && blob.size > 1000) { play(blob); return; }
+            // 预取失败 → 现场调流式端点
+            return fetch(API_BASE + '/v1/voice/speak/stream', {
+              method: 'POST',
+              headers: { ...authHeaders(), 'Content-Type': 'application/json' },
+              body: JSON.stringify({ text }),
+            }).then((res) => {
+              if (!res.ok || !res.body) throw new Error('HTTP ' + res.status);
+              return res.blob();
+            }).then(play);
+          }).catch(reject);
+          return;
+        }
         fetch(API_BASE + '/v1/voice/speak/stream', {
           method: 'POST',
           headers: { ...authHeaders(), 'Content-Type': 'application/json' },
@@ -3030,15 +3078,22 @@
       ttsPref: localStorage.getItem('np_tts_pref') !== '0',
     };
 
-    async function initVoice() {
+    async function initVoice(retried) {
+      let data = null;
       try {
         const res = await fetch(API_BASE + '/v1/voice/status', { headers: authHeaders() });
-        if (!res.ok) return;
-        const data = await res.json();
+        if (!res.ok) {
+          // 401 等：鉴权刚自愈/令牌竞态——延迟重试一次，仍失败则提示刷新
+          if (!retried) { setTimeout(() => initVoice(true), 2500); return; }
+          document.getElementById('micHint').textContent = '语音不可用（' + res.status + '）：请强制刷新页面（Ctrl/Cmd+Shift+R）';
+          return;
+        }
+        data = await res.json();
         VOICE.sttAvailable = !!data.stt;
         VOICE.ttsAvailable = !!data.tts;
       } catch (err) {
         appendDebug('voice/status error => ' + err.message);
+        if (!retried) { setTimeout(() => initVoice(true), 2500); return; }
         return;
       }
       const micBtn = document.getElementById('micBtn');
@@ -3188,12 +3243,20 @@
         return;
       }
       stopVoicePlayback();
+      // 即时反馈：授权等待期间就显示按钮态与提示（授权本身可能要数秒）
+      setMicState('listening');
+      showTyping('正在开启麦克风');
       navigator.mediaDevices.getUserMedia({ audio: true }).then((stream) => {
         VOICE.stream = stream;
         setupVad(stream);
         setVoiceMode('listening');
+        showTyping('正在聆听');
         document.getElementById('micHint').textContent = '免提对话中：直接说话即可，说完自动发送；点麦克风或按 ESC 退出';
-      }).catch(() => addMessage('bot', '无法访问麦克风，请检查浏览器权限后重试。'));
+      }).catch(() => {
+        setMicState('idle');
+        hideTyping();
+        addMessage('bot', '无法访问麦克风，请检查浏览器权限后重试。');
+      });
     }
 
     function setupVad(stream) {

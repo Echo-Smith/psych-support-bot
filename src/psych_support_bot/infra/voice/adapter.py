@@ -175,8 +175,7 @@ def get_stt_config() -> SttConfig | None:
             provider="minimax",
             base_url=base_url.rstrip("/"),
             api_key=api_key,
-            model=s.voice_stt_model or "asr-1.0",
-            language=s.voice_stt_language,
+            model=s.voice_stt_model or "asr-1.0",            language=s.voice_stt_language,
         )
     return None
 
@@ -214,7 +213,7 @@ def get_tts_config() -> TtsConfig | None:
             ws_url=ws_url,
             api_key=api_key,
             model=s.voice_tts_model or "speech-2.8-turbo",
-            voice=s.voice_tts_voice or "male-qn-qingse",
+            voice=s.voice_tts_voice or "Chinese (Mandarin)_Warm_Bestie",
             language_boost=s.voice_tts_language_boost or "",
         )
     return None
