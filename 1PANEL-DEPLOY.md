@@ -111,6 +111,24 @@ curl -D - -o me.json "http://127.0.0.1:9958/v1/me/export?user_id=demo"  # 全量
 
 升级版本：替换源码目录内容 → 1Panel 编排页面点"重新构建 / 重新部署"。SQLite 数据在 `bot-data` 卷中，重建容器不丢失。
 
+### 升级生效自检（重要，避免"部署了但没变化"）
+
+1Panel 的「重新部署/重新启动」只重建容器（复用旧镜像），**不会重新构建**——源码更新后必须走「重新构建」。命令行等价操作：
+
+```bash
+cd /opt/psych-bot
+# 1. 确认源码确实是新版（对照本地版本指纹，见下）
+grep -c "guestPassword" src/psych_support_bot/static/index.html   # ≥1 即新版
+# 2. 强制重建镜像（--no-cache 排除一切构建缓存）
+docker compose -f docker-compose.server.yml build --no-cache app
+docker compose -f docker-compose.server.yml up -d
+# 3. 验证线上页面已是新版
+curl -s http://127.0.0.1:9958/ | grep -c "guestPassword"          # ≥1 即生效
+```
+
+> 常见坑：只点「重新部署」而不重新构建、或上传了新 tar.gz 但忘记解压覆盖——
+> 两者都会导致"部署成功但功能没变化"。用第 3 步的指纹命令一验便知。
+
 ## 安全提示
 
 - 访问控制：设 `AUTH_ENABLED=true` + `JWT_SECRET_KEY=<随机长串>` 启用 JWT 鉴权（前端游客静默注册，无需表单；后端接口无 token 一律 401）。demo 阶段默认关闭，公网部署务必开启
