@@ -2792,14 +2792,24 @@
         const play = (blob) => {
           const url = URL.createObjectURL(blob);
           const audio = new Audio(url);
-          audio.onended = () => {
+          // iOS 打断（来电/Siri/切后台）可能让 onended 与 onerror 都不触发：
+          // 超时看护强制推进队列，杜绝整条朗读链死锁。
+          const watchdog = setTimeout(() => {
+            try { audio.pause(); } catch (err) { /* 已停止 */ }
+            URL.revokeObjectURL(url);
+            if (VOICE.audioEl === audio) VOICE.audioEl = null;
+            resolve();
+          }, 4000 + text.length * 400);
+          const finish = () => {
+            clearTimeout(watchdog);
             URL.revokeObjectURL(url);
             if (VOICE.audioEl === audio) VOICE.audioEl = null;
             resolve();
           };
-          audio.onerror = () => { URL.revokeObjectURL(url); reject(new Error('audio error')); };
+          audio.onended = finish;
+          audio.onerror = () => { clearTimeout(watchdog); URL.revokeObjectURL(url); reject(new Error('audio error')); };
           VOICE.audioEl = audio;
-          audio.play().catch((e) => { URL.revokeObjectURL(url); reject(e); });
+          audio.play().catch((e) => { clearTimeout(watchdog); URL.revokeObjectURL(url); reject(e); });
         };
         if (blobPromise) {
           blobPromise.then((blob) => {
@@ -3224,6 +3234,25 @@
       setMicState(mode);
       if (mode === 'listening') showTyping('正在聆听');
       if (mode === 'speaking') hideTyping();
+      syncMicPlaybackExclusion(mode);
+    }
+
+    // ---- 媒体/通话模式互斥（跨设备"不出音/音量小"根治）----
+    // 朗读时挂起麦克风会话：mic track 禁用 + AudioContext suspend，让系统
+    // 退回纯媒体播放路由（扬声器全音量）；播完恢复采集。AudioContext 不参与
+    // 任何播放（只做 VAD 分析），挂起不影响 TTS 音频。
+    function syncMicPlaybackExclusion(mode) {
+      const speaking = mode === 'speaking';
+      try {
+        if (VOICE.stream) VOICE.stream.getAudioTracks().forEach((t) => { t.enabled = !speaking; });
+      } catch (err) { /* track 操作失败不阻塞播放 */ }
+      const vad = VOICE.vad;
+      if (vad && vad.ctx) {
+        try {
+          if (speaking) { if (vad.ctx.state === 'running') vad.ctx.suspend(); }
+          else if (vad.ctx.state === 'suspended') vad.ctx.resume();
+        } catch (err) { /* 恢复失败由 VAD tick 的自愈兜底 */ }
+      }
     }
 
     // ---------------- 免提对话模式（能量 VAD 自动听-说循环） ----------------
@@ -3238,6 +3267,26 @@
       MIN_UTTERANCE_MS: 800, // 短于此的有效语音丢弃（防咳嗽/碰撞误触）
       MAX_UTTERANCE_MS: 60000,
     };
+
+    // iOS play() 手势策略：播放必须在用户手势调用栈内首次启动。在进入免提
+    // 的点击里静音播一段静音音频完成"解锁"（解锁对所有后续 Audio 生效），
+    // 之后 STT→LLM 异步链后的真实朗读不再被 NotAllowedError 拦截。
+    let iOSAudioUnlocked = false;
+    function unlockAudioForIos() {
+      if (iOSAudioUnlocked || !window.AudioContext && !window.webkitAudioContext) return;
+      try {
+        const AC = window.AudioContext || window.webkitAudioContext;
+        const ctx = new AC();
+        const buffer = ctx.createBuffer(1, 1, 22050); // 1 帧静音
+        const src = ctx.createBufferSource();
+        src.buffer = buffer;
+        src.connect(ctx.destination);
+        if (ctx.state === 'suspended') ctx.resume();
+        src.start(0);
+        src.onended = () => { ctx.close && ctx.close(); };
+        iOSAudioUnlocked = true;
+      } catch (err) { /* 解锁失败不阻塞主流程（各播放点仍有降级） */ }
+    }
 
     function toggleMicRecording() {
       if (VOICE.mode === 'speaking') {
@@ -3256,6 +3305,7 @@
       // 即时反馈：授权等待期间就显示按钮态与提示（授权本身可能要数秒）
       setMicState('listening');
       showTyping('正在开启麦克风');
+      unlockAudioForIos(); // 用户手势内解锁音频播放（iOS play() 策略）
       navigator.mediaDevices.getUserMedia({ audio: true }).then((stream) => {
         VOICE.stream = stream;
         setupVad(stream);
@@ -3303,6 +3353,9 @@
     function vadTick(rms) {
       const vad = VOICE.vad;
       const now = Date.now();
+      // iOS 规则：AudioContext 被系统中断后进入 suspended 且不自动恢复，
+      // AnalyserNode 会一直返回全零——tick 里发现挂起立即拉起（自愈）。
+      if (vad.ctx && vad.ctx.state === 'suspended') vad.ctx.resume().catch(() => {});
       // 回声防护：回复思考/朗读期间不采集（防助手自己的声音触发录音）
       if (VOICE.mode !== 'listening') { vad.lastVoiceAt = now; return; }
       const voiced = rms > vad.baseline * 3;
@@ -4630,8 +4683,21 @@
     document.addEventListener('keydown', (e) => {
       if (e.key === 'Escape' && VOICE.mode !== 'idle') exitConversation();
     });
+    // iOS 的 visibilitychange 触发极激进（下拉通知/控制中心都会 hidden），
+    // 直接退出免提会让用户"以为还在听"。改为：真离开页面才释放麦克风，
+    // 短暂遮挡（<30s 回来）保留会话。
+    let hiddenSince = 0;
     document.addEventListener('visibilitychange', () => {
-      if (document.hidden && VOICE.mode !== 'idle') exitConversation();
+      if (document.hidden) {
+        if (VOICE.mode !== 'idle') {
+          hiddenSince = Date.now();
+          stopUtterance(); // 正在录的段丢弃，避免回来后提交过期语音
+          hideTyping();
+        }
+      } else if (hiddenSince && Date.now() - hiddenSince > 30000 && VOICE.mode !== 'idle') {
+        exitConversation(); // 离开超 30s：释放麦克风（隐私优先）
+        hiddenSince = 0;
+      }
     });
 
     // shadcn 式键盘快捷键：数字键 1-N 选择选项，←→ 切题（仅评估分页视图内生效）
