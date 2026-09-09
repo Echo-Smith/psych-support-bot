@@ -2605,6 +2605,187 @@
       clearStaleChips();
       stopVoicePlayback();
       try {
+        await sendMessageStream(message);
+      } catch (streamErr) {
+        // 流式路径任何异常（网络/协议/不支持）→ 回退整段 /respond，零风险
+        console.warn('stream fallback:', streamErr);
+        hideTyping();
+        await sendMessageFallback(message);
+      } finally {
+        isLoading = false;
+        document.getElementById('sendBtn').disabled = false;
+        document.getElementById('messageInput').focus();
+      }
+    }
+
+    // ---- LLM→TTS 句子级流式（/respond/stream SSE）----
+    const TTS_QUEUE = { items: [], playing: false, aborted: false, bubbleEl: null, reviseText: null };
+
+    async function sendMessageStream(message) {
+      const res = await fetch(API_BASE + '/v1/conversations/respond/stream', {
+        method: 'POST',
+        headers: authHeaders(),
+        body: JSON.stringify({ user_id: USER_ID, session_id: SESSION_ID, message }),
+      });
+      if (!res.ok || !res.body) throw new Error('HTTP ' + res.status);
+      if (VOICE.mode === 'thinking') setVoiceMode('speaking'); // 首句未到先占位，防 VAD 抢录
+
+      TTS_QUEUE.items = [];
+      TTS_QUEUE.playing = false;
+      TTS_QUEUE.aborted = false;
+      TTS_QUEUE.reviseText = null;
+      TTS_QUEUE.bubbleEl = null;
+
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let sseBuf = '';
+      let finalData = null;
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        sseBuf += decoder.decode(value, { stream: true });
+        let idx;
+        while ((idx = sseBuf.indexOf('\n\n')) !== -1) {
+          const frame = sseBuf.slice(0, idx);
+          sseBuf = sseBuf.slice(idx + 2);
+          const line = frame.split('\n').find((l) => l.startsWith('data: '));
+          if (!line) continue;
+          const ev = JSON.parse(line.slice(6));
+          if (ev.type === 'sentence') handleStreamSentence(ev.text);
+          else if (ev.type === 'revise') handleStreamRevise(ev.text);
+          else if (ev.type === 'final') finalData = ev.response;
+        }
+      }
+      if (!finalData) throw new Error('stream ended without final');
+      handleStreamFinal(finalData);
+    }
+
+    function handleStreamSentence(text) {
+      // 首句到达：替换回声气泡为正式 bot 气泡；后续句子增量追加同一气泡
+      hideTyping();
+      if (!TTS_QUEUE.bubbleEl) {
+        const div = addMessage('bot', text);
+        TTS_QUEUE.bubbleEl = div ? div.querySelector('.bubble') : null;
+      } else {
+        const el = TTS_QUEUE.bubbleEl;
+        el.innerHTML = renderMarkdown(el.textContent + text);
+      }
+      const chatArea = document.getElementById('chatArea');
+      chatArea.scrollTop = chatArea.scrollHeight;
+      // 句子入 TTS 队列（服务端已过逐句安全扫描）；危机回复由 revise/final 兜底
+      TTS_QUEUE.items.push(text);
+      pumpTtsQueue();
+    }
+
+    function handleStreamRevise(text) {
+      // 全文审查与已朗读内容不一致（或投机快路径无 sentence 事件）：停读 +
+      // 用审查后文本渲染/替换气泡。投机轮 revise 先于任何 sentence 到达，
+      // 此时回声气泡还在——必须替换它，否则回复文字永远不出现。
+      TTS_QUEUE.aborted = true;
+      TTS_QUEUE.items = [];
+      stopVoicePlayback();
+      hideTyping();
+      if (TTS_QUEUE.bubbleEl) {
+        TTS_QUEUE.bubbleEl.innerHTML = renderMarkdown(text);
+      } else {
+        const div = addMessage('bot', text);
+        TTS_QUEUE.bubbleEl = div ? div.querySelector('.bubble') : null;
+      }
+      TTS_QUEUE.reviseText = text;
+      // 修正后的文本重新朗读（safety_reviewer 已确认安全）
+      TTS_QUEUE.items.push(text);
+      TTS_QUEUE.aborted = false;
+      pumpTtsQueue();
+    }
+
+    function handleStreamFinal(data) {
+      SESSION_ID = data.session_id;
+      updateRiskIndicator(data.risk);
+      updateDebugState(data);
+      const dbg = data.debug || {};
+      if (dbg.source === 'assessment_card' && dbg.assessment_type) {
+        renderAssessDeepLink(dbg.assessment_type);
+      }
+      if (dbg.source === 'practice_guide' && dbg.practice_action) {
+        renderPracticeBadge(dbg.practice_action, dbg.practice_step);
+      }
+      if (Array.isArray(data.question_options) && data.question_options.length) {
+        renderScaleChips(data.question_options);
+      }
+      // 兜底：整条流没有任何 sentence/revise（极端情况）时，用最终回复渲染气泡
+      if (!TTS_QUEUE.bubbleEl && data.reply && (data.reply.text || '').trim()) {
+        hideTyping();
+        const parts = (Array.isArray(data.reply.messages) && data.reply.messages.length)
+          ? data.reply.messages.slice(0, 3)
+          : [data.reply.text];
+        addMessage('bot', parts.join('\n\n'), data.mode, data.risk, true);
+      } else {
+        hideTyping();
+      }
+      // 队列播完（或没排队）时兜底收尾：回聆听/退出危机态
+      const finish = () => {
+        if (VOICE.mode === 'speaking') {
+          if (data.mode === 'crisis' || (data.risk && data.risk.needs_crisis_mode)) exitConversation();
+          else setVoiceMode('listening');
+        }
+      };
+      if (TTS_QUEUE.playing) {
+        const timer = setInterval(() => {
+          if (!TTS_QUEUE.playing) { clearInterval(timer); finish(); }
+        }, 300);
+      } else {
+        finish();
+      }
+      // 队列全空（如全部被扫描拦下）→ 用最终文本完整朗读一遍
+      if (!TTS_QUEUE.playing && !TTS_QUEUE.reviseText) {
+        speakReply(data.reply, data.mode === 'crisis' || !!(data.risk && data.risk.needs_crisis_mode));
+      }
+    }
+
+    async function pumpTtsQueue() {
+      if (TTS_QUEUE.playing || TTS_QUEUE.aborted) return;
+      const text = TTS_QUEUE.items.shift();
+      if (!text) return;
+      TTS_QUEUE.playing = true;
+      try {
+        await speakSentenceStream(text);
+      } catch (err) {
+        appendDebug('tts queue skip: ' + err.message); // 单句失败不阻塞后续句
+      }
+      TTS_QUEUE.playing = false;
+      pumpTtsQueue();
+    }
+
+    async function speakSentenceStream(text) {
+      // 单句朗读（句短，整段 blob 延迟可接受）：resolve 于播放结束（队列串行）
+      return new Promise((resolve, reject) => {
+        if (VOICE.mode !== 'idle' && VOICE.mode !== 'speaking') setVoiceMode('speaking');
+        fetch(API_BASE + '/v1/voice/speak/stream', {
+          method: 'POST',
+          headers: { ...authHeaders(), 'Content-Type': 'application/json' },
+          body: JSON.stringify({ text }),
+        }).then((res) => {
+          if (!res.ok || !res.body) throw new Error('HTTP ' + res.status);
+          return res.blob();
+        }).then((blob) => {
+          const url = URL.createObjectURL(blob);
+          const audio = new Audio(url);
+          audio.onended = () => {
+            URL.revokeObjectURL(url);
+            if (VOICE.audioEl === audio) VOICE.audioEl = null;
+            resolve();
+          };
+          audio.onerror = () => { URL.revokeObjectURL(url); reject(new Error('audio error')); };
+          VOICE.audioEl = audio;
+          audio.play().catch((e) => { URL.revokeObjectURL(url); reject(e); });
+        }).catch(reject);
+      });
+    }
+
+    async function sendMessageFallback(message) {
+      // 整段 /respond（与历史行为一致）：流式失败时的零风险回退
+      showTyping(ECHO_WAIT_TEXT);
+      try {
         const res = await fetch(API_BASE + '/v1/conversations/respond', {
           method: 'POST',
           headers: authHeaders(),
@@ -2639,10 +2820,6 @@
         console.error(err);
         addMessage('bot', '抱歉，遇到了问题：' + err.message + '。请确认后端服务正在运行。');
         if (VOICE.mode === 'thinking') scheduleResumeListening(); // 网络失败后免提循环继续
-      } finally {
-        isLoading = false;
-        document.getElementById('sendBtn').disabled = false;
-        document.getElementById('messageInput').focus();
       }
     }
 
@@ -2724,6 +2901,7 @@
       msgDiv.innerHTML = header + '<div class="bubble">' + bodyInner + '</div>';
       chatArea.appendChild(msgDiv);
       chatArea.scrollTop = chatArea.scrollHeight;
+      return msgDiv;
     }
 
     // 等待占位气泡：sendWaiting=发送后的等待期（回声文案）；气泡间打字节奏用"正在输入"。
