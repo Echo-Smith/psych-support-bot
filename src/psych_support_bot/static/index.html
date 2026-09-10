@@ -4169,7 +4169,7 @@
       ws: null, failed: false, pending: [], roundStarted: false, ended: false,
       curBytes: [], curChars: 0,
       pendingTexts: [], // 已 say 未播的句子文本，随 sentence_end 出队随音频起播上屏
-      pcm: false, sentenceStart: null, firstAudioMarked: false, sentenceSamples: 0, // PCM 流式播放态（②）+ 每句 PCM 样本数（文字按时长铺）
+      pcm: false, sentenceStart: null, firstAudioMarked: false, sentenceSamples: 0, pendingEnd: false, // PCM 流式播放态（②）+ 每句 PCM 样本数（文字按时长铺）
       chain: Promise.resolve(),
       roundDone: null,
     };
@@ -4179,6 +4179,7 @@
       TTS_LIVE.pending = []; TTS_LIVE.roundStarted = false; TTS_LIVE.ended = false;
       TTS_LIVE.curBytes = []; TTS_LIVE.curChars = 0; TTS_LIVE.pendingTexts = [];
       TTS_LIVE.pcm = false; TTS_LIVE.sentenceStart = null; TTS_LIVE.firstAudioMarked = false; TTS_LIVE.sentenceSamples = 0;
+      TTS_LIVE.pendingEnd = false;
       TTS_LIVE.chain = Promise.resolve();
       TTS_LIVE.roundDone = null;
       pcmStopAll(); // 全量复位语义包含掐掉在排播的 PCM 队列
@@ -4350,6 +4351,14 @@
           }
         } else if (ev.type === 'error') {
           appendDebug('tts live: ' + (ev.detail || 'error'));
+          // 上游会话中断（配额/风控等）：剩余未获句尾事件的句子转投 HTTP 句
+          // 队列续读，后半段不再静默消失；本页 WS 通道本会话弃用
+          TTS_LIVE.failed = true;
+          const rest = TTS_LIVE.pending.splice(0).concat(TTS_LIVE.pendingTexts.splice(0));
+          if (rest.length && !TTS_QUEUE.aborted) {
+            TTS_QUEUE.items = TTS_QUEUE.items.concat(rest.filter(Boolean));
+            pumpTtsQueue();
+          }
         }
       };
       ws.onclose = () => {
@@ -4378,6 +4387,7 @@
       TTS_LIVE.pending = [];
       TTS_LIVE.curBytes = []; TTS_LIVE.curChars = 0; TTS_LIVE.pendingTexts = [];
       TTS_LIVE.sentenceStart = null; TTS_LIVE.firstAudioMarked = false; TTS_LIVE.sentenceSamples = 0;
+      TTS_LIVE.pendingEnd = false;
       pcmStopAll();
       TTS_LIVE.chain = Promise.resolve();
       TTS_LIVE.roundStarted = true; TTS_LIVE.ended = true;
@@ -4419,15 +4429,27 @@
       while (TTS_LIVE.pending.length && TTS_LIVE.ws && TTS_LIVE.ws.readyState === 1) {
         ttsLiveSend({ type: 'say', text: TTS_LIVE.pending.shift() });
       }
+      // says 补发完后若有等待中的 end（握手期排队的），此刻一并送达
+      if (TTS_LIVE.pendingEnd && TTS_LIVE.ws && TTS_LIVE.ws.readyState === 1) {
+        TTS_LIVE.pendingEnd = false;
+        ttsLiveSend({ type: 'end' });
+      }
     }
 
     // 流式轮收轮：end + 等 round_end（此时 chain 里可能还有未播完的句，
     // 等 chain 也结束再 resolve，保证朗读完整）
     async function ttsLiveEndRound() {
       TTS_LIVE.ended = true;
-      // drain 任何 pending says 先发完
+      // 先 drain 任何 pending says 再发 end
       ttsLiveDrainPending();
-      ttsLiveSend({ type: 'end' });
+      if (TTS_LIVE.ws && TTS_LIVE.ws.readyState === 1) {
+        ttsLiveSend({ type: 'end' });
+      } else {
+        // WS 还在握手（投机轮 18 句+final 同帧到达的常态时序）：end 排队等
+        // drain，绝不静默丢——丢了 MiniMax 不吐尾句音频、task_finished 不来，
+        // 表现为"朗读读到一半没了"（2026-09-10 四段例实证）
+        TTS_LIVE.pendingEnd = true;
+      }
       // 等上游 round_end + 本地 chain 全播完
       await new Promise((resolve) => {
         TTS_LIVE.roundDone = () => { TTS_LIVE.chain.then(resolve); };

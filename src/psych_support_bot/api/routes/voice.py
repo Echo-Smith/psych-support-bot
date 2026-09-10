@@ -357,6 +357,7 @@ async def tts_live(websocket: WebSocket, token: str = Query(default="")):
             if started.get("event") != "task_started":
                 base = started.get("base_resp") or {}
                 logger.warning("TTS live task_start failed: %s", base)
+                await websocket.send_json({"type": "error", "detail": f"task_start failed: {base.get('status_code')}"})
                 await websocket.send_json({"type": "round_end"})
                 return
             # 客户端读取循环与上游音频泵并行：say 逐句喂入，音频块实时回推
@@ -386,6 +387,9 @@ async def tts_live(websocket: WebSocket, token: str = Query(default="")):
                 status = base.get("status_code", 0)
                 if status != 0:
                     logger.warning("TTS live upstream error %s: %s", status, base.get("status_msg"))
+                    # 错误显式下发（round_end 前）：前端据此把剩余句子转投 HTTP
+                    # 队列续读——上游半途故障不再表现为"音频静默消失"
+                    await websocket.send_json({"type": "error", "detail": f"upstream {status}: {base.get('status_msg')}"})
                     await websocket.send_json({"type": "round_end"})
                     return
                 event = msg.get("event")

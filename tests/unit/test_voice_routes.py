@@ -377,6 +377,36 @@ def test_tts_live_pcm_protocol(client, monkeypatch):
     assert "bitrate" not in start["audio_setting"]
 
 
+def test_tts_live_upstream_error_is_surfaced(client, monkeypatch):
+    """上游中途报错：error 帧先于 round_end 下发（前端据此转投 HTTP 队列，
+    不再表现为"朗读静默消失"）。"""
+    import websockets
+
+    monkeypatch.setenv("VOICE_TTS_PROVIDER", "minimax")
+    monkeypatch.setenv("VOICE_TTS_API_KEY", "k" * 8)
+    monkeypatch.setenv("VOICE_TTS_WS_URL", "wss://api.minimax.cn/ws/v1/t2a_v2_bidi")
+    from psych_support_bot.infra.config.settings import get_settings
+
+    get_settings.cache_clear()
+
+    fake = _FakeMM(
+        [
+            {"event": "connected_success", "base_resp": {"status_code": 0}},
+            {"event": "task_started", "base_resp": {"status_code": 0}},
+            {"base_resp": {"status_code": 1004, "status_msg": "quota exceeded"}},
+        ]
+    )
+    monkeypatch.setattr(websockets, "connect", lambda url, **kw: fake)
+
+    with client.websocket_connect("/v1/voice/tts/live") as ws:
+        assert ws.receive_json()["type"] == "ready"
+        ws.send_json({"type": "say", "text": "你好呀"})
+        ws.send_json({"type": "end"})
+        err = ws.receive_json()
+        assert err["type"] == "error" and "1004" in err["detail"]
+        assert ws.receive_json()["type"] == "round_end"
+
+
 # ---------------------------------------------------------------------------
 # P1 反馈应答（backchannel）：列表 + 单条音频 + 缓存 + 校验
 # ---------------------------------------------------------------------------
