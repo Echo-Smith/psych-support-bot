@@ -3035,7 +3035,7 @@
           audio.onended = finish;
           audio.onerror = () => { clearTimeout(watchdog); URL.revokeObjectURL(url); reject(new Error('audio error')); };
           VOICE.audioEl = audio;
-          audio.play().then(() => { turnMark('firstAudio'); turnTryReport(); liveTextAppend(text); })
+          audio.play().then(() => { turnMark('firstAudio'); turnTryReport(); liveTextAppend(text, 0, Math.max(700, blob.size * 0.125)); })
             .catch((e) => { clearTimeout(watchdog); URL.revokeObjectURL(url); reject(e); });
         };
         if (blobPromise) {
@@ -3071,7 +3071,7 @@
           };
           audio.onerror = () => { URL.revokeObjectURL(url); reject(new Error('audio error')); };
           VOICE.audioEl = audio;
-          audio.play().then(() => { turnMark('firstAudio'); turnTryReport(); liveTextAppend(text); })
+          audio.play().then(() => { turnMark('firstAudio'); turnTryReport(); liveTextAppend(text, 0, Math.max(700, blob.size * 0.125)); })
             .catch((e) => { URL.revokeObjectURL(url); reject(e); });
         }).catch(reject);
       });
@@ -3324,13 +3324,13 @@
       if (t) t.remove();
     }
 
-    // live 文本泡：每句一个气泡，随该句音频起播上屏（眼耳同步，多句即多泡，
-    // 不挤成一坨）。文字不是整句蹦出也不是匀速打字机，而是沿 easeOutCubic
-    // 物理减速曲线"流"出来（先急后缓，像墨迹洇开）。LIVE_TEXT_ROUND 代次
-    // 凭证：clear（final 定稿/revise/打断）递增，进行中的 reveal 动画与排程
-    // 字幕因代次不符立即作废。每句已过后端 scan_sentence_speakable 扫描。
+    // live 文本泡：每句一个气泡，文字流出时长 = 该句音频实际时长（按语音
+    // 进度铺字，播到哪字显到哪；reveal 曲线取接近线性的缓尾，不再是固定
+    // 30ms/字的"抢跑"节奏）。final 换正式气泡定稿；revise/打断清空。
+    // LIVE_TEXT_ROUND 代次凭证：clear 递增，进行中的 reveal 与排程字幕作废。
+    // 每句已过后端 scan_sentence_speakable 扫描，上屏必为可朗读内容。
     let LIVE_TEXT_ROUND = 0;
-    function liveTextAppend(text) {
+    function liveTextAppend(text, elapsedMs, totalMs) {
       if (!text) return;
       hideTyping(); // 等待泡由实内容接管
       const chatArea = document.getElementById('chatArea');
@@ -3340,20 +3340,21 @@
       chatArea.appendChild(el);
       const b = el.querySelector('.bubble');
       const round = LIVE_TEXT_ROUND;
-      const total = Math.max(260, Math.min(2200, text.length * 30)); // ~30ms/字，长句封顶
-      const t0 = performance.now();
+      const total = totalMs || Math.max(400, text.length * 220); // 无音频时长时的兜底节奏
+      // 音频先跑了 elapsedMs（合成快于实时），文字从对应进度追平，不回放
+      const t0 = performance.now() - Math.max(0, elapsedMs || 0);
       const tick = (now) => {
         if (round !== LIVE_TEXT_ROUND || !b.isConnected) return;
         const p = Math.min(1, (now - t0) / total);
-        const e = 1 - Math.pow(1 - p, 3); // easeOutCubic
+        const e = 1 - Math.pow(1 - p, 1.25); // 近线性缓尾：贴着语速走
         b.textContent = p < 1 ? text.slice(0, Math.round(text.length * e)) : text;
         chatArea.scrollTop = chatArea.scrollHeight;
         if (p < 1) requestAnimationFrame(tick);
       };
       requestAnimationFrame(tick);
     }
-    function liveTextAppendRound(round, text) {
-      if (round === LIVE_TEXT_ROUND) liveTextAppend(text);
+    function liveTextAppendRound(round, text, elapsedMs, totalMs) {
+      if (round === LIVE_TEXT_ROUND) liveTextAppend(text, elapsedMs, totalMs);
     }
     function liveTextClear() {
       LIVE_TEXT_ROUND++;
@@ -3805,6 +3806,8 @@
       if (TTS_LIVE.ws) { ttsLiveSend({ type: 'abort' }); killLiveWs(TTS_LIVE.ws); }
       pcmStopAll(); // PCM 队列即刻噤声（旧路径靠 stopVoicePlayback 掐元素，这里掐 source 队列）
       TTS_LIVE.curBytes = []; TTS_LIVE.curChars = 0; TTS_LIVE.pendingTexts = [];
+      TTS_LIVE.sentenceStart = null; TTS_LIVE.firstAudioMarked = false; TTS_LIVE.sentenceSamples = 0;
+      pcmStopAll();
       TTS_LIVE.chain = Promise.resolve();
       liveTextClear();
       const done = TTS_LIVE.roundDone;
@@ -4160,7 +4163,7 @@
       ws: null, failed: false, pending: [], roundStarted: false, ended: false,
       curBytes: [], curChars: 0,
       pendingTexts: [], // 已 say 未播的句子文本，随 sentence_end 出队随音频起播上屏
-      pcm: false, sentenceStart: null, firstAudioMarked: false, // PCM 流式播放态（②）
+      pcm: false, sentenceStart: null, firstAudioMarked: false, sentenceSamples: 0, // PCM 流式播放态（②）+ 每句 PCM 样本数（文字按时长铺）
       chain: Promise.resolve(),
       roundDone: null,
     };
@@ -4169,7 +4172,7 @@
       TTS_LIVE.ws = null; TTS_LIVE.failed = false;
       TTS_LIVE.pending = []; TTS_LIVE.roundStarted = false; TTS_LIVE.ended = false;
       TTS_LIVE.curBytes = []; TTS_LIVE.curChars = 0; TTS_LIVE.pendingTexts = [];
-      TTS_LIVE.pcm = false; TTS_LIVE.sentenceStart = null; TTS_LIVE.firstAudioMarked = false;
+      TTS_LIVE.pcm = false; TTS_LIVE.sentenceStart = null; TTS_LIVE.firstAudioMarked = false; TTS_LIVE.sentenceSamples = 0;
       TTS_LIVE.chain = Promise.resolve();
       TTS_LIVE.roundDone = null;
       pcmStopAll(); // 全量复位语义包含掐掉在排播的 PCM 队列
@@ -4256,7 +4259,7 @@
         audio.onended = finish;
         audio.onerror = finish;
         VOICE.audioEl = audio;
-        audio.play().then(() => { turnMark('firstAudio'); turnTryReport(); liveTextAppend(speakText); })
+        audio.play().then(() => { turnMark('firstAudio'); turnTryReport(); liveTextAppend(speakText, 0, Math.max(700, blob.size * 0.125)); })
           .catch(() => { clearTimeout(watchdog); URL.revokeObjectURL(url); resolve(); });
       });
     }
@@ -4286,6 +4289,7 @@
         if (TTS_LIVE.ws && TTS_LIVE.ws !== ws) return;
         // 二进制帧 = PCM 音频块（②协议）：直接入队，首块即排定起播
         if (TTS_LIVE.pcm && e.data instanceof ArrayBuffer) {
+          TTS_LIVE.sentenceSamples += e.data.byteLength / 2; // s16le 单声道 → 样本数
           const start = pcmFeed(e.data);
           if (start != null) {
             if (TTS_LIVE.sentenceStart == null) TTS_LIVE.sentenceStart = start; // 当前句的首块时刻
@@ -4307,15 +4311,22 @@
           TTS_LIVE.curChars += 4; // 粗略累加字数供播放看护估算
         } else if (ev.type === 'sentence_end') {
           if (TTS_LIVE.pcm) {
-            // 字幕排程到该句音频的起播时刻（眼耳同步）；对齐失败即刻上屏
+            // 文字贴语音铺：reveal 总时长 = 该句 PCM 实际时长；该句音频起播
+            // 时刻若已过（合成快于实时、sentence_end 晚于起播），文字按已过
+            // 时间追平进度。leadMs>0 则等音频开场再开始铺。
             const text = TTS_LIVE.pendingTexts.shift() || '';
             const at = TTS_LIVE.sentenceStart;
-            TTS_LIVE.sentenceStart = null;
-            if (text && at != null && PCM.ctx) {
+            const samples = TTS_LIVE.sentenceSamples;
+            TTS_LIVE.sentenceStart = null; TTS_LIVE.sentenceSamples = 0;
+            if (text) {
+              const durMs = Math.max(700, Math.min(9000, (samples / PCM.rate) * 1000));
+              const leadMs = (at != null && PCM.ctx) ? (at - PCM.ctx.currentTime) * 1000 : 0;
               const round = LIVE_TEXT_ROUND;
-              setTimeout(() => liveTextAppendRound(round, text), Math.max(0, (at - PCM.ctx.currentTime) * 1000));
-            } else if (text) {
-              liveTextAppend(text);
+              if (leadMs > 20) {
+                setTimeout(() => liveTextAppendRound(round, text, 0, durMs), leadMs);
+              } else {
+                liveTextAppendRound(round, text, -leadMs, durMs);
+              }
             }
           } else {
             ttsLiveFlushSentence();
@@ -4360,7 +4371,7 @@
       // revise 整轮不逐句上屏（MiniMax 分句 ≠ 我们的句），文字照旧等 final。
       TTS_LIVE.pending = [];
       TTS_LIVE.curBytes = []; TTS_LIVE.curChars = 0; TTS_LIVE.pendingTexts = [];
-      TTS_LIVE.sentenceStart = null; TTS_LIVE.firstAudioMarked = false;
+      TTS_LIVE.sentenceStart = null; TTS_LIVE.firstAudioMarked = false; TTS_LIVE.sentenceSamples = 0;
       pcmStopAll();
       TTS_LIVE.chain = Promise.resolve();
       TTS_LIVE.roundStarted = true; TTS_LIVE.ended = true;
