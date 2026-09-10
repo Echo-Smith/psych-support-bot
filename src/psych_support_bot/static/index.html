@@ -2881,7 +2881,13 @@
     function handleStreamSentence(text) {
       turnMark('firstSentence'); // LLM 流式首句到达（打字轮无 TURN.t，空操作）
       // LLM 流式句 → 直灌 TTS 单会话 WS（say）；文本渲染由 final 统一 renderBotParts 分气泡，播放按 sentence_end 串行驱动
-      ttsLiveSay(text);
+      if (VOICE.ttsAvailable && VOICE.ttsPref && !TTS_LIVE.failed) {
+        ttsLiveSay(text); // 有声轮：字幕由 sentence_end 随语音起播对齐铺字
+      } else {
+        // 静音/未配置/WS 故障轮：文字自己就是流——句子到达即按朗读语速
+        // （~220ms/字，9s 封顶）模拟铺字，不再干等 final 整段蹦出
+        liveTextAppend(text, 0, Math.max(700, Math.min(9000, text.length * 220)));
+      }
     }
 
     function prefetchTts(text) {

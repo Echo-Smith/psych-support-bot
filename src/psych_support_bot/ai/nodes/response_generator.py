@@ -265,6 +265,11 @@ def generate_response(state: GraphState) -> GraphState:
             state["consultation_opinions"] = []
             state["speculative_reply"] = None
             update_span_output(gen_obs, {"speculative_reply_used": True})
+            if state.get("stream_tokens"):
+                # 投机快路径的流式语义：整文虽已备好，仍按 token 经 writer 推出，
+                # 让 respond_stream 照常切句——live 字幕/句级朗读与普通路径同管道。
+                # 缺这一步时大多数普通轮走投机，前端只能等 final 整段蹦出（2026-09-10 实证）。
+                get_stream_writer()({"type": "token", "text": reply_text})
         else:
             if speculative:
                 # 丢弃重复投机回复；日志留痕供 Langfuse 巡检对照。
