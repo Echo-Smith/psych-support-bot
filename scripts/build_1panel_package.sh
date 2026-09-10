@@ -31,7 +31,11 @@ cp alembic.ini uv.lock pyproject.toml Dockerfile.server docker-compose.server.ym
    .env.example deploy.sh start.sh stop.sh 1PANEL-DEPLOY.md "$STAGE/$PKG_NAME/"
 
 mkdir -p dist
-tar -czf "dist/$PKG_NAME.tar.gz" -C "$STAGE" "$PKG_NAME"
+# macOS bsdtar 会把扩展属性打成 ._ 开头的 AppleDouble 文件，服务器解压后
+# 全是垃圾；COPYFILE_DISABLE=1 关闭该行为，--exclude 双保险（顺带清走
+# 工作区可能混入的 .DS_Store）
+export COPYFILE_DISABLE=1
+tar -czf "dist/$PKG_NAME.tar.gz" --exclude='._*' --exclude='.DS_Store' -C "$STAGE" "$PKG_NAME"
 
 SIZE=$(du -h "dist/$PKG_NAME.tar.gz" | cut -f1 | tr -d ' ')
 echo "打包完成: dist/$PKG_NAME.tar.gz ($SIZE)"

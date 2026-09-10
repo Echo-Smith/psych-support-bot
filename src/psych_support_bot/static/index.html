@@ -3801,8 +3801,11 @@
       abortAllPlayback();
       showTyping('正在开启麦克风');
       unlockAudioForIos(); // 用户手势内解锁音频播放（iOS play() 策略）
-      navigator.mediaDevices.getUserMedia({ audio: true }).then((stream) => {
+      navigator.mediaDevices.getUserMedia({
+        audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
+      }).then((stream) => {
         VOICE.stream = stream;
+        wireMicGuards(stream); // 采集流死亡自愈（iOS 后台切换/系统中断常态）
         VOICE.sttFailStreak = 0; // 每次重新进入免提都给看门狗一次机会
         setupVad(stream);
         setVoiceMode('listening');
@@ -3876,6 +3879,45 @@
       const done = TTS_LIVE.roundDone;
       TTS_LIVE.roundDone = null;
       if (done) done();
+    }
+
+    // ---- 麦克风采集流自愈 ----
+    // iOS 后台切换/系统中断/Siri 抢占会悄悄杀掉采集流（track 变 muted 或
+    // ended，VAD 从此全零），用户感知就是「说话识别不了」。muted/ended
+    // 事件触发就地重取：权限已授权不会弹窗；旧 AudioContext/VAD 拆掉重建。
+    let MIC_RESTARTING = false;
+    function wireMicGuards(stream) {
+      stream.getTracks().forEach((t) => {
+        t.onended = () => restartMic('track ended');
+        t.onmute = () => restartMic('track muted');
+      });
+    }
+    async function restartMic(reason) {
+      if (MIC_RESTARTING) return;
+      if (VOICE.mode !== 'listening' && VOICE.mode !== 'thinking') return; // 朗读/暂停/退出态的静音是故意的
+      MIC_RESTARTING = true;
+      appendDebug('mic restart: ' + reason);
+      try {
+        if (VOICE.stream) {
+          VOICE.stream.getTracks().forEach((t) => { t.onended = null; t.onmute = null; t.stop(); });
+        }
+        const stream = await navigator.mediaDevices.getUserMedia({
+          audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
+        });
+        VOICE.stream = stream;
+        wireMicGuards(stream);
+        if (VOICE.vad) {
+          clearInterval(VOICE.vad.timer);
+          if (VOICE.vad.preNode) { try { VOICE.vad.preNode.disconnect(); } catch (e) { /* 已随 ctx 关闭 */ } }
+          try { VOICE.vad.ctx.close(); } catch (e) { /* 已关 */ }
+          VOICE.vad = null;
+        }
+        setupVad(stream);
+        appendDebug('mic restart ok');
+      } catch (err) {
+        appendDebug('mic restart failed: ' + err.message);
+      }
+      MIC_RESTARTING = false;
     }
 
     function setupVad(stream) {
