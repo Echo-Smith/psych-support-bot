@@ -32,11 +32,19 @@ def test_split_complete_sentences_by_terminal_punct() -> None:
 
 
 def test_split_complete_sentences_soft_break_for_first_long_run() -> None:
-    # 无句末标点的长首句：按软标点兜底切（首句阈值 24 字），尽快出声
+    # 无句末标点的长首句：按软标点兜底切（首句阈值 14 字），尽快出声
     text = "我在呢，" + " 很想听你多说一点，" * 5 + "然后呢"
     sentences, rest = _split_complete_sentences(text, first=True)
     assert sentences, "长首句应被兜底切出"
     assert rest.strip() == "然后呢"
+
+
+def test_split_first_sentence_cut_at_14_chars() -> None:
+    # 首句在 ≥14 字的第一个逗号即切（快速首响）；不足 14 字的逗号不切
+    early, _ = _split_complete_sentences("我听到了你的话，先坐下来休息一下，慢慢呼吸就好。", first=True)
+    assert early[0] == "我听到了你的话，先坐下来休息一下，"
+    short, rest = _split_complete_sentences("我听到你了，还有话想说", first=True)
+    assert short == [] and rest == "我听到你了，还有话想说"
 
 
 def test_split_complete_sentences_short_run_stays_pending() -> None:

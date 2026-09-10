@@ -69,8 +69,8 @@ logger = logging.getLogger(__name__)
 # 无句末标点但已攒够长度时按软标点兜底切，避免首句迟迟不出声。
 _SENTENCE_END = "。！？；!?;\n"
 _SENTENCE_SOFT = "，、：,: "
-_FIRST_SENTENCE_MIN = 24   # 首句兜底切阈值（字）——尽快出声
-_LATER_SENTENCE_MIN = 48   # 后续句兜底切阈值
+_FIRST_SENTENCE_MIN = 14   # 首句兜底切阈值（字）——首句越短，整句合成越早完成、首响越快
+_LATER_SENTENCE_MIN = 56   # 后续句兜底切阈值——句更长→边界更少，句间空隙不增
 
 
 def _split_complete_sentences(buffer: str, *, first: bool) -> tuple[list[str], str]:
