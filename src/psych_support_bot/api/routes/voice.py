@@ -25,7 +25,6 @@ from fastapi.responses import Response, StreamingResponse
 from psych_support_bot.api.auth import decode_access_token, request_user_id, require_auth
 from psych_support_bot.infra.config.settings import get_settings
 from psych_support_bot.infra.voice.adapter import (
-    _MINIMAX_BITRATE,
     _MINIMAX_SAMPLE_RATE,
     MAX_AUDIO_BYTES,
     VoiceNotConfigured,
@@ -231,12 +230,11 @@ async def speak_stream(request: Request, payload: dict[str, Any], _sub: str = De
 # ---------------------------------------------------------------------------
 # P1：整轮单会话全双工 TTS（WS）
 # 浏览器开一条 WS，LLM 流式产出的每个句子以 {"type":"say"} 推入；服务器用
-# 同一个 MiniMax bidi 会话逐句 task_continue，音频块实时回推
-# {"type":"audio","b64"}，sentence_end 为分句边界。全文结束发
-# {"type":"end"} → 上游合成残留后回 {"type":"round_end"}。
-# 打断：{"type":"abort"} → task_cancel。鉴权走 query token（浏览器 WS 无法
-# 自定义 Header）。音频仍经服务器（key 不出服务端），但一条会话服务整轮，
-# 消除句间 HTTP 往返与 WS 握手成本。
+# 同一个 MiniMax bidi 会话逐句 task_continue。音频走 **PCM(32k mono s16le)
+# 二进制帧直推**（ready 消息声明格式），浏览器 WebAudio 队列首块即播——
+# 不再等整句 mp3 合成完才起播。控制面仍是 JSON（text 帧）：sentence_end
+# 分句边界、round_end 轮终点；{"type":"abort"} → task_cancel。鉴权走 query
+# token（浏览器 WS 无法自定义 Header）。音频仍经服务器（key 不出服务端）。
 # ---------------------------------------------------------------------------
 
 ws_router = APIRouter(prefix="/v1/voice", tags=["voice"])
@@ -296,8 +294,12 @@ async def tts_live(websocket: WebSocket, token: str = Query(default="")):
             close_timeout=5,
         ) as mmws:
             logger.info("TTS live: upstream connected")
-            await websocket.send_json({"type": "ready"})
-            # 上游任务开启（音色/音频参数与整段合成路径一致；64kbps 减半传输）
+            # 音频面改 PCM 直推：浏览器收到二进制帧即入 WebAudio 播放队列，
+            # 首块（~0.1-0.3s 音频）到达就能起播，不等整句合成完
+            await websocket.send_json(
+                {"type": "ready", "audio": {"format": "pcm", "sample_rate": _MINIMAX_SAMPLE_RATE}}
+            )
+            # 上游任务开启（音色与整段合成路径一致；PCM 无码率概念）
             await mmws.send(
                 json.dumps(
                     {
@@ -307,8 +309,7 @@ async def tts_live(websocket: WebSocket, token: str = Query(default="")):
                         "voice_setting": {"voice_id": config.voice, "speed": 1.05, "vol": 1, "pitch": 0},
                         "audio_setting": {
                             "sample_rate": _MINIMAX_SAMPLE_RATE,
-                            "bitrate": _MINIMAX_BITRATE,
-                            "format": "mp3",
+                            "format": "pcm",
                             "channel": 1,
                         },
                     }
@@ -359,7 +360,9 @@ async def tts_live(websocket: WebSocket, token: str = Query(default="")):
                 event = msg.get("event")
                 data = msg.get("data") or {}
                 if data.get("audio"):
-                    await websocket.send_json({"type": "audio", "b64": data["audio"]})
+                    # 二进制帧 = 裸 PCM 字节（s16le mono 32k），前端 binaryType
+                    # 设 arraybuffer 后零转换直接入 WebAudio 队列
+                    await websocket.send_bytes(bytes.fromhex(data["audio"]))
                 if msg.get("is_final"):
                     # 句级边界：前端以此切分播放单元（sentence_start/end 事件
                     # 名沿用语义）。会话不终态，下一句 task_continue 继续喂。

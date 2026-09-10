@@ -303,3 +303,75 @@ def test_turn_metrics_rejects_garbage(client):
 def test_turn_metrics_bool_only_is_valid(client):
     # 打字轮没配 TTS：只有开关布尔也值得记录（不算空上报）
     assert client.post("/v1/voice/turn_metrics", json={"tts_enabled": False}).status_code == 200
+
+
+# ---------------------------------------------------------------------------
+# tts_live WS 协议（②PCM 流式起播）：ready 协商 + 二进制音频帧 + 事件序列
+# ---------------------------------------------------------------------------
+
+
+class _FakeMM:
+    """按脚本回放的假 MiniMax WS（dict 帧序列；send 记录发出帧）。"""
+
+    def __init__(self, script):
+        import json as _json
+
+        self._json = _json
+        self._script = list(script)
+        self.sent = []
+
+    async def send(self, raw):
+        self.sent.append(self._json.loads(raw))
+
+    async def recv(self):
+        if not self._script:
+            raise TimeoutError("script exhausted")
+        item = self._script.pop(0)
+        if isinstance(item, Exception):
+            raise item
+        return self._json.dumps(item)
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *args):
+        return None
+
+
+def test_tts_live_pcm_protocol(client, monkeypatch):
+    """契约：ready 声明 pcm + 采样率；音频以裸 PCM 二进制帧下发；
+    is_final → sentence_end；task_finished → round_end；task_start 用 pcm 无码率。"""
+    import websockets
+
+    monkeypatch.setenv("VOICE_TTS_PROVIDER", "minimax")
+    monkeypatch.setenv("VOICE_TTS_API_KEY", "k" * 8)
+    monkeypatch.setenv("VOICE_TTS_WS_URL", "wss://api.minimax.cn/ws/v1/t2a_v2_bidi")
+    from psych_support_bot.infra.config.settings import get_settings
+
+    get_settings.cache_clear()
+
+    pcm = bytes([0x01, 0x02, 0x03, 0x04])
+    fake = _FakeMM(
+        [
+            {"event": "connected_success", "base_resp": {"status_code": 0}},
+            {"event": "task_started", "base_resp": {"status_code": 0}},
+            {"data": {"audio": pcm.hex()}, "is_final": True, "base_resp": {"status_code": 0}},
+            {"event": "task_finished", "base_resp": {"status_code": 0}},
+        ]
+    )
+    monkeypatch.setattr(websockets, "connect", lambda url, **kw: fake)
+
+    with client.websocket_connect("/v1/voice/tts/live") as ws:
+        ready = ws.receive_json()
+        assert ready["type"] == "ready"
+        assert ready["audio"]["format"] == "pcm"
+        assert ready["audio"]["sample_rate"] == 32000
+        ws.send_json({"type": "say", "text": "你好呀"})
+        ws.send_json({"type": "end"})
+        assert ws.receive_bytes() == pcm  # 二进制帧 = 裸 PCM，非 base64 JSON
+        assert ws.receive_json()["type"] == "sentence_end"
+        assert ws.receive_json()["type"] == "round_end"
+
+    start = next(f for f in fake.sent if f.get("event") == "task_start")
+    assert start["audio_setting"]["format"] == "pcm"
+    assert "bitrate" not in start["audio_setting"]
