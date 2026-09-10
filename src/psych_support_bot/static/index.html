@@ -2981,8 +2981,11 @@
         const pcmRemain = audioCtxReady ? Math.max(0, (PCM.cursor - PCM.ctx.currentTime) * 1000) : 0;
         const pendingChars = (TTS_LIVE.pending.join('') + TTS_LIVE.pendingTexts.join('')).length;
         const takeOver = () => {
+          // ctx 状态现查现用：waitFirstAudio 的 6s 等待期间 suspended→running
+          // 的转变很常见（resume() 异步完成），闭包旧值会误走即时渲染
+          const ctxReady = !!(PCM.ctx && PCM.ctx.state === 'running');
           const totalChars = parts.reduce((n, p) => n + (p || '').length, 0);
-          const rem = audioCtxReady ? Math.max(0, (PCM.cursor - PCM.ctx.currentTime) * 1000) : 0;
+          const rem = ctxReady ? Math.max(0, (PCM.cursor - PCM.ctx.currentTime) * 1000) : 0;
           const pend = (TTS_LIVE.pending.join('') + TTS_LIVE.pendingTexts.join('')).length * 220;
           const remMs = Math.max(rem, pend);
           if (remMs > 500 && totalChars > 0) {
@@ -3608,7 +3611,14 @@
           VOICE.ttsPref = !VOICE.ttsPref; // ttsPref 语义=「开声」
           localStorage.setItem('np_tts_pref', VOICE.ttsPref ? '1' : '0');
           renderMuteBtn();
-          if (!VOICE.ttsPref) stopVoicePlayback(); // 静音即时生效：掐掉当前朗读
+          if (!VOICE.ttsPref) {
+            // 静音即时生效：三路全掐——Audio 元素（旧 mp3）、PCM 队列（MiMo
+            // 主路径）、live 会话（否则后续 say 仍会在静音后继续合成出声）
+            stopVoicePlayback();
+            if (TTS_LIVE.ws) { ttsLiveSend({ type: 'abort' }); killLiveWs(TTS_LIVE.ws); }
+            pcmStopAll();
+            finishAllReveals(); // 不再跟随音频：在铺的气泡即刻补全
+          }
         };
       } else {
         muteBtn.style.display = 'none';
