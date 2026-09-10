@@ -66,6 +66,7 @@ def _configure(stt_key: str = "", tts_key: str = "", **overrides) -> None:
         "VOICE_STT_BASE_URL": "https://stt.example.com/v1",
         "VOICE_STT_API_KEY": stt_key,
         "VOICE_STT_MODEL": "whisper-1",
+        "VOICE_STT_LANGUAGE": "zh",  # 显式钉住：不依赖开发机 .env 是否带此项
         # 显式钉住 provider：开发机 .env 可能带真实 minimax 配置，
         # 不钉会把 openai 用例的 mock 请求路由到 WS 路径。
         "VOICE_TTS_PROVIDER": "openai",
@@ -212,6 +213,43 @@ def test_transcribe_mimo_success(monkeypatch, stt_key) -> None:
     assert block["type"] == "input_audio"
     assert block["input_audio"]["data"].startswith("data:audio/wav;base64,")
     assert captured["payload"]["asr_options"] == {"language": "zh"}
+
+
+def test_transcribe_mimo_retries_on_429(monkeypatch, stt_key) -> None:
+    """免费期上游偶发 429：单次退避重试后成功，不直接打成用户可感的失败。"""
+    _configure(stt_key=stt_key, VOICE_STT_PROVIDER="mimo", VOICE_STT_BASE_URL="", VOICE_STT_MODEL="")
+    calls = {"n": 0}
+
+    def fake_post(url, **kwargs):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            return httpx.Response(429, request=httpx.Request("POST", url))
+        return httpx.Response(
+            200,
+            json={"choices": [{"message": {"content": "好"}}]},
+            request=httpx.Request("POST", url),
+        )
+
+    monkeypatch.setattr("psych_support_bot.infra.voice.adapter.httpx.post", fake_post)
+    monkeypatch.setattr("psych_support_bot.infra.voice.adapter.time.sleep", lambda s: None)
+    assert transcribe(b"audio", "a.wav") == "好"
+    assert calls["n"] == 2
+
+
+def test_transcribe_mimo_429_twice_raises(monkeypatch, stt_key) -> None:
+    """重试后仍 429：收敛为 VoiceProviderError（502 → 前端看门狗/降级接管）。"""
+    _configure(stt_key=stt_key, VOICE_STT_PROVIDER="mimo", VOICE_STT_BASE_URL="", VOICE_STT_MODEL="")
+    calls = {"n": 0}
+
+    def fake_post(url, **kwargs):
+        calls["n"] += 1
+        return httpx.Response(429, request=httpx.Request("POST", url))
+
+    monkeypatch.setattr("psych_support_bot.infra.voice.adapter.httpx.post", fake_post)
+    monkeypatch.setattr("psych_support_bot.infra.voice.adapter.time.sleep", lambda s: None)
+    with pytest.raises(VoiceProviderError):
+        transcribe(b"audio", "a.wav")
+    assert calls["n"] == 2  # 恰好一次重试，不无限打
 
 
 def test_tts_config_mimo(tts_key) -> None:

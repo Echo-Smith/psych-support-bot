@@ -3724,7 +3724,7 @@
     function setVoiceMode(mode) {
       VOICE.mode = mode;
       syncVoiceUI();
-      if (mode === 'listening') showTyping('正在聆听');
+      if (mode === 'listening') { showTyping('正在聆听'); ensureMicAlive(); }
       if (mode === 'speaking' || mode === 'paused') hideTyping();
       syncMicPlaybackExclusion(mode);
     }
@@ -3948,6 +3948,12 @@
         appendDebug('mic restart failed: ' + err.message);
       }
       MIC_RESTARTING = false;
+    }
+    function ensureMicAlive() {
+      // 回到聆听态时显式体检：上一轮朗读后流被系统杀掉的话立刻重取，
+      // 不等用户开口才发现（macOS Edge 二轮识别失败的防线之一）
+      const t = VOICE.stream && VOICE.stream.getTracks()[0];
+      if (!t || t.readyState !== 'live' || t.muted) restartMic('dead on resume');
     }
 
     function setupVad(stream) {
@@ -4329,7 +4335,15 @@
     // ---- PCM 流式播放（②）：二进制帧到达即入 WebAudio 队列，首块即播 ----
     // 服务端 tts_live 以 PCM(32k mono s16le) 二进制帧直推音频；ready 消息
     // 未声明 pcm（旧服务端/降级）时自动回到 mp3-b64 整句合成再播的旧路径。
-    const PCM = { ctx: null, cursor: 0, rate: 32000, sources: [], warnedSuspended: false };
+    const PCM = {
+      ctx: null, cursor: 0, rate: 32000, sources: [], warnedSuspended: false,
+      // 语速旋钮（playbackRate 同步缩放播放与排程）：localStorage np_tts_speed
+      // 可调 0.8-1.4，默认 1.0（MiMo 冰糖原生语速）。改完刷新页面生效。
+      speed: (() => {
+        const v = parseFloat(localStorage.getItem('np_tts_speed') || '');
+        return v >= 0.8 && v <= 1.4 ? v : 1.0;
+      })(),
+    };
     function pcmEnsureCtx() {
       try {
         if (!PCM.ctx) {
@@ -4366,10 +4380,11 @@
       }
       const src = ctx.createBufferSource();
       src.buffer = out;
+      src.playbackRate.value = PCM.speed; // 语速旋钮：变速度也变排程时长
       src.connect(ctx.destination);
       const start = Math.max(ctx.currentTime + 0.02, PCM.cursor);
       src.start(start);
-      PCM.cursor = start + out.duration;
+      PCM.cursor = start + out.duration / PCM.speed;
       PCM.sources.push(src);
       src.onended = () => { PCM.sources = PCM.sources.filter((x) => x !== src); };
       return start;
@@ -4473,7 +4488,7 @@
             const samples = TTS_LIVE.sentenceSamples;
             TTS_LIVE.sentenceStart = null; TTS_LIVE.sentenceSamples = 0;
             if (text) {
-              const durMs = Math.max(700, Math.min(9000, (samples / PCM.rate) * 1000));
+              const durMs = Math.max(700, Math.min(9000, (samples / PCM.rate) * 1000 / PCM.speed));
               const leadMs = (at != null && PCM.ctx) ? (at - PCM.ctx.currentTime) * 1000 : 0;
               const round = LIVE_TEXT_ROUND;
               if (leadMs > 20) {
@@ -4598,10 +4613,17 @@
         // 表现为"朗读读到一半没了"（2026-09-10 四段例实证）
         TTS_LIVE.pendingEnd = true;
       }
-      // 等上游 round_end + 本地 chain 全播完
+      // 等上游 round_end + 本地 chain 全播完；**硬上限 25s**——MiMo 免费期
+      // 上游偶发挂死会让服务器 round_end 迟到两分钟，黄框假死期间麦克风
+      // 一直被挂起（第二次说话录不进的根因链）。超时=掐队列强制收束。
       await new Promise((resolve) => {
-        TTS_LIVE.roundDone = () => { TTS_LIVE.chain.then(resolve); };
+        const timer = setTimeout(() => {
+          appendDebug('tts live: round timeout(25s), force finish');
+          resolve();
+        }, 25000);
+        TTS_LIVE.roundDone = () => { clearTimeout(timer); TTS_LIVE.chain.then(resolve); };
       });
+      pcmStopAll(); // 正常完成=空操作（源已播完）；超时兜底=掐掉滞留队列
     }
 
     async function speakReply(reply, isCrisis) {

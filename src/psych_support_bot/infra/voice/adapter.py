@@ -132,6 +132,8 @@ class TtsConfig:
 
 # MiMo（小米）OpenAI 兼容网关：TTS/ASR 都走 chat.completions
 _MIMO_BASE_URL = "https://api.xiaomimimo.com/v1"
+# 免费期上游偶发 429/5xx/挂起：单次退避重试的间隔与探测上限
+_MIMO_RETRY_BACKOFF = 0.8
 
 
 def get_stt_config() -> SttConfig | None:
@@ -489,17 +491,31 @@ def _transcribe_mimo(config: SttConfig, audio_bytes: bytes, filename: str, langu
     language = (language_hint or config.language or "").strip()
     if language in {"zh", "en"}:
         payload["asr_options"] = {"language": language}
-    try:
-        response = httpx.post(
-            f"{config.base_url}/chat/completions",
-            headers={"Authorization": f"Bearer {config.api_key}"},
-            json=payload,
-            timeout=_REQUEST_TIMEOUT,
-        )
-    except httpx.HTTPError as exc:
-        raise VoiceProviderError(f"STT request failed: {exc}") from exc
-    if response.status_code >= 400:
-        raise VoiceProviderError(f"STT upstream error {response.status_code}")
+    response = None
+    last_error: VoiceProviderError | None = None
+    for attempt in range(2):
+        try:
+            response = httpx.post(
+                f"{config.base_url}/chat/completions",
+                headers={"Authorization": f"Bearer {config.api_key}"},
+                json=payload,
+                timeout=_REQUEST_TIMEOUT,
+            )
+        except httpx.HTTPError as exc:
+            last_error = VoiceProviderError(f"STT request failed: {exc}")
+            if attempt == 0:
+                time.sleep(_MIMO_RETRY_BACKOFF)
+                continue
+            raise last_error from exc
+        if response.status_code == 429 or response.status_code >= 500:
+            last_error = VoiceProviderError(f"STT upstream {response.status_code}")
+            if attempt == 0:
+                time.sleep(_MIMO_RETRY_BACKOFF)
+                continue
+            raise last_error
+        break
+    if response is None or response.status_code >= 400:
+        raise last_error or VoiceProviderError(f"STT upstream error {response.status_code if response else 'n/a'}")
     try:
         choices = response.json().get("choices") or []
         text = ((choices[0].get("message") or {}).get("content") or "").strip() if choices else ""
@@ -797,17 +813,31 @@ def _mimo_tts_payload(config: TtsConfig, text: str, *, stream: bool, audio_forma
 
 def _synthesize_mimo(config: TtsConfig, cleaned: str) -> bytes:
     """MiMo TTS 整段（wav 24kHz）：非流式一次取回，message.audio.data 为 base64。"""
-    try:
-        response = httpx.post(
-            f"{config.base_url}/chat/completions",
-            headers={"Authorization": f"Bearer {config.api_key}"},
-            json=_mimo_tts_payload(config, cleaned, stream=False, audio_format="wav"),
-            timeout=_REQUEST_TIMEOUT,
-        )
-    except httpx.HTTPError as exc:
-        raise VoiceProviderError(f"TTS request failed: {exc}") from exc
-    if response.status_code >= 400:
-        raise VoiceProviderError(f"TTS upstream error {response.status_code}")
+    response = None
+    last_error: VoiceProviderError | None = None
+    for attempt in range(2):
+        try:
+            response = httpx.post(
+                f"{config.base_url}/chat/completions",
+                headers={"Authorization": f"Bearer {config.api_key}"},
+                json=_mimo_tts_payload(config, cleaned, stream=False, audio_format="wav"),
+                timeout=_REQUEST_TIMEOUT,
+            )
+        except httpx.HTTPError as exc:
+            last_error = VoiceProviderError(f"TTS request failed: {exc}")
+            if attempt == 0:
+                time.sleep(_MIMO_RETRY_BACKOFF)
+                continue
+            raise last_error from exc
+        if response.status_code == 429 or response.status_code >= 500:
+            last_error = VoiceProviderError(f"TTS upstream {response.status_code}")
+            if attempt == 0:
+                time.sleep(_MIMO_RETRY_BACKOFF)
+                continue
+            raise last_error
+        break
+    if response is None or response.status_code >= 400:
+        raise last_error or VoiceProviderError(f"TTS upstream error {response.status_code if response else 'n/a'}")
     try:
         choices = response.json().get("choices") or []
         msg = (choices[0].get("message") or {}) if choices else {}
@@ -824,37 +854,55 @@ def _mimo_stream(config: TtsConfig, cleaned: str, audio_format: str) -> Iterator
 
     audio_format：HTTP 回退路径用 "wav"（整句 blob 播放，容器自洽）；
     live 直推路径用 "pcm16"（裸 PCM 24k，浏览器 WebAudio 队列按 24k 消费）。
+    超时口径：read=8s——句级合成块间隔实测 <1s，卡 8s 必是上游挂起
+    （旧值 120s 会让 live 轮的 round_end 迟到两分钟，前端「暂停中」假死）；
+    429/5xx/网络错误退避 0.8s 重试一次（免费期上游偶发抖动高发）。
     """
     import json as _json
 
-    try:
-        with httpx.stream(
-            "POST",
-            f"{config.base_url}/chat/completions",
-            headers={"Authorization": f"Bearer {config.api_key}"},
-            json=_mimo_tts_payload(config, cleaned, stream=True, audio_format=audio_format),
-            timeout=httpx.Timeout(120.0, connect=10.0),
-        ) as resp:
-            if resp.status_code >= 400:
-                raise VoiceProviderError(f"TTS upstream error {resp.status_code}")
-            for line in resp.iter_lines():
-                line = line.strip()
-                if not line.startswith("data:"):
-                    continue
-                data = line[5:].strip()
-                if data == "[DONE]":
-                    return
-                try:
-                    ev = _json.loads(data)
-                except ValueError:
-                    continue
-                choices = ev.get("choices") or [{}]
-                delta = choices[0].get("delta") or {}
-                b64 = ((delta.get("audio") or {}).get("data")) or ""
-                if b64:
-                    yield base64.b64decode(b64)
-    except httpx.HTTPError as exc:
-        raise VoiceProviderError(f"MiMo TTS stream failed: {exc}") from exc
+    payload = _mimo_tts_payload(config, cleaned, stream=True, audio_format=audio_format)
+    last_error: VoiceProviderError | None = None
+    for attempt in range(2):
+        try:
+            with httpx.stream(
+                "POST",
+                f"{config.base_url}/chat/completions",
+                headers={"Authorization": f"Bearer {config.api_key}"},
+                json=payload,
+                timeout=httpx.Timeout(30.0, connect=5.0, read=8.0),
+            ) as resp:
+                if resp.status_code == 429 or resp.status_code >= 500:
+                    last_error = VoiceProviderError(f"TTS upstream {resp.status_code}")
+                    if attempt == 0:
+                        time.sleep(_MIMO_RETRY_BACKOFF)
+                        continue
+                    raise last_error
+                if resp.status_code >= 400:
+                    raise VoiceProviderError(f"TTS upstream error {resp.status_code}")
+                for line in resp.iter_lines():
+                    line = line.strip()
+                    if not line.startswith("data:"):
+                        continue
+                    data = line[5:].strip()
+                    if data == "[DONE]":
+                        return
+                    try:
+                        ev = _json.loads(data)
+                    except ValueError:
+                        continue
+                    choices = ev.get("choices") or [{}]
+                    delta = choices[0].get("delta") or {}
+                    b64 = ((delta.get("audio") or {}).get("data")) or ""
+                    if b64:
+                        yield base64.b64decode(b64)
+                return
+        except httpx.HTTPError as exc:
+            last_error = VoiceProviderError(f"MiMo TTS stream failed: {exc}")
+            if attempt == 0:
+                time.sleep(_MIMO_RETRY_BACKOFF)
+                continue
+            raise last_error from exc
+    raise last_error or VoiceProviderError("MiMo TTS stream failed")
 
 
 def tts_media_type() -> str:
