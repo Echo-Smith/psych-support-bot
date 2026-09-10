@@ -2901,7 +2901,7 @@
       // 全文审查与已朗读内容不一致（或投机快路径无 sentence）：
       // 停止旧轮朗读 + 用修正后文本重新开始一轮。
       stopVoicePlayback();
-      if (TTS_LIVE.ws) { ttsLiveSend({ type: 'abort' }); }
+      if (TTS_LIVE.ws) { ttsLiveSend({ type: 'abort' }); killLiveWs(TTS_LIVE.ws); }
       pcmStopAll();
       TTS_LIVE.curBytes = []; TTS_LIVE.curChars = 0; TTS_LIVE.pendingTexts = [];
       liveTextClear(); // 旧文字的 live 泡作废（新内容文字等 final 定稿）
@@ -3324,35 +3324,40 @@
       if (t) t.remove();
     }
 
-    // live 文本泡：每句文字随该句音频起播同步上屏（眼耳同步，流式"看得见"）。
-    // final 时撤除并换成正式气泡定稿；revise/打断时清空。每句已过后端
-    // scan_sentence_speakable 规则扫描，上屏内容必为可朗读内容。
-    // LIVE_TEXT_ROUND：延迟上屏的代次凭证——每次 clear 递增，排程中的过期
-    // 字幕因代次不符自动作废（防打断后气泡复活）。
+    // live 文本泡：每句一个气泡，随该句音频起播上屏（眼耳同步，多句即多泡，
+    // 不挤成一坨）。文字不是整句蹦出也不是匀速打字机，而是沿 easeOutCubic
+    // 物理减速曲线"流"出来（先急后缓，像墨迹洇开）。LIVE_TEXT_ROUND 代次
+    // 凭证：clear（final 定稿/revise/打断）递增，进行中的 reveal 动画与排程
+    // 字幕因代次不符立即作废。每句已过后端 scan_sentence_speakable 扫描。
     let LIVE_TEXT_ROUND = 0;
     function liveTextAppend(text) {
       if (!text) return;
       hideTyping(); // 等待泡由实内容接管
       const chatArea = document.getElementById('chatArea');
-      let el = document.getElementById('liveTextBubble');
-      if (!el) {
-        el = document.createElement('div');
-        el.id = 'liveTextBubble';
-        el.className = 'msg bot';
-        el.innerHTML = '<div class="bubble"></div>';
-        chatArea.appendChild(el);
-      }
+      const el = document.createElement('div');
+      el.className = 'msg bot live-msg';
+      el.innerHTML = '<div class="bubble"></div>';
+      chatArea.appendChild(el);
       const b = el.querySelector('.bubble');
-      b.textContent = b.textContent ? b.textContent + ' ' + text : text;
-      chatArea.scrollTop = chatArea.scrollHeight;
+      const round = LIVE_TEXT_ROUND;
+      const total = Math.max(260, Math.min(2200, text.length * 30)); // ~30ms/字，长句封顶
+      const t0 = performance.now();
+      const tick = (now) => {
+        if (round !== LIVE_TEXT_ROUND || !b.isConnected) return;
+        const p = Math.min(1, (now - t0) / total);
+        const e = 1 - Math.pow(1 - p, 3); // easeOutCubic
+        b.textContent = p < 1 ? text.slice(0, Math.round(text.length * e)) : text;
+        chatArea.scrollTop = chatArea.scrollHeight;
+        if (p < 1) requestAnimationFrame(tick);
+      };
+      requestAnimationFrame(tick);
     }
     function liveTextAppendRound(round, text) {
       if (round === LIVE_TEXT_ROUND) liveTextAppend(text);
     }
     function liveTextClear() {
       LIVE_TEXT_ROUND++;
-      const el = document.getElementById('liveTextBubble');
-      if (el) el.remove();
+      document.querySelectorAll('.live-msg').forEach((el) => el.remove());
     }
 
     // Render a reply as consecutive IM-style bubbles with typing rhythm between them.
@@ -3793,7 +3798,7 @@
       stopVoicePlayback();
       TTS_QUEUE.aborted = true;
       TTS_QUEUE.items = [];
-      if (TTS_LIVE.ws) ttsLiveSend({ type: 'abort' });
+      if (TTS_LIVE.ws) { ttsLiveSend({ type: 'abort' }); killLiveWs(TTS_LIVE.ws); }
       pcmStopAll(); // PCM 队列即刻噤声（旧路径靠 stopVoicePlayback 掐元素，这里掐 source 队列）
       TTS_LIVE.curBytes = []; TTS_LIVE.curChars = 0; TTS_LIVE.pendingTexts = [];
       TTS_LIVE.chain = Promise.resolve();
@@ -4230,6 +4235,9 @@
       const ws = new WebSocket(proto + '://' + location.host + '/v1/voice/tts/live' + qs);
       ws.binaryType = 'arraybuffer';
       ws.onmessage = (e) => {
+        // 连接代次守卫：abort 后 MiniMax 取消生效前仍会泵出残余 PCM 块，
+        // 旧连接在途帧若入队就是"多条信息杂乱堆叠"的串音根因——一律作废
+        if (TTS_LIVE.ws && TTS_LIVE.ws !== ws) return;
         // 二进制帧 = PCM 音频块（②协议）：直接入队，首块即排定起播
         if (TTS_LIVE.pcm && e.data instanceof ArrayBuffer) {
           const start = pcmFeed(e.data);
@@ -4282,6 +4290,7 @@
         }
       };
       ws.onclose = () => {
+        if (TTS_LIVE.ws && TTS_LIVE.ws !== ws) return; // 废弃连接的尾巴事件
         // 连接中断：冲刷未完句，唤醒等待者（其上方 onmessage 已尽力收尾）
         ttsLiveFlushSentence();
         if (TTS_LIVE.ws === ws) TTS_LIVE.ws = null;
@@ -4321,6 +4330,14 @@
       if (TTS_LIVE.ws && TTS_LIVE.ws.readyState === 1) TTS_LIVE.ws.send(JSON.stringify(obj));
     }
 
+    // 打断 = 断连弃用：abort 帧发出后立刻掐掉这条 WS——MiniMax 的 task_cancel
+    // 生效前残余音频仍会下发，留着连接就是下一轮开头串进上一轮尾巴的杂音。
+    function killLiveWs(ws) {
+      if (!ws) return;
+      try { ws.onmessage = ws.onclose = ws.onerror = null; ws.close(); } catch (err) { /* 已关 */ }
+      if (TTS_LIVE.ws === ws) TTS_LIVE.ws = null;
+    }
+
     // LLM 流式句：直灌同一 WS 会话（say），播放由 sentence_end 驱动；
     // ws 未就绪时排队 pending，就绪后 drain。不重置 curBytes——上一句的
     // 尾部音频可能仍在途，冲刷只由服务端 sentence_end 事件触发。
@@ -4331,7 +4348,7 @@
       if (TTS_LIVE.ws && TTS_LIVE.ws.readyState === 1) {
         ttsLiveDrainPending();
       } else if (!TTS_LIVE.failed) {
-        ttsLiveEnsure().then(ttsLiveDrainPending).catch(() => { TTS_LIVE.failed = true; });
+        ttsLiveEnsure().then(ttsLiveDrainPending).catch(() => { TTS_LIVE.failed = true; pcmStopAll(); });
       }
     }
 
