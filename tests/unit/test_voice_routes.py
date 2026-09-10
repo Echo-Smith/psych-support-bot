@@ -375,3 +375,38 @@ def test_tts_live_pcm_protocol(client, monkeypatch):
     start = next(f for f in fake.sent if f.get("event") == "task_start")
     assert start["audio_setting"]["format"] == "pcm"
     assert "bitrate" not in start["audio_setting"]
+
+
+# ---------------------------------------------------------------------------
+# P1 反馈应答（backchannel）：列表 + 单条音频 + 缓存 + 校验
+# ---------------------------------------------------------------------------
+
+
+def test_backchannel_contract(client, monkeypatch):
+    import httpx
+
+    # 未配置 TTS：count 0、单条 503；越界先于配置检查 → 422
+    assert client.get("/v1/voice/backchannel").json() == {"count": 0}
+    assert client.get("/v1/voice/backchannel/0").status_code == 503
+    assert client.get("/v1/voice/backchannel/99").status_code == 422
+
+    monkeypatch.setenv("VOICE_TTS_PROVIDER", "openai")
+    monkeypatch.setenv("VOICE_TTS_BASE_URL", "https://tts.example.com/v1")
+    monkeypatch.setenv("VOICE_TTS_API_KEY", "k" * 8)
+    from psych_support_bot.infra.config.settings import get_settings
+
+    get_settings.cache_clear()
+
+    calls = {"n": 0}
+
+    def fake_post(url, **kw):
+        calls["n"] += 1
+        return httpx.Response(200, content=b"ID3bc", request=httpx.Request("POST", url))
+
+    monkeypatch.setattr("psych_support_bot.infra.voice.adapter.httpx.post", fake_post)
+    assert client.get("/v1/voice/backchannel").json() == {"count": 4}
+    res = client.get("/v1/voice/backchannel/1")
+    assert res.status_code == 200
+    assert res.headers["content-type"].startswith("audio/mpeg")
+    client.get("/v1/voice/backchannel/1")  # 服务端文本缓存：第二次不打上游
+    assert calls["n"] == 1

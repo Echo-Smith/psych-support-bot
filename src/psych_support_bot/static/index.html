@@ -3468,6 +3468,9 @@
       discardUtterance: false,
       sttFailStreak: 0,      // 免提连续转写失败计数：≥2 看门狗暂停拾音
       sttDegraded: false,    // 服务端上游连续失败观察标志（/status stt_degraded）
+      bcUrls: [],            // P1 反馈应答预取 blob（"嗯嗯"类在场感短句）
+      bcNext: 0,
+      bcEl: null,
       lastCrisis: false,     // 上一轮是否危机回复（朗读结束后决定是否继续听）
       usedMic: localStorage.getItem('np_voice_used') === '1',
       // ttsPref 语义=「开声」。默认开声：仅显式存过 '0'（用户点过静音）才关
@@ -3488,6 +3491,7 @@
         VOICE.sttAvailable = !!data.stt;
         VOICE.ttsAvailable = !!data.tts;
         VOICE.sttDegraded = !!data.stt_degraded;
+        if (VOICE.ttsAvailable) loadBackchannels(); // P1：预取应答短句（失败静默）
       } catch (err) {
         appendDebug('voice/status error => ' + err.message);
         if (!retried) { setTimeout(() => initVoice(true), 2500); return; }
@@ -3913,6 +3917,7 @@
     }
 
     function startUtterance() {
+      stopBackchannel(); // 用户抢先开口：应答让位，且不带着短音尾巴进录音
       // 取走预滚（此刻环形缓冲尾 = 判定开口的瞬间，MediaRecorder 从这之后
       // 才开始编码——两段首尾相接、无重叠）
       VOICE.preRoll = takePreRoll();
@@ -3950,6 +3955,7 @@
       }
       setVoiceMode('thinking');
       turnBegin(); // 回合时间线起点：VAD 判「说完」的瞬间
+      scheduleBackchannel(); // P1：若这轮要等一会儿，先给一声"嗯——"
       // 各家 ASR 支持的容器不一：统一转 16kHz 单声道 WAV 上传（供应商无关）；
       // 预滚段拼在最前，找回 VAD 判阈期间丢掉的开头音素
       const preRoll = VOICE.preRoll;
@@ -3973,6 +3979,44 @@
       setTimeout(() => { if (VOICE.mode === 'thinking') setVoiceMode('listening'); }, 1200);
     }
 
+    // ---- P1 反馈应答（backchannel）：thinking 死区的在场感短音 ----
+    // initVoice 时一次性预取成 blob（服务端文本缓存，上游至多各打一次）；
+    // 说完话 650ms 后若仍在 thinking 且没在录，55% 概率播一条轮换短句（≤0.8s）。
+    // 停止点三层：用户抢先开口（startUtterance）、真回复开声让位（beginSpeaking）、
+    // 退出免提（exitConversation）。风险记录：极快接话时录音头可能带入短句
+    // 尾音（≈0.2s "嗯"），ASR 容忍，真机观察。
+    async function loadBackchannels() {
+      if (VOICE.bcUrls.length) return;
+      try {
+        const res = await fetch(API_BASE + '/v1/voice/backchannel', { headers: authHeaders() });
+        if (!res.ok) return;
+        const n = ((await res.json()).count || 0);
+        const urls = await Promise.all(Array.from({ length: n }, (_, i) =>
+          fetch(API_BASE + '/v1/voice/backchannel/' + i, { headers: authHeaders() })
+            .then((r) => (r.ok ? r.blob() : null))
+            .then((b) => (b && b.size > 500 ? URL.createObjectURL(b) : null))
+            .catch(() => null)));
+        VOICE.bcUrls = urls.filter(Boolean);
+      } catch (err) { /* 预取失败 = 无应答，一切照旧 */ }
+    }
+    function scheduleBackchannel() {
+      if (!VOICE.bcUrls.length) return;
+      setTimeout(() => {
+        if (VOICE.mode !== 'thinking' || VOICE.recording) return;
+        if (Math.random() > 0.55) return;
+        stopBackchannel();
+        const el = new Audio(VOICE.bcUrls[VOICE.bcNext % VOICE.bcUrls.length]);
+        VOICE.bcNext++;
+        el.volume = 0.85;
+        VOICE.bcEl = el;
+        el.onended = () => { if (VOICE.bcEl === el) VOICE.bcEl = null; };
+        el.play().catch(() => {}); // 非手势/权限态静默失败
+      }, 650);
+    }
+    function stopBackchannel() {
+      if (VOICE.bcEl) { try { VOICE.bcEl.pause(); } catch (err) { /* 已停 */ } VOICE.bcEl = null; }
+    }
+
     function voiceSttFailed() {
       // Fail-loud 看门狗（WhisperLiveKit silent-backend guard 的同款立场）：
       // 连续失败对着一台坏掉的上游反复重说比直接停更残忍。第 2 次连续失败
@@ -3986,6 +4030,7 @@
 
     function exitConversation() {
       clearTimeout(VOICE.pauseHintTimer);
+      stopBackchannel();
       VOICE.pausedHint = false;
       VOICE.resumeAfterSpeak = false;
       VOICE.discardUtterance = true; // 退出时正在录的段落直接丢弃
@@ -4086,6 +4131,7 @@
     }
 
     function beginSpeaking() {
+      stopBackchannel(); // 真回复开声即让位（应答不叠真声）
       // 朗读期间暂停聆听（防助手声音触发 VAD 的回声循环）→ 整框变黄「暂停中」；
       // 若用户处于暂停白框，本轮也显示黄框，播完回到暂停而非自动续听
       if (VOICE.mode === 'paused') VOICE.resumeAfterSpeak = true;

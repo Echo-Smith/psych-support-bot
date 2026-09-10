@@ -228,6 +228,37 @@ async def speak_stream(request: Request, payload: dict[str, Any], _sub: str = De
 
 
 # ---------------------------------------------------------------------------
+# P1 反馈应答（backchannel）：思考间隙的在场感短句
+# 前端进免提后一次性预取为 blob URL，thinking 死区概率播放（≤0.8s）——
+# 把「说完话等回复」的 2-4s 空白变成「对方在消化」。合成走 synthesize() 的
+# LRU+TTL 缓存：同一音色同一短语只打一次上游，过期再补，成本可忽略。
+# ---------------------------------------------------------------------------
+
+_BACKCHANNEL_PHRASES = ("嗯——", "嗯嗯", "好，我在听", "哦……")
+
+
+@router.get("/backchannel")
+def backchannel_list(_sub: str = Depends(require_auth)) -> dict[str, int]:
+    """应答条目数（前端据此预取；未配置 TTS 返回 0，前端静默跳过）。"""
+    return {"count": len(_BACKCHANNEL_PHRASES) if get_tts_config() is not None else 0}
+
+
+@router.get("/backchannel/{index}")
+async def backchannel_audio(index: int, _sub: str = Depends(require_auth)) -> Response:
+    """单条应答音频（mp3）。越界 422；未配置 503；上游失败 502（前端容错为无应答）。"""
+    if not 0 <= index < len(_BACKCHANNEL_PHRASES):
+        raise HTTPException(status_code=422, detail="Backchannel index out of range")
+    try:
+        audio = await asyncio.to_thread(synthesize, _BACKCHANNEL_PHRASES[index])
+    except VoiceNotConfigured as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    except VoiceProviderError as exc:
+        logger.warning("Voice backchannel failed: %s", exc)
+        raise HTTPException(status_code=502, detail=f"Backchannel synthesis failed: {exc}") from exc
+    return Response(content=audio, media_type="audio/mpeg")
+
+
+# ---------------------------------------------------------------------------
 # P1：整轮单会话全双工 TTS（WS）
 # 浏览器开一条 WS，LLM 流式产出的每个句子以 {"type":"say"} 推入；服务器用
 # 同一个 MiniMax bidi 会话逐句 task_continue。音频走 **PCM(32k mono s16le)
