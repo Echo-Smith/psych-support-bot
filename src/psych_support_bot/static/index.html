@@ -2799,6 +2799,7 @@
       const input = document.getElementById('messageInput');
       const message = input.value.trim();
       if (!message || isLoading) return;
+      pcmEnsureCtx(); // 手势内预建/恢复 AudioContext：iOS 要求创建于手势栈，异步创建会一直 suspended（无声+字幕假爬）
       isLoading = true;
       document.getElementById('sendBtn').disabled = true;
       input.value = '';
@@ -2969,21 +2970,49 @@
         }
       };
       if (hasText) {
-        // 音频仍在放/在途（投机轮典型：句+final 同帧到、音频甚至还没起播）
-        // → 正式气泡随剩余音频逐段铺字；否则维持即时渲染（文字阅读不该被
-        // 动画拖累）。在途音频用"未播句数×语速"估算，已排程部分用实际队列。
-        let sync = null;
-        const totalChars = parts.reduce((n, p) => n + (p || '').length, 0);
-        const audioOn = !!(VOICE.ttsAvailable && VOICE.ttsPref && !TTS_LIVE.failed);
-        if (audioOn && totalChars > 0) {
-          const pcmRemain = PCM.ctx ? Math.max(0, (PCM.cursor - PCM.ctx.currentTime) * 1000) : 0;
-          const pendingChars = (TTS_LIVE.pending.join('') + TTS_LIVE.pendingTexts.join('')).length;
-          const remMs = Math.max(pcmRemain, pendingChars * 220);
-          if (remMs > 500) {
-            sync = { audioRemainingMs: remMs, revealedChars: Math.min(totalChars, LIVE_TEXT_SHOWN_CHARS) };
+        // 定稿渲染跟音频走，三态：
+        // - 音频正在放（PCM 有积压）→ 空泡按剩余音频铺字，跳过 live 已铺字数；
+        // - 音频在途未起播（投机轮常态：WS 握手中、首块未到）→ 先不渲染，
+        //   等「第一声」起播再接管（live 泡继续随句上屏），6s 兜底直出——
+        //   音频真不来时不再按估算假爬几十秒（2026-09-10 无声+慢爬实证）；
+        // - 无音频轮（静音/未配置/WS 失败/ctx 被系统挂起）→ 即时渲染。
+        const audioCtxReady = !!(PCM.ctx && PCM.ctx.state === 'running');
+        const audioOn = !!(VOICE.ttsAvailable && VOICE.ttsPref && !TTS_LIVE.failed && audioCtxReady);
+        const pcmRemain = audioCtxReady ? Math.max(0, (PCM.cursor - PCM.ctx.currentTime) * 1000) : 0;
+        const pendingChars = (TTS_LIVE.pending.join('') + TTS_LIVE.pendingTexts.join('')).length;
+        const takeOver = () => {
+          const totalChars = parts.reduce((n, p) => n + (p || '').length, 0);
+          const rem = audioCtxReady ? Math.max(0, (PCM.cursor - PCM.ctx.currentTime) * 1000) : 0;
+          const pend = (TTS_LIVE.pending.join('') + TTS_LIVE.pendingTexts.join('')).length * 220;
+          const remMs = Math.max(rem, pend);
+          if (remMs > 500 && totalChars > 0) {
+            TTS_LIVE.finalTakeover = true; // 此后 sentence_end 不再上屏字幕
+            liveTextClear();
+            renderBotParts(parts, data.mode, data.risk, postRender, {
+              audioRemainingMs: remMs,
+              revealedChars: Math.min(totalChars, LIVE_TEXT_SHOWN_CHARS),
+            });
+          } else {
+            renderBotParts(parts, data.mode, data.risk, postRender);
           }
+        };
+        if (!audioOn) {
+          renderBotParts(parts, data.mode, data.risk, postRender);
+        } else if (pcmRemain > 300 || pendingChars === 0) {
+          takeOver();
+        } else {
+          showTyping(TYPING_TEXT);
+          const deadline = performance.now() + 6000;
+          const waitFirstAudio = () => {
+            const rem = (PCM.ctx && PCM.ctx.state === 'running') ? Math.max(0, (PCM.cursor - PCM.ctx.currentTime) * 1000) : 0;
+            if (rem > 300 || performance.now() > deadline || TTS_LIVE.failed || !TTS_LIVE.pendingTexts.length) {
+              takeOver();
+            } else {
+              setTimeout(waitFirstAudio, 250);
+            }
+          };
+          waitFirstAudio();
         }
-        renderBotParts(parts, data.mode, data.risk, postRender, sync);
       } else {
         postRender();
       }
@@ -3801,6 +3830,7 @@
       abortAllPlayback();
       showTyping('正在开启麦克风');
       unlockAudioForIos(); // 用户手势内解锁音频播放（iOS play() 策略）
+      pcmEnsureCtx(); // 同上：手势内预建 PCM 播放上下文
       navigator.mediaDevices.getUserMedia({
         audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
       }).then((stream) => {
@@ -4274,7 +4304,7 @@
       ws: null, failed: false, pending: [], roundStarted: false, ended: false,
       curBytes: [], curChars: 0,
       pendingTexts: [], // 已 say 未播的句子文本，随 sentence_end 出队随音频起播上屏
-      pcm: false, sentenceStart: null, firstAudioMarked: false, sentenceSamples: 0, pendingEnd: false, // PCM 流式播放态（②）+ 每句 PCM 样本数（文字按时长铺）
+      pcm: false, sentenceStart: null, firstAudioMarked: false, sentenceSamples: 0, pendingEnd: false, finalTakeover: false, // PCM 流式播放态（②）+ 每句样本数（字幕按时长铺）+ 定稿接管标记
       chain: Promise.resolve(),
       roundDone: null,
     };
@@ -4284,7 +4314,7 @@
       TTS_LIVE.pending = []; TTS_LIVE.roundStarted = false; TTS_LIVE.ended = false;
       TTS_LIVE.curBytes = []; TTS_LIVE.curChars = 0; TTS_LIVE.pendingTexts = [];
       TTS_LIVE.pcm = false; TTS_LIVE.sentenceStart = null; TTS_LIVE.firstAudioMarked = false; TTS_LIVE.sentenceSamples = 0;
-      TTS_LIVE.pendingEnd = false;
+      TTS_LIVE.pendingEnd = false; TTS_LIVE.finalTakeover = false;
       TTS_LIVE.chain = Promise.resolve();
       TTS_LIVE.roundDone = null;
       pcmStopAll(); // 全量复位语义包含掐掉在排播的 PCM 队列
@@ -4299,7 +4329,7 @@
     // ---- PCM 流式播放（②）：二进制帧到达即入 WebAudio 队列，首块即播 ----
     // 服务端 tts_live 以 PCM(32k mono s16le) 二进制帧直推音频；ready 消息
     // 未声明 pcm（旧服务端/降级）时自动回到 mp3-b64 整句合成再播的旧路径。
-    const PCM = { ctx: null, cursor: 0, rate: 32000, sources: [] };
+    const PCM = { ctx: null, cursor: 0, rate: 32000, sources: [], warnedSuspended: false };
     function pcmEnsureCtx() {
       try {
         if (!PCM.ctx) {
@@ -4308,7 +4338,13 @@
           PCM.ctx = new AC();
           PCM.cursor = PCM.ctx.currentTime;
         }
-        if (PCM.ctx.state === 'suspended') PCM.ctx.resume().catch(() => {});
+        if (PCM.ctx.state === 'suspended') {
+          PCM.ctx.resume().catch(() => {});
+          if (!PCM.warnedSuspended) {
+            PCM.warnedSuspended = true;
+            appendDebug('audio ctx suspended → resume()（持续挂起=无声）');
+          }
+        }
         return PCM.ctx;
       } catch (err) { return null; }
     }
@@ -4423,6 +4459,12 @@
           TTS_LIVE.curChars += 4; // 粗略累加字数供播放看护估算
         } else if (ev.type === 'sentence_end') {
           if (TTS_LIVE.pcm) {
+            // 定稿接管后正式气泡负责铺字，live 字幕退场（只出队、清计数）
+            if (TTS_LIVE.finalTakeover) {
+              TTS_LIVE.pendingTexts.shift();
+              TTS_LIVE.sentenceStart = null; TTS_LIVE.sentenceSamples = 0;
+              return;
+            }
             // 文字贴语音铺：reveal 总时长 = 该句 PCM 实际时长；该句音频起播
             // 时刻若已过（合成快于实时、sentence_end 晚于起播），文字按已过
             // 时间追平进度。leadMs>0 则等音频开场再开始铺。
@@ -4492,7 +4534,7 @@
       TTS_LIVE.pending = [];
       TTS_LIVE.curBytes = []; TTS_LIVE.curChars = 0; TTS_LIVE.pendingTexts = [];
       TTS_LIVE.sentenceStart = null; TTS_LIVE.firstAudioMarked = false; TTS_LIVE.sentenceSamples = 0;
-      TTS_LIVE.pendingEnd = false;
+      TTS_LIVE.pendingEnd = false; TTS_LIVE.finalTakeover = false;
       LIVE_TEXT_SHOWN_CHARS = 0; // revise 整轮重读：live 泡作废，字数预算清零
       pcmStopAll();
       TTS_LIVE.chain = Promise.resolve();
