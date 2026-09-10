@@ -107,16 +107,25 @@ def test_tts_live_ws_round(client, monkeypatch):
     monkeypatch.setattr(websockets, "connect", lambda *a, **k: FakeMM())
 
     with client.websocket_connect("/v1/voice/tts/live") as ws:
-        assert ws.receive_json()["type"] == "ready"
+        ready = ws.receive_json()
+        assert ready["type"] == "ready"
+        assert ready["audio"]["format"] == "pcm"  # ② 协议：音频改 PCM 二进制帧直推
         ws.send_json({"type": "say", "text": "测试句。"})
         ws.send_json({"type": "end"})
         got = []
+        binary = b""
         for _ in range(8):
-            msg = ws.receive_json()
+            raw = ws.receive()
+            if "bytes" in raw:
+                binary += raw["bytes"]  # 二进制帧 = 裸 PCM（不再是 {"type":"audio","b64"} JSON）
+                got.append("audio")
+                continue
+            msg = _json.loads(raw["text"])
             got.append(msg["type"])
             if msg["type"] == "round_end":
                 break
-        assert "audio" in got and "sentence_end" in got and "round_end" in got
+        assert binary == bytes.fromhex("abcd")
+        assert "sentence_end" in got and "round_end" in got
 
 
 def test_respond_stream_empty_message_422(client):

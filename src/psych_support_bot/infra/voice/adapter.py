@@ -8,8 +8,10 @@
   - dots：chat completions + audio_url 内容块——dots 无 /audio/transcriptions；
     audio_url 直接用 base64 data URI 内联（实测网关支持），音频随请求
     即发即逝，无需公网可达的托管 URL，也不落任何服务端状态
-- TTS：OpenAI 兼容 POST {base}/audio/speech；dots 平台暂无 TTS 端点，
-  未配置时路由返回 503、前端降级浏览器 SpeechSynthesis。
+  - mimo：chat completions + input_audio 内容块（小米 MiMo，base64 内联）
+- TTS：OpenAI 兼容 POST {base}/audio/speech；minimax 走 wss 双向流式 WS；
+  mimo 走 chat completions（SSE 流式 wav/pcm16 24kHz）。dots 平台暂无
+  TTS 端点，未配置时路由返回 503、前端降级浏览器 SpeechSynthesis。
 - STT 上下文词表（VOICE_STT_PROMPT，缺省内置心理陪伴高频词）：openai 走
   whisper prompt 字段、dots 拼进转写指令，偏向领域专名识别；minimax
   /speech_to_text 无该参数不透传。
@@ -109,7 +111,7 @@ def _is_forbidden_ip(addr: ipaddress.IPv4Address | ipaddress.IPv6Address) -> boo
 
 @dataclass(frozen=True)
 class SttConfig:
-    provider: str  # "openai" | "dots" | "minimax"
+    provider: str  # "openai" | "dots" | "minimax" | "mimo"
     base_url: str
     api_key: str
     model: str
@@ -119,13 +121,17 @@ class SttConfig:
 
 @dataclass(frozen=True)
 class TtsConfig:
-    provider: str  # "openai" | "minimax"
-    base_url: str  # openai: REST base；minimax: ""（用 ws_url）
+    provider: str  # "openai" | "minimax" | "mimo"
+    base_url: str  # openai/mimo: REST base；minimax: ""（用 ws_url）
     ws_url: str  # minimax: wss://api.minimax.cn/ws/v1/t2a_v2_bidi
     api_key: str
     model: str
     voice: str
     language_boost: str = ""
+
+
+# MiMo（小米）OpenAI 兼容网关：TTS/ASR 都走 chat.completions
+_MIMO_BASE_URL = "https://api.xiaomimimo.com/v1"
 
 
 def get_stt_config() -> SttConfig | None:
@@ -180,6 +186,20 @@ def get_stt_config() -> SttConfig | None:
             base_url=base_url.rstrip("/"),
             api_key=api_key,
             model=s.voice_stt_model or "asr-1.0",
+            language=s.voice_stt_language,
+            prompt=s.voice_stt_prompt,
+        )
+    if provider == "mimo":
+        # MiMo ASR：chat completions + input_audio 内容块（base64 data URI，
+        # 与 dots 同模式不同字段）。凭据必须显式；语种映射 asr_options.language。
+        api_key = s.voice_stt_api_key
+        if not api_key:
+            return None
+        return SttConfig(
+            provider="mimo",
+            base_url=(s.voice_stt_base_url or _MIMO_BASE_URL).rstrip("/"),
+            api_key=api_key,
+            model=s.voice_stt_model or "mimo-v2.5-asr",
             language=s.voice_stt_language,
             prompt=s.voice_stt_prompt,
         )
@@ -249,6 +269,16 @@ def get_tts_config() -> TtsConfig | None:
             voice=s.voice_tts_voice or "Chinese (Mandarin)_Warm_Bestie",
             language_boost=s.voice_tts_language_boost or "",
         )
+    if provider == "mimo":
+        # MiMo TTS：chat completions（可流式），wav/pcm16 24kHz。凭据必须显式。
+        return TtsConfig(
+            provider="mimo",
+            base_url=(s.voice_tts_base_url or _MIMO_BASE_URL).rstrip("/"),
+            ws_url="",
+            api_key=api_key,
+            model=s.voice_tts_model or "mimo-v2.5-tts",
+            voice=s.voice_tts_voice or "冰糖",
+        )
     return None
 
 
@@ -277,6 +307,8 @@ def transcribe(
         return _transcribe_dots(config, audio_bytes, filename, language_hint)
     if config.provider == "minimax":
         return _transcribe_minimax(config, audio_bytes, filename, language_hint)
+    if config.provider == "mimo":
+        return _transcribe_mimo(config, audio_bytes, filename, language_hint)
     raise VoiceNotConfigured(f"Unknown STT provider: {config.provider}")
 
 
@@ -437,6 +469,48 @@ def _transcribe_minimax(config: SttConfig, audio_bytes: bytes, filename: str, la
     return text
 
 
+def _transcribe_mimo(config: SttConfig, audio_bytes: bytes, filename: str, language_hint: str) -> str:
+    """MiMo ASR：chat completions + input_audio 内容块（base64 data URI）。
+
+    与 dots 同模式、不同字段名：内容块 type="input_audio"，语种放请求级
+    asr_options.language（auto/zh/en）。响应为普通文本消息（自动标点），
+    兼容思维链痕迹剥离。音频格式仅 wav/mp3——前端统一转 16k WAV 正好命中。
+    """
+    mime = _audio_media_type(filename)
+    encoded = base64.b64encode(audio_bytes).decode("ascii")
+    data_uri = f"data:{mime};base64,{encoded}"
+    payload: dict = {
+        "model": config.model,
+        "messages": [
+            {"role": "user", "content": [{"type": "input_audio", "input_audio": {"data": data_uri}}]},
+        ],
+        "stream": False,
+    }
+    language = (language_hint or config.language or "").strip()
+    if language in {"zh", "en"}:
+        payload["asr_options"] = {"language": language}
+    try:
+        response = httpx.post(
+            f"{config.base_url}/chat/completions",
+            headers={"Authorization": f"Bearer {config.api_key}"},
+            json=payload,
+            timeout=_REQUEST_TIMEOUT,
+        )
+    except httpx.HTTPError as exc:
+        raise VoiceProviderError(f"STT request failed: {exc}") from exc
+    if response.status_code >= 400:
+        raise VoiceProviderError(f"STT upstream error {response.status_code}")
+    try:
+        choices = response.json().get("choices") or []
+        text = ((choices[0].get("message") or {}).get("content") or "").strip() if choices else ""
+    except (ValueError, IndexError, KeyError) as exc:
+        raise VoiceProviderError("STT upstream returned unexpected shape") from exc
+    text = _strip_reasoning_artifacts(text)
+    if not text:
+        raise VoiceProviderError("STT upstream returned empty text")
+    return text
+
+
 def _strip_reasoning_artifacts(text: str) -> str:
     """dots 思考模型的转写输出偶带思维链前缀；保守剥离已知标记。"""
     for marker in ("Thinking Process:", "**Transcription**:", "Transcription:"):
@@ -515,6 +589,8 @@ def synthesize(text: str, *, language: str = "") -> bytes:
         audio = _synthesize_minimax(config, cleaned)
     elif config.provider == "openai":
         audio = _synthesize_openai(config, cleaned)
+    elif config.provider == "mimo":
+        audio = _synthesize_mimo(config, cleaned)
     else:
         raise VoiceNotConfigured(f"Unknown TTS provider: {config.provider}")
     _tts_cache_put(cache_key, audio)
@@ -554,6 +630,10 @@ def synthesize_stream(text: str, *, language: str = "") -> Iterator[bytes]:
         audio = _synthesize_openai(config, cleaned)
         chunks = [audio]
         yield audio
+    elif config.provider == "mimo":
+        chunks = list(_mimo_stream(config, cleaned, "wav"))
+        for chunk in chunks:
+            yield chunk
     else:
         raise VoiceNotConfigured(f"Unknown TTS provider: {config.provider}")
     _tts_cache_put(cache_key, b"".join(chunks))
@@ -698,3 +778,86 @@ def _synthesize_minimax(config: TtsConfig, cleaned: str) -> bytes:
     if not audio:
         raise VoiceProviderError("MiniMax TTS returned empty audio")
     return audio
+
+
+# ---------------------------------------------------------------------------
+# MiMo（小米）TTS：OpenAI 兼容 chat.completions，wav/pcm16 24kHz mono
+# 文本放 assistant 消息；语速/情感无独立参数，用文本标签（(怅然) 等）控制
+# ---------------------------------------------------------------------------
+
+
+def _mimo_tts_payload(config: TtsConfig, text: str, *, stream: bool, audio_format: str) -> dict:
+    return {
+        "model": config.model,
+        "messages": [{"role": "assistant", "content": text}],
+        "stream": stream,
+        "audio": {"format": audio_format, "voice": config.voice},
+    }
+
+
+def _synthesize_mimo(config: TtsConfig, cleaned: str) -> bytes:
+    """MiMo TTS 整段（wav 24kHz）：非流式一次取回，message.audio.data 为 base64。"""
+    try:
+        response = httpx.post(
+            f"{config.base_url}/chat/completions",
+            headers={"Authorization": f"Bearer {config.api_key}"},
+            json=_mimo_tts_payload(config, cleaned, stream=False, audio_format="wav"),
+            timeout=_REQUEST_TIMEOUT,
+        )
+    except httpx.HTTPError as exc:
+        raise VoiceProviderError(f"TTS request failed: {exc}") from exc
+    if response.status_code >= 400:
+        raise VoiceProviderError(f"TTS upstream error {response.status_code}")
+    try:
+        choices = response.json().get("choices") or []
+        msg = (choices[0].get("message") or {}) if choices else {}
+        b64 = ((msg.get("audio") or {}).get("data")) or ""
+    except (ValueError, IndexError, KeyError) as exc:
+        raise VoiceProviderError("TTS upstream returned unexpected shape") from exc
+    if not b64:
+        raise VoiceProviderError("TTS upstream returned empty audio")
+    return base64.b64decode(b64)
+
+
+def _mimo_stream(config: TtsConfig, cleaned: str, audio_format: str) -> Iterator[bytes]:
+    """MiMo TTS SSE 流：delta.audio.data（base64）逐块解码为音频字节。
+
+    audio_format：HTTP 回退路径用 "wav"（整句 blob 播放，容器自洽）；
+    live 直推路径用 "pcm16"（裸 PCM 24k，浏览器 WebAudio 队列按 24k 消费）。
+    """
+    import json as _json
+
+    try:
+        with httpx.stream(
+            "POST",
+            f"{config.base_url}/chat/completions",
+            headers={"Authorization": f"Bearer {config.api_key}"},
+            json=_mimo_tts_payload(config, cleaned, stream=True, audio_format=audio_format),
+            timeout=httpx.Timeout(120.0, connect=10.0),
+        ) as resp:
+            if resp.status_code >= 400:
+                raise VoiceProviderError(f"TTS upstream error {resp.status_code}")
+            for line in resp.iter_lines():
+                line = line.strip()
+                if not line.startswith("data:"):
+                    continue
+                data = line[5:].strip()
+                if data == "[DONE]":
+                    return
+                try:
+                    ev = _json.loads(data)
+                except ValueError:
+                    continue
+                choices = ev.get("choices") or [{}]
+                delta = choices[0].get("delta") or {}
+                b64 = ((delta.get("audio") or {}).get("data")) or ""
+                if b64:
+                    yield base64.b64decode(b64)
+    except httpx.HTTPError as exc:
+        raise VoiceProviderError(f"MiMo TTS stream failed: {exc}") from exc
+
+
+def tts_media_type() -> str:
+    """/speak* 与 /backchannel 的响应媒体类型（provider 决定容器格式）。"""
+    config = get_tts_config()
+    return "audio/wav" if (config and config.provider == "mimo") else "audio/mpeg"

@@ -29,11 +29,13 @@ from psych_support_bot.infra.voice.adapter import (
     MAX_AUDIO_BYTES,
     VoiceNotConfigured,
     VoiceProviderError,
+    _mimo_stream,
     get_stt_config,
     get_tts_config,
     synthesize,
     synthesize_stream,
     transcribe,
+    tts_media_type,
 )
 
 logger = logging.getLogger(__name__)
@@ -197,7 +199,7 @@ async def speak_text(request: Request, payload: dict[str, Any], _sub: str = Depe
     except VoiceProviderError as exc:
         logger.warning("Voice speak failed: %s", exc)
         raise HTTPException(status_code=502, detail=f"Speech synthesis failed: {exc}") from exc
-    return Response(content=audio, media_type="audio/mpeg")
+    return Response(content=audio, media_type=tts_media_type())
 
 
 @router.post("/speak/stream")
@@ -224,7 +226,7 @@ async def speak_stream(request: Request, payload: dict[str, Any], _sub: str = De
             # 流已开始：状态码不可改，截断表达（前端播放已收到的部分）
             logger.warning("Voice speak stream interrupted: %s", exc)
 
-    return StreamingResponse(_gen(), media_type="audio/mpeg")
+    return StreamingResponse(_gen(), media_type=tts_media_type())
 
 
 # ---------------------------------------------------------------------------
@@ -255,7 +257,7 @@ async def backchannel_audio(index: int, _sub: str = Depends(require_auth)) -> Re
     except VoiceProviderError as exc:
         logger.warning("Voice backchannel failed: %s", exc)
         raise HTTPException(status_code=502, detail=f"Backchannel synthesis failed: {exc}") from exc
-    return Response(content=audio, media_type="audio/mpeg")
+    return Response(content=audio, media_type=tts_media_type())
 
 
 # ---------------------------------------------------------------------------
@@ -271,6 +273,69 @@ async def backchannel_audio(index: int, _sub: str = Depends(require_auth)) -> Re
 ws_router = APIRouter(prefix="/v1/voice", tags=["voice"])
 
 
+async def _tts_live_mimo(websocket: WebSocket, config, text_q: asyncio.Queue, read_client) -> None:
+    """MiMo live 管道：无上游 WS，每条 say 起一个 HTTP SSE 合成。
+
+    delta 音频（pcm16 24kHz）解码后即刻以二进制帧直推浏览器（前端 WebAudio
+    队列首块即播）；每句音频流末尾补发 sentence_end——句边界即客户端 say
+    粒度（我们的切句），比 MiniMax 的攒句更可控。end 语义：say 队列排空即
+    round_end（MiMo 无合成残留）。限流 100 RPM：句粒度请求，多用户场景
+    需观察配额，必要时按气泡段合并请求。
+    """
+    import threading
+    from contextlib import suppress
+
+    await websocket.send_json({"type": "ready", "audio": {"format": "pcm", "sample_rate": 24000}})
+    loop = asyncio.get_running_loop()
+
+    async def pump_say(text: str) -> None:
+        q: asyncio.Queue = asyncio.Queue()
+
+        def worker() -> None:
+            try:
+                for chunk in _mimo_stream(config, text, "pcm16"):
+                    loop.call_soon_threadsafe(q.put_nowait, chunk)
+            except BaseException as exc:  # noqa: BLE001 —— 线程边界：异常作为队列结果上抛
+                loop.call_soon_threadsafe(q.put_nowait, exc)
+            finally:
+                loop.call_soon_threadsafe(q.put_nowait, None)
+
+        threading.Thread(target=worker, daemon=True).start()
+        while True:
+            item = await q.get()
+            if item is None:
+                break
+            if isinstance(item, VoiceProviderError):
+                raise item
+            await websocket.send_bytes(item)
+
+    reader: asyncio.Task | None = None
+    try:
+        reader = asyncio.ensure_future(read_client())
+        while True:
+            item = await text_q.get()
+            if item == "__abort__":
+                return
+            if item is None:
+                await websocket.send_json({"type": "round_end"})
+                return
+            try:
+                await pump_say(item)
+                await websocket.send_json({"type": "sentence_end"})
+            except VoiceProviderError as exc:
+                logger.warning("TTS live mimo: %s", exc)
+                await websocket.send_json({"type": "error", "detail": str(exc)[:200]})
+                await websocket.send_json({"type": "round_end"})
+                return
+    except WebSocketDisconnect:
+        logger.info("TTS live mimo: client disconnected")
+    finally:
+        if reader is not None:
+            reader.cancel()
+        with suppress(Exception):
+            await websocket.close()
+
+
 @ws_router.websocket("/tts/live")
 async def tts_live(websocket: WebSocket, token: str = Query(default="")):
     settings = get_settings()
@@ -283,13 +348,11 @@ async def tts_live(websocket: WebSocket, token: str = Query(default="")):
 
     config = get_tts_config()
     await websocket.accept()
-    if config is None or config.provider != "minimax":
+    if config is None or config.provider not in {"minimax", "mimo"}:
         logger.warning("TTS live: TTS not configured, closing")
         await websocket.send_json({"type": "error", "detail": "TTS not configured"})
         await websocket.close()
         return
-
-    import websockets as mm_lib
 
     text_q: asyncio.Queue = asyncio.Queue()
 
@@ -316,6 +379,13 @@ async def tts_live(websocket: WebSocket, token: str = Query(default="")):
             pass
         finally:
             await text_q.put(None)
+
+    if config.provider == "mimo":
+        # MiMo 无上游 WS：HTTP SSE 合成，句边界即 say 粒度（我们自己的切句）
+        await _tts_live_mimo(websocket, config, text_q, read_client)
+        return
+
+    import websockets as mm_lib
 
     try:
         async with mm_lib.connect(

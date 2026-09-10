@@ -408,6 +408,59 @@ def test_tts_live_upstream_error_is_surfaced(client, monkeypatch):
 
 
 # ---------------------------------------------------------------------------
+# MiMo provider：/speak 媒体类型 + tts_live SSE→PCM 协议
+# ---------------------------------------------------------------------------
+
+
+def test_speak_mimo_returns_wav(client, monkeypatch):
+    import httpx
+
+    monkeypatch.setenv("VOICE_TTS_PROVIDER", "mimo")
+    monkeypatch.setenv("VOICE_TTS_API_KEY", "k" * 8)
+    from psych_support_bot.infra.config.settings import get_settings
+
+    get_settings.cache_clear()
+    monkeypatch.setattr(
+        "psych_support_bot.infra.voice.adapter.httpx.post",
+        lambda url, **kw: httpx.Response(
+            200,
+            json={"choices": [{"message": {"audio": {"data": "V0FW"}}}]},
+            request=httpx.Request("POST", url),
+        ),
+    )
+    res = client.post("/v1/voice/speak", json={"text": "你好"})
+    assert res.status_code == 200
+    assert res.headers["content-type"].startswith("audio/wav")
+
+
+def test_tts_live_mimo_protocol(client, monkeypatch):
+    """MiMo live：ready 声明 pcm16@24k；say → SSE 解码二进制帧 + sentence_end；
+    end → round_end（无合成残留）。"""
+    import psych_support_bot.api.routes.voice as voice_routes
+
+    monkeypatch.setenv("VOICE_TTS_PROVIDER", "mimo")
+    monkeypatch.setenv("VOICE_TTS_API_KEY", "k" * 8)
+    from psych_support_bot.infra.config.settings import get_settings
+
+    get_settings.cache_clear()
+    monkeypatch.setattr(
+        voice_routes, "_mimo_stream", lambda config, text, fmt: iter([b"\x01\x02", b"\x03\x04"])
+    )
+
+    with client.websocket_connect("/v1/voice/tts/live") as ws:
+        ready = ws.receive_json()
+        assert ready["type"] == "ready"
+        assert ready["audio"] == {"format": "pcm", "sample_rate": 24000}
+        ws.send_json({"type": "say", "text": "你好"})
+        ws.send_json({"type": "end"})
+        # 每个 SSE delta 一条 WS 二进制帧（前端 WebAudio 逐块入队）
+        assert ws.receive_bytes() == b"\x01\x02"
+        assert ws.receive_bytes() == b"\x03\x04"
+        assert ws.receive_json()["type"] == "sentence_end"
+        assert ws.receive_json()["type"] == "round_end"
+
+
+# ---------------------------------------------------------------------------
 # P1 反馈应答（backchannel）：列表 + 单条音频 + 缓存 + 校验
 # ---------------------------------------------------------------------------
 

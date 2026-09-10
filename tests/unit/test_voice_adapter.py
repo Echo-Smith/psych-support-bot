@@ -174,6 +174,143 @@ def test_ssrf_accepts_public_https() -> None:
 
 
 # ---------------------------------------------------------------------------
+# MiMo（小米）：STT input_audio + TTS chat completions（wav / SSE pcm16）
+# ---------------------------------------------------------------------------
+
+
+def test_stt_config_mimo_defaults(stt_key) -> None:
+    _configure(stt_key=stt_key, VOICE_STT_PROVIDER="mimo", VOICE_STT_BASE_URL="", VOICE_STT_MODEL="")
+    config = get_stt_config()
+    assert config is not None and config.provider == "mimo"
+    assert config.base_url == "https://api.xiaomimimo.com/v1"
+    assert config.model == "mimo-v2.5-asr"
+
+
+def test_transcribe_mimo_requires_key() -> None:
+    _configure(stt_key="", VOICE_STT_PROVIDER="mimo", VOICE_STT_BASE_URL="", VOICE_STT_MODEL="")
+    assert get_stt_config() is None
+
+
+def test_transcribe_mimo_success(monkeypatch, stt_key) -> None:
+    _configure(stt_key=stt_key, VOICE_STT_PROVIDER="mimo", VOICE_STT_BASE_URL="", VOICE_STT_MODEL="")
+    captured: dict = {}
+
+    def fake_post(url, **kwargs):
+        captured["url"] = url
+        captured["payload"] = kwargs["json"]
+        assert kwargs["headers"]["Authorization"] == f"Bearer {stt_key}"
+        return httpx.Response(
+            200,
+            json={"choices": [{"message": {"content": " 我有点焦虑 "}}]},
+            request=httpx.Request("POST", url),
+        )
+
+    monkeypatch.setattr("psych_support_bot.infra.voice.adapter.httpx.post", fake_post)
+    assert transcribe(b"audio", "a.wav") == "我有点焦虑"
+    assert captured["url"].endswith("/chat/completions")
+    block = captured["payload"]["messages"][0]["content"][0]
+    assert block["type"] == "input_audio"
+    assert block["input_audio"]["data"].startswith("data:audio/wav;base64,")
+    assert captured["payload"]["asr_options"] == {"language": "zh"}
+
+
+def test_tts_config_mimo(tts_key) -> None:
+    _configure(
+        tts_key=tts_key,
+        VOICE_TTS_PROVIDER="mimo",
+        VOICE_TTS_BASE_URL="",
+        VOICE_TTS_MODEL="",
+        VOICE_TTS_VOICE="",
+    )
+    config = get_tts_config()
+    assert config is not None and config.provider == "mimo"
+    assert config.base_url == "https://api.xiaomimimo.com/v1"
+    assert config.model == "mimo-v2.5-tts"
+    assert config.voice == "冰糖"
+    assert config.ws_url == ""
+
+
+def test_synthesize_mimo_success(monkeypatch, tts_key) -> None:
+    _configure(
+        tts_key=tts_key,
+        VOICE_TTS_PROVIDER="mimo",
+        VOICE_TTS_BASE_URL="",
+        VOICE_TTS_MODEL="",
+        VOICE_TTS_VOICE="",
+    )
+
+    def fake_post(url, **kwargs):
+        assert url.endswith("/chat/completions")
+        assert kwargs["json"]["audio"] == {"format": "wav", "voice": "冰糖"}
+        assert kwargs["json"]["messages"][0]["role"] == "assistant"
+        return httpx.Response(
+            200,
+            json={"choices": [{"message": {"audio": {"data": base64.b64encode(b"WAVDATA").decode()}}}]},
+            request=httpx.Request("POST", url),
+        )
+
+    monkeypatch.setattr("psych_support_bot.infra.voice.adapter.httpx.post", fake_post)
+    assert synthesize("你好") == b"WAVDATA"
+
+
+def test_synthesize_stream_mimo_sse(monkeypatch, tts_key) -> None:
+    _configure(
+        tts_key=tts_key,
+        VOICE_TTS_PROVIDER="mimo",
+        VOICE_TTS_BASE_URL="",
+        VOICE_TTS_MODEL="",
+        VOICE_TTS_VOICE="",
+    )
+    sse_lines = [
+        'data: {"choices":[{"delta":{"audio":{"data":"' + base64.b64encode(b"chunk1").decode() + '"}}}]}',
+        'data: {"choices":[{"delta":{"audio":{"data":"' + base64.b64encode(b"chunk2").decode() + '"}}}]}',
+        "data: [DONE]",
+    ]
+
+    class _FakeSSE:
+        status_code = 200
+
+        def __init__(self, lines):
+            self._lines = lines
+
+        def iter_lines(self):
+            return iter(self._lines)
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+    captured: dict = {}
+
+    def fake_stream(method, url, **kwargs):
+        captured["payload"] = kwargs["json"]
+        return _FakeSSE(sse_lines)
+
+    monkeypatch.setattr("psych_support_bot.infra.voice.adapter.httpx.stream", fake_stream)
+    assert list(synthesize_stream("慢慢来")) == [b"chunk1", b"chunk2"]  # SSE delta 逐块产出
+    assert captured["payload"]["audio"]["format"] == "wav"
+
+
+def test_tts_media_type_mimo_vs_others(tts_key) -> None:
+    import psych_support_bot.infra.voice.adapter as _adapter
+
+    _configure(
+        tts_key=tts_key,
+        VOICE_TTS_PROVIDER="mimo",
+        VOICE_TTS_BASE_URL="",
+        VOICE_TTS_MODEL="",
+        VOICE_TTS_VOICE="",
+    )
+    get_settings.cache_clear()
+    assert _adapter.tts_media_type() == "audio/wav"
+    _configure(tts_key=tts_key)  # openai → mp3 容器
+    get_settings.cache_clear()
+    assert _adapter.tts_media_type() == "audio/mpeg"
+
+
+# ---------------------------------------------------------------------------
 # STT 调用（mock httpx）
 # ---------------------------------------------------------------------------
 
