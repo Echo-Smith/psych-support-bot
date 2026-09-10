@@ -2832,6 +2832,7 @@
       TTS_QUEUE.reviseText = null;
       TTS_QUEUE.anySpoken = false;
       TTS_QUEUE.prefetched = {};
+      LIVE_TEXT_SHOWN_CHARS = 0; // 新回合字幕预算清零
       const sendBody = () => JSON.stringify({ user_id: USER_ID, session_id: SESSION_ID, message });
       let res = await fetch(API_BASE + '/v1/conversations/respond/stream', {
         method: 'POST',
@@ -2968,7 +2969,15 @@
         }
       };
       if (hasText) {
-        renderBotParts(parts, data.mode, data.risk, postRender);
+        // 音频仍在放（投机轮典型：句+final 同帧到、音频刚开头）→ 正式气泡
+        // 随剩余音频逐段铺字；否则维持即时渲染（文字阅读不该被动画拖累）
+        let sync = null;
+        const remMs = (PCM.ctx && !TTS_LIVE.failed) ? Math.max(0, (PCM.cursor - PCM.ctx.currentTime) * 1000) : 0;
+        const totalChars = parts.reduce((n, p) => n + (p || '').length, 0);
+        if (remMs > 500 && totalChars > 0) {
+          sync = { audioRemainingMs: remMs, revealedChars: Math.min(totalChars, LIVE_TEXT_SHOWN_CHARS) };
+        }
+        renderBotParts(parts, data.mode, data.risk, postRender, sync);
       } else {
         postRender();
       }
@@ -3330,12 +3339,44 @@
       if (t) t.remove();
     }
 
-    // live 文本泡：每句一个气泡，文字流出时长 = 该句音频实际时长（按语音
-    // 进度铺字，播到哪字显到哪；reveal 曲线取接近线性的缓尾，不再是固定
-    // 30ms/字的"抢跑"节奏）。final 换正式气泡定稿；revise/打断清空。
-    // LIVE_TEXT_ROUND 代次凭证：clear 递增，进行中的 reveal 与排程字幕作废。
-    // 每句已过后端 scan_sentence_speakable 扫描，上屏必为可朗读内容。
+    // live 文本泡与正式气泡共用一条揭示引擎（revealText）：文字沿近线性缓尾
+    // 曲线逐字铺出，总时长由调用方决定（= 该句音频时长 / 剩余音频预算）。
+    // LIVE_TEXT_ROUND 管排程字幕作废；REVEALS 登记在跑的动画（元素被移除即
+    // 自然停；打断时 finishAllReveals 把正式气泡瞬间补全，不留半截字）。
+    // LIVE_TEXT_SHOWN_CHARS 记本轮 live 泡已上屏字数——final 正式渲染据此
+    // 跳过已出现的字，杜绝「final 整段重铺」的突兀替换。
     let LIVE_TEXT_ROUND = 0;
+    let LIVE_TEXT_SHOWN_CHARS = 0;
+    const REVEALS = new Set();
+    function revealText(bubble, text, elapsedMs, totalMs, htmlFinish) {
+      const job = {};
+      job.settle = () => {
+        if (htmlFinish) bubble.innerHTML = renderMarkdown(text);
+        else bubble.textContent = text;
+      };
+      REVEALS.add(job);
+      const t0 = performance.now() - Math.max(0, elapsedMs || 0);
+      const chatArea = document.getElementById('chatArea');
+      const tick = (now) => {
+        if (!REVEALS.has(job)) return;
+        if (!bubble.isConnected) { REVEALS.delete(job); return; }
+        const p = totalMs > 0 ? Math.min(1, (now - t0) / totalMs) : 1;
+        const e = 1 - Math.pow(1 - p, 1.25); // 近线性缓尾
+        if (p < 1) {
+          bubble.textContent = text.slice(0, Math.round(text.length * e));
+          chatArea.scrollTop = chatArea.scrollHeight;
+          requestAnimationFrame(tick);
+        } else {
+          job.settle();
+          REVEALS.delete(job);
+        }
+      };
+      requestAnimationFrame(tick);
+    }
+    function finishAllReveals() {
+      REVEALS.forEach((j) => { try { j.settle(); } catch (err) { /* 已随元素移除 */ } });
+      REVEALS.clear();
+    }
     function liveTextAppend(text, elapsedMs, totalMs) {
       if (!text) return;
       hideTyping(); // 等待泡由实内容接管
@@ -3344,20 +3385,8 @@
       el.className = 'msg bot live-msg';
       el.innerHTML = '<div class="bubble"></div>';
       chatArea.appendChild(el);
-      const b = el.querySelector('.bubble');
-      const round = LIVE_TEXT_ROUND;
-      const total = totalMs || Math.max(400, text.length * 220); // 无音频时长时的兜底节奏
-      // 音频先跑了 elapsedMs（合成快于实时），文字从对应进度追平，不回放
-      const t0 = performance.now() - Math.max(0, elapsedMs || 0);
-      const tick = (now) => {
-        if (round !== LIVE_TEXT_ROUND || !b.isConnected) return;
-        const p = Math.min(1, (now - t0) / total);
-        const e = 1 - Math.pow(1 - p, 1.25); // 近线性缓尾：贴着语速走
-        b.textContent = p < 1 ? text.slice(0, Math.round(text.length * e)) : text;
-        chatArea.scrollTop = chatArea.scrollHeight;
-        if (p < 1) requestAnimationFrame(tick);
-      };
-      requestAnimationFrame(tick);
+      LIVE_TEXT_SHOWN_CHARS += text.length;
+      revealText(el.querySelector('.bubble'), text, elapsedMs, totalMs, false);
     }
     function liveTextAppendRound(round, text, elapsedMs, totalMs) {
       if (round === LIVE_TEXT_ROUND) liveTextAppend(text, elapsedMs, totalMs);
@@ -3368,18 +3397,39 @@
     }
 
     // Render a reply as consecutive IM-style bubbles with typing rhythm between them.
-    function renderBotParts(parts, mode, risk, onDone) {
+    // sync={audioRemainingMs,revealedChars}：final 到达时音频仍在放——正式气泡
+    // 逐段揭示、总时长摊到剩余音频，跳过 live 泡已上屏的字数；无 sync（静音/
+    // 音频已完）照旧整气泡直出，不拖累阅读速度。
+    function renderBotParts(parts, mode, risk, onDone, sync) {
       let i = 0;
+      let consumed = sync ? Math.max(0, sync.revealedChars | 0) : 0;
       const step = () => {
         hideTyping();
         const first = i === 0;
-        addMessage('bot', parts[i], first ? mode : '', first ? risk : {}, first);
+        const text = parts[i] || '';
         if (first) { turnMark('final'); turnTryReport(); } // 首个气泡可见 = 文本全链终点
+        if (!sync) {
+          addMessage('bot', text, first ? mode : '', first ? risk : {}, first);
+          i++;
+          if (i < parts.length) {
+            setTimeout(() => { showTyping(TYPING_TEXT); setTimeout(step, 700); }, 400);
+          } else if (onDone) {
+            onDone();
+          }
+          return;
+        }
+        // 音频同步定稿：空泡上屏 → 按"剩余音频 × 本段未揭示字数占比"铺字
+        const skip = Math.min(consumed, text.length);
+        consumed -= skip;
+        const remainingTotal = Math.max(1, parts.slice(i).reduce((n, p) => n + (p || '').length, 0));
+        const dur = Math.max(500, sync.audioRemainingMs * ((text.length - skip) / remainingTotal));
+        const msgEl = addMessage('bot', '', first ? mode : '', first ? risk : {}, first);
+        revealText(msgEl.querySelector('.bubble'), text, 0, dur, true);
         i++;
         if (i < parts.length) {
-          setTimeout(() => { showTyping(TYPING_TEXT); setTimeout(step, 700); }, 400);
-        } else if (onDone) {
-          onDone();
+          setTimeout(step, dur + 250); // 本段铺完稍候即下段（音频即节奏，不再插"正在输入"）
+        } else {
+          setTimeout(() => { if (onDone) onDone(); }, dur + 250);
         }
       };
       step();
@@ -3816,6 +3866,7 @@
       pcmStopAll();
       TTS_LIVE.chain = Promise.resolve();
       liveTextClear();
+      finishAllReveals(); // 铺到一半的正式气泡瞬间补全，不留半截字
       const done = TTS_LIVE.roundDone;
       TTS_LIVE.roundDone = null;
       if (done) done();
@@ -4053,6 +4104,11 @@
       VOICE.preRoll = null;
       if (VOICE.stream) { VOICE.stream.getTracks().forEach((t) => t.stop()); VOICE.stream = null; }
       stopVoicePlayback();
+      // PCM 时代补全停播三件套：断 live 会话、掐队列、补全在铺的字（旧实现只
+      // 掐 Audio 元素，PCM 队列会在退出后继续出声）
+      if (TTS_LIVE.ws) { ttsLiveSend({ type: 'abort' }); killLiveWs(TTS_LIVE.ws); }
+      pcmStopAll();
+      finishAllReveals();
       VOICE.mode = 'idle';
       syncVoiceUI();
       hideTyping();
@@ -4388,6 +4444,7 @@
       TTS_LIVE.curBytes = []; TTS_LIVE.curChars = 0; TTS_LIVE.pendingTexts = [];
       TTS_LIVE.sentenceStart = null; TTS_LIVE.firstAudioMarked = false; TTS_LIVE.sentenceSamples = 0;
       TTS_LIVE.pendingEnd = false;
+      LIVE_TEXT_SHOWN_CHARS = 0; // revise 整轮重读：live 泡作废，字数预算清零
       pcmStopAll();
       TTS_LIVE.chain = Promise.resolve();
       TTS_LIVE.roundStarted = true; TTS_LIVE.ended = true;
