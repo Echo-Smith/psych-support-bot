@@ -2969,13 +2969,19 @@
         }
       };
       if (hasText) {
-        // 音频仍在放（投机轮典型：句+final 同帧到、音频刚开头）→ 正式气泡
-        // 随剩余音频逐段铺字；否则维持即时渲染（文字阅读不该被动画拖累）
+        // 音频仍在放/在途（投机轮典型：句+final 同帧到、音频甚至还没起播）
+        // → 正式气泡随剩余音频逐段铺字；否则维持即时渲染（文字阅读不该被
+        // 动画拖累）。在途音频用"未播句数×语速"估算，已排程部分用实际队列。
         let sync = null;
-        const remMs = (PCM.ctx && !TTS_LIVE.failed) ? Math.max(0, (PCM.cursor - PCM.ctx.currentTime) * 1000) : 0;
         const totalChars = parts.reduce((n, p) => n + (p || '').length, 0);
-        if (remMs > 500 && totalChars > 0) {
-          sync = { audioRemainingMs: remMs, revealedChars: Math.min(totalChars, LIVE_TEXT_SHOWN_CHARS) };
+        const audioOn = !!(VOICE.ttsAvailable && VOICE.ttsPref && !TTS_LIVE.failed);
+        if (audioOn && totalChars > 0) {
+          const pcmRemain = PCM.ctx ? Math.max(0, (PCM.cursor - PCM.ctx.currentTime) * 1000) : 0;
+          const pendingChars = (TTS_LIVE.pending.join('') + TTS_LIVE.pendingTexts.join('')).length;
+          const remMs = Math.max(pcmRemain, pendingChars * 220);
+          if (remMs > 500) {
+            sync = { audioRemainingMs: remMs, revealedChars: Math.min(totalChars, LIVE_TEXT_SHOWN_CHARS) };
+          }
         }
         renderBotParts(parts, data.mode, data.risk, postRender, sync);
       } else {
@@ -4059,8 +4065,9 @@
         VOICE.bcUrls = urls.filter(Boolean);
       } catch (err) { /* 预取失败 = 无应答，一切照旧 */ }
     }
+    const BACKCHANNEL_ENABLED = false; // 2026-09-10 实证风险：thinking 态麦克风开启，短音有污染录音头/打断 iOS 麦克风会话风险，待独立验证后再放开
     function scheduleBackchannel() {
-      if (!VOICE.bcUrls.length) return;
+      if (!BACKCHANNEL_ENABLED || !VOICE.bcUrls.length) return;
       setTimeout(() => {
         if (VOICE.mode !== 'thinking' || VOICE.recording) return;
         if (Math.random() > 0.55) return;
