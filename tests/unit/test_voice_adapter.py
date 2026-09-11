@@ -206,7 +206,7 @@ def test_transcribe_mimo_success(monkeypatch, stt_key) -> None:
             request=httpx.Request("POST", url),
         )
 
-    monkeypatch.setattr("psych_support_bot.infra.voice.adapter.httpx.post", fake_post)
+    monkeypatch.setattr("psych_support_bot.infra.voice.adapter._client.post", fake_post)
     assert transcribe(b"audio", "a.wav") == "我有点焦虑"
     assert captured["url"].endswith("/chat/completions")
     block = captured["payload"]["messages"][0]["content"][0]
@@ -230,7 +230,7 @@ def test_transcribe_mimo_retries_on_429(monkeypatch, stt_key) -> None:
             request=httpx.Request("POST", url),
         )
 
-    monkeypatch.setattr("psych_support_bot.infra.voice.adapter.httpx.post", fake_post)
+    monkeypatch.setattr("psych_support_bot.infra.voice.adapter._client.post", fake_post)
     monkeypatch.setattr("psych_support_bot.infra.voice.adapter.time.sleep", lambda s: None)
     assert transcribe(b"audio", "a.wav") == "好"
     assert calls["n"] == 2
@@ -245,7 +245,7 @@ def test_transcribe_mimo_429_twice_raises(monkeypatch, stt_key) -> None:
         calls["n"] += 1
         return httpx.Response(429, request=httpx.Request("POST", url))
 
-    monkeypatch.setattr("psych_support_bot.infra.voice.adapter.httpx.post", fake_post)
+    monkeypatch.setattr("psych_support_bot.infra.voice.adapter._client.post", fake_post)
     monkeypatch.setattr("psych_support_bot.infra.voice.adapter.time.sleep", lambda s: None)
     with pytest.raises(VoiceProviderError):
         transcribe(b"audio", "a.wav")
@@ -287,7 +287,7 @@ def test_synthesize_mimo_success(monkeypatch, tts_key) -> None:
             request=httpx.Request("POST", url),
         )
 
-    monkeypatch.setattr("psych_support_bot.infra.voice.adapter.httpx.post", fake_post)
+    monkeypatch.setattr("psych_support_bot.infra.voice.adapter._client.post", fake_post)
     assert synthesize("你好") == b"WAVDATA"
 
 
@@ -326,7 +326,7 @@ def test_synthesize_stream_mimo_sse(monkeypatch, tts_key) -> None:
         captured["payload"] = kwargs["json"]
         return _FakeSSE(sse_lines)
 
-    monkeypatch.setattr("psych_support_bot.infra.voice.adapter.httpx.stream", fake_stream)
+    monkeypatch.setattr("psych_support_bot.infra.voice.adapter._client.stream", fake_stream)
     assert list(synthesize_stream("慢慢来")) == [b"chunk1", b"chunk2"]  # SSE delta 逐块产出
     assert captured["payload"]["audio"]["format"] == "wav"
 
@@ -380,7 +380,7 @@ def test_mimo_stream_midstream_failure_does_not_retry(monkeypatch, tts_key) -> N
         calls["n"] += 1
         return _FakeSSEResponse(_sse_body([b"c1", b"c2"], done=False) + [httpx.ReadTimeout("dropped mid-stream")])
 
-    monkeypatch.setattr("psych_support_bot.infra.voice.adapter.httpx.stream", fake_stream)
+    monkeypatch.setattr("psych_support_bot.infra.voice.adapter._client.stream", fake_stream)
     monkeypatch.setattr("psych_support_bot.infra.voice.adapter.time.sleep", lambda s: None)
     gen = synthesize_stream("慢慢来")
     assert next(gen) == b"c1"
@@ -401,7 +401,7 @@ def test_mimo_stream_pre_first_byte_failure_retries(monkeypatch, tts_key) -> Non
             raise httpx.ConnectError("conn refused")
         return _FakeSSEResponse(_sse_body([b"c1"]))
 
-    monkeypatch.setattr("psych_support_bot.infra.voice.adapter.httpx.stream", fake_stream)
+    monkeypatch.setattr("psych_support_bot.infra.voice.adapter._client.stream", fake_stream)
     monkeypatch.setattr("psych_support_bot.infra.voice.adapter.time.sleep", lambda s: None)
     assert list(synthesize_stream("慢慢来")) == [b"c1"]
     assert calls["n"] == 2
@@ -438,7 +438,7 @@ def test_transcribe_openai_success(monkeypatch, stt_key) -> None:
         assert kwargs["data"]["model"] == "whisper-1"
         return httpx.Response(200, json={"text": " 我现在心跳很快 "}, request=httpx.Request("POST", url))
 
-    monkeypatch.setattr("psych_support_bot.infra.voice.adapter.httpx.post", fake_post)
+    monkeypatch.setattr("psych_support_bot.infra.voice.adapter._client.post", fake_post)
     assert transcribe(b"audio", "a.webm") == "我现在心跳很快"
 
 
@@ -456,7 +456,7 @@ def test_transcribe_openai_upstream_error(stt_key, monkeypatch) -> None:
         calls["n"] += 1
         return httpx.Response(500, request=httpx.Request("POST", url))
 
-    monkeypatch.setattr("psych_support_bot.infra.voice.adapter.httpx.post", fake_post)
+    monkeypatch.setattr("psych_support_bot.infra.voice.adapter._client.post", fake_post)
     monkeypatch.setattr("psych_support_bot.infra.voice.adapter.time.sleep", lambda s: None)
     with pytest.raises(VoiceProviderError):
         transcribe(b"audio", "a.webm")
@@ -474,7 +474,7 @@ def test_transcribe_openai_retries_on_5xx(monkeypatch, stt_key) -> None:
             return httpx.Response(502, request=httpx.Request("POST", url))
         return httpx.Response(200, json={"text": "恢复了"}, request=httpx.Request("POST", url))
 
-    monkeypatch.setattr("psych_support_bot.infra.voice.adapter.httpx.post", fake_post)
+    monkeypatch.setattr("psych_support_bot.infra.voice.adapter._client.post", fake_post)
     monkeypatch.setattr("psych_support_bot.infra.voice.adapter.time.sleep", lambda s: None)
     assert transcribe(b"audio", "a.webm") == "恢复了"
     assert calls["n"] == 2
@@ -506,7 +506,7 @@ def test_transcribe_minimax_success(monkeypatch, tts_key) -> None:
             request=httpx.Request("POST", url),
         )
 
-    monkeypatch.setattr("psych_support_bot.infra.voice.adapter.httpx.post", fake_post)
+    monkeypatch.setattr("psych_support_bot.infra.voice.adapter._client.post", fake_post)
     assert transcribe(b"audio", "a.m4a") == "我现在心跳很快"
 
 
@@ -525,7 +525,7 @@ def test_transcribe_minimax_upstream_error(monkeypatch, tts_key) -> None:
             request=httpx.Request("POST", url),
         )
 
-    monkeypatch.setattr("psych_support_bot.infra.voice.adapter.httpx.post", fake_post)
+    monkeypatch.setattr("psych_support_bot.infra.voice.adapter._client.post", fake_post)
     with pytest.raises(VoiceProviderError):
         transcribe(b"audio", "a.m4a")
 
@@ -562,7 +562,7 @@ def test_transcribe_dots_mode_full_flow(monkeypatch, dots_key) -> None:
             )
         raise AssertionError(url)
 
-    monkeypatch.setattr("psych_support_bot.infra.voice.adapter.httpx.post", fake_post)
+    monkeypatch.setattr("psych_support_bot.infra.voice.adapter._client.post", fake_post)
     assert transcribe(b"audio-bytes", "a.webm") == "我心跳好快。"
     assert captured["url"].endswith("/chat/completions")
 
@@ -585,7 +585,7 @@ def test_transcribe_dots_media_type_by_extension(monkeypatch, dots_key) -> None:
             request=httpx.Request("POST", url),
         )
 
-    monkeypatch.setattr("psych_support_bot.infra.voice.adapter.httpx.post", fake_post)
+    monkeypatch.setattr("psych_support_bot.infra.voice.adapter._client.post", fake_post)
     transcribe(b"a", "clip.m4a")
     transcribe(b"a", "note.mp3")
     transcribe(b"a", "noext")
@@ -604,7 +604,7 @@ def test_transcribe_dots_upstream_error(monkeypatch, dots_key) -> None:
     def fake_post(url, **kwargs):
         return httpx.Response(502, request=httpx.Request("POST", url))
 
-    monkeypatch.setattr("psych_support_bot.infra.voice.adapter.httpx.post", fake_post)
+    monkeypatch.setattr("psych_support_bot.infra.voice.adapter._client.post", fake_post)
     monkeypatch.setattr("psych_support_bot.infra.voice.adapter.time.sleep", lambda s: None)
     with pytest.raises(VoiceProviderError):
         transcribe(b"audio-bytes", "a.webm")
@@ -623,7 +623,7 @@ def test_stt_prompt_default_vocab_attached_to_openai(monkeypatch, stt_key) -> No
         captured.update(kwargs["data"])
         return httpx.Response(200, json={"text": "好"}, request=httpx.Request("POST", url))
 
-    monkeypatch.setattr("psych_support_bot.infra.voice.adapter.httpx.post", fake_post)
+    monkeypatch.setattr("psych_support_bot.infra.voice.adapter._client.post", fake_post)
     transcribe(b"a", "a.webm")
     assert "正念" in captured.get("prompt", "")  # 缺省即用内置心理陪伴词表
 
@@ -638,7 +638,7 @@ def test_stt_prompt_override_and_disable_openai(monkeypatch, stt_key) -> None:
         captured.update(kwargs["data"])
         return httpx.Response(200, json={"text": "好"}, request=httpx.Request("POST", url))
 
-    monkeypatch.setattr("psych_support_bot.infra.voice.adapter.httpx.post", fake_post)
+    monkeypatch.setattr("psych_support_bot.infra.voice.adapter._client.post", fake_post)
     _configure(stt_key=stt_key, VOICE_STT_PROMPT="呼吸 肌肉")
     get_settings.cache_clear()
     transcribe(b"a", "a.webm")
@@ -668,7 +668,7 @@ def test_stt_prompt_in_dots_instruction(monkeypatch, dots_key) -> None:
             request=httpx.Request("POST", url),
         )
 
-    monkeypatch.setattr("psych_support_bot.infra.voice.adapter.httpx.post", fake_post)
+    monkeypatch.setattr("psych_support_bot.infra.voice.adapter._client.post", fake_post)
     transcribe(b"a", "a.webm")
     assert "讲话者可能用到这些词" in texts[0] and "恐慌" in texts[0]
 
@@ -691,7 +691,7 @@ def test_stt_prompt_not_sent_to_minimax(monkeypatch, tts_key) -> None:
             request=httpx.Request("POST", url),
         )
 
-    monkeypatch.setattr("psych_support_bot.infra.voice.adapter.httpx.post", fake_post)
+    monkeypatch.setattr("psych_support_bot.infra.voice.adapter._client.post", fake_post)
     transcribe(b"a", "a.m4a")
     assert "prompt" not in captured
 
@@ -718,7 +718,7 @@ def test_synthesize_success(monkeypatch, tts_key) -> None:
         assert kwargs["json"]["response_format"] == "mp3"
         return httpx.Response(200, content=b"ID3mp3bytes", request=httpx.Request("POST", url))
 
-    monkeypatch.setattr("psych_support_bot.infra.voice.adapter.httpx.post", fake_post)
+    monkeypatch.setattr("psych_support_bot.infra.voice.adapter._client.post", fake_post)
     assert synthesize("你好") == b"ID3mp3bytes"
 
 
@@ -747,7 +747,7 @@ def test_tts_cache_hits_same_text(monkeypatch, tts_key) -> None:
         calls["n"] += 1
         return httpx.Response(200, content=b"ID3mp3", request=httpx.Request("POST", url))
 
-    monkeypatch.setattr("psych_support_bot.infra.voice.adapter.httpx.post", fake_post)
+    monkeypatch.setattr("psych_support_bot.infra.voice.adapter._client.post", fake_post)
     first = synthesize("你好")
     second = synthesize("你好")
     assert first == second == b"ID3mp3"
@@ -765,7 +765,7 @@ def test_tts_cache_key_includes_voice_config(monkeypatch, tts_key) -> None:
         calls["n"] += 1
         return httpx.Response(200, content=b"x", request=httpx.Request("POST", url))
 
-    monkeypatch.setattr("psych_support_bot.infra.voice.adapter.httpx.post", fake_post)
+    monkeypatch.setattr("psych_support_bot.infra.voice.adapter._client.post", fake_post)
     synthesize("你好")
     # 换音色 → key 不同 → 不吃旧缓存
     _configure(tts_key=tts_key, VOICE_TTS_VOICE="nova")
@@ -782,7 +782,7 @@ def test_tts_cache_does_not_cache_errors(monkeypatch, tts_key) -> None:
         calls["n"] += 1
         return httpx.Response(500, request=httpx.Request("POST", url))
 
-    monkeypatch.setattr("psych_support_bot.infra.voice.adapter.httpx.post", fake_post)
+    monkeypatch.setattr("psych_support_bot.infra.voice.adapter._client.post", fake_post)
     monkeypatch.setattr("psych_support_bot.infra.voice.adapter.time.sleep", lambda s: None)
     with pytest.raises(VoiceProviderError):
         synthesize("你好")
@@ -800,7 +800,7 @@ def test_tts_cache_lru_eviction(monkeypatch, tts_key) -> None:
     def fake_post(url, **kwargs):
         return httpx.Response(200, content=b"x", request=httpx.Request("POST", url))
 
-    monkeypatch.setattr("psych_support_bot.infra.voice.adapter.httpx.post", fake_post)
+    monkeypatch.setattr("psych_support_bot.infra.voice.adapter._client.post", fake_post)
     synthesize("一")
     synthesize("二")
     synthesize("三")  # 容量 2："一" 被逐出
@@ -819,7 +819,7 @@ def test_tts_cache_ttl_expiry(monkeypatch, tts_key) -> None:
         calls["n"] += 1
         return httpx.Response(200, content=b"x", request=httpx.Request("POST", url))
 
-    monkeypatch.setattr("psych_support_bot.infra.voice.adapter.httpx.post", fake_post)
+    monkeypatch.setattr("psych_support_bot.infra.voice.adapter._client.post", fake_post)
     synthesize("你好")
     real_monotonic = time.monotonic
     monkeypatch.setattr(
@@ -870,10 +870,10 @@ def test_synthesize_stream_cached_single_chunk(monkeypatch, tts_key) -> None:
         calls["n"] += 1
         return httpx.Response(200, content=b"x", request=httpx.Request("POST", url))
 
-    monkeypatch.setattr("psych_support_bot.infra.voice.adapter.httpx.post", fake_post)
+    monkeypatch.setattr("psych_support_bot.infra.voice.adapter._client.post", fake_post)
     # openai 路径单块产出
     _configure(tts_key=tts_key)
-    monkeypatch.setattr("psych_support_bot.infra.voice.adapter.httpx.post", fake_post)
+    monkeypatch.setattr("psych_support_bot.infra.voice.adapter._client.post", fake_post)
     assert list(synthesize_stream("你好")) == [b"x"]
     assert list(synthesize_stream("你好")) == [b"x"]  # 命中缓存：单块整段
     assert calls["n"] == 1

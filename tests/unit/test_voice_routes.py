@@ -123,7 +123,7 @@ def test_transcribe_success_contract(client, monkeypatch):
     def fake_post(url, **kwargs):
         return httpx.Response(200, json={"text": "带我做接地练习"}, request=httpx.Request("POST", url))
 
-    monkeypatch.setattr("psych_support_bot.infra.voice.adapter.httpx.post", fake_post)
+    monkeypatch.setattr("psych_support_bot.infra.voice.adapter._client.post", fake_post)
     res = client.post(
         "/v1/voice/transcribe",
         files={"file": ("a.webm", b"audio", "audio/webm")},
@@ -159,7 +159,7 @@ def test_speak_success_returns_audio(client, monkeypatch):
     import httpx
 
     monkeypatch.setattr(
-        "psych_support_bot.infra.voice.adapter.httpx.post",
+        "psych_support_bot.infra.voice.adapter._client.post",
         lambda url, **kw: httpx.Response(200, content=b"ID3", request=httpx.Request("POST", url)),
     )
     res = client.post("/v1/voice/speak", json={"text": "你好"})
@@ -196,7 +196,7 @@ def test_speak_stream_success_returns_audio_stream(client, monkeypatch):
     def fake_post(url, **kw):
         return httpx.Response(200, content=b"ID3-stream", request=httpx.Request("POST", url))
 
-    monkeypatch.setattr("psych_support_bot.infra.voice.adapter.httpx.post", fake_post)
+    monkeypatch.setattr("psych_support_bot.infra.voice.adapter._client.post", fake_post)
     res = client.post("/v1/voice/speak/stream", json={"text": "你好"})
     assert res.status_code == 200
     assert res.headers["content-type"].startswith("audio/mpeg")
@@ -227,7 +227,7 @@ def test_stt_fail_streak_sets_degraded_then_recovers(client, monkeypatch):
 
     _configure_openai_stt(monkeypatch)
     fail = lambda url, **kw: httpx.Response(500, request=httpx.Request("POST", url))
-    monkeypatch.setattr("psych_support_bot.infra.voice.adapter.httpx.post", fail)
+    monkeypatch.setattr("psych_support_bot.infra.voice.adapter._client.post", fail)
     monkeypatch.setattr("psych_support_bot.infra.voice.adapter.time.sleep", lambda s: None)  # 跳过 5xx 退避
     for _ in range(3):
         assert (
@@ -236,7 +236,7 @@ def test_stt_fail_streak_sets_degraded_then_recovers(client, monkeypatch):
     assert client.get("/v1/voice/status").json()["stt_degraded"] is True
     # 上游恢复：一次成功即归零（degraded 撤销，麦克风路径不留观察态）
     monkeypatch.setattr(
-        "psych_support_bot.infra.voice.adapter.httpx.post",
+        "psych_support_bot.infra.voice.adapter._client.post",
         lambda url, **kw: httpx.Response(200, json={"text": "好"}, request=httpx.Request("POST", url)),
     )
     assert client.post("/v1/voice/transcribe", files={"file": ("a.webm", b"audio", "audio/webm")}).status_code == 200
@@ -249,7 +249,7 @@ def test_stt_fail_below_threshold_not_degraded(client, monkeypatch):
 
     _configure_openai_stt(monkeypatch)
     monkeypatch.setattr(
-        "psych_support_bot.infra.voice.adapter.httpx.post",
+        "psych_support_bot.infra.voice.adapter._client.post",
         lambda url, **kw: httpx.Response(500, request=httpx.Request("POST", url)),
     )
     monkeypatch.setattr("psych_support_bot.infra.voice.adapter.time.sleep", lambda s: None)  # 跳过 5xx 退避
@@ -423,7 +423,7 @@ def test_speak_mimo_returns_wav(client, monkeypatch):
 
     get_settings.cache_clear()
     monkeypatch.setattr(
-        "psych_support_bot.infra.voice.adapter.httpx.post",
+        "psych_support_bot.infra.voice.adapter._client.post",
         lambda url, **kw: httpx.Response(
             200,
             json={"choices": [{"message": {"audio": {"data": "V0FW"}}}]},
@@ -488,7 +488,7 @@ def test_backchannel_contract(client, monkeypatch):
         calls["n"] += 1
         return httpx.Response(200, content=b"ID3bc", request=httpx.Request("POST", url))
 
-    monkeypatch.setattr("psych_support_bot.infra.voice.adapter.httpx.post", fake_post)
+    monkeypatch.setattr("psych_support_bot.infra.voice.adapter._client.post", fake_post)
     assert client.get("/v1/voice/backchannel").json() == {"count": 4}
     res = client.get("/v1/voice/backchannel/1")
     assert res.status_code == 200

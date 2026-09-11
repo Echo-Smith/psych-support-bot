@@ -46,6 +46,12 @@ logger = logging.getLogger(__name__)
 MAX_AUDIO_BYTES = 25 * 1024 * 1024
 _REQUEST_TIMEOUT = 60.0
 
+# 共享连接池：模块级 Client（httpx.Client 线程安全，路由层 to_thread 并发
+# 打点无虞）。收益=复用 TLS 连接——此前每个上游请求独立握手。不设 limits
+# 上限，沿用 httpx 缺省（100 连接 / 20 keepalive）：live 管道每在播句占一条
+# 连接，当前并发远未触达；收紧上限反而引入排队。
+_client = httpx.Client(timeout=_REQUEST_TIMEOUT)
+
 
 def _post_with_retry(
     kind: str,
@@ -70,7 +76,7 @@ def _post_with_retry(
     last_error: VoiceProviderError | None = None
     for attempt in range(2):
         try:
-            response = httpx.post(url, headers=headers, json=json, files=files, data=data, timeout=timeout)
+            response = _client.post(url, headers=headers, json=json, files=files, data=data, timeout=timeout)
         except httpx.HTTPError as exc:
             last_error = VoiceProviderError(f"{kind} request failed: {exc}")
             if attempt == 0:
@@ -855,7 +861,7 @@ def _mimo_stream(config: TtsConfig, cleaned: str, audio_format: str) -> Iterator
         # 重复内容写进缓存）。只有「零产出」的失败（连接/首字节前）才重试。
         emitted = 0
         try:
-            with httpx.stream(
+            with _client.stream(
                 "POST",
                 f"{config.base_url}/chat/completions",
                 headers={"Authorization": f"Bearer {config.api_key}"},
