@@ -11,13 +11,12 @@ from typing import Any
 import pytest
 from fastapi.testclient import TestClient
 
-from psych_support_bot.app import create_app
 from psych_support_bot.ai.schemas.messages import (
-    ConversationRequest,
     ConversationResponse,
     GeneratedReply,
     RiskResult,
 )
+from psych_support_bot.app import create_app
 
 
 @pytest.fixture()
@@ -74,6 +73,16 @@ def test_respond_stream_sse_frames(client, monkeypatch):
 def test_tts_live_ws_round(client, monkeypatch):
     """假上游 MiniMax 会话：task_start→started，say→audio+is_final，end→finished。"""
     import json as _json
+    from uuid import uuid4
+
+    # TTS 配置显式钉住：本用例此前不自带配置，靠 .env 或先行语音测试泄漏的
+    # os.environ 才通过（pytest 文件名字典序它最先跑——长期潜伏的顺序耦合红灯）。
+    from psych_support_bot.infra.config.settings import get_settings
+
+    monkeypatch.setenv("VOICE_TTS_PROVIDER", "minimax")
+    monkeypatch.setenv("VOICE_TTS_API_KEY", f"test-{uuid4().hex[:8]}")
+    monkeypatch.delenv("VOICE_TTS_BASE_URL", raising=False)
+    get_settings.cache_clear()
 
     class FakeMM:
         def __init__(self):

@@ -131,6 +131,20 @@ def get_session_messages(session: Session, session_id: str) -> list[Message]:
     return list(session.execute(stmt).scalars())
 
 
+def session_belongs_to(session: Session, session_id: str, user_id: str) -> bool:
+    """会话归属校验（认证 → 归属校验闭环的仓库层半环）。
+
+    sessions 表持有 user_id，messages 不持有——任何按 session_id 读/续
+    用户对话原文的路径都必须先过本校验（Mimosa scan-c02b1f85311d 修复）。
+    user_id 传空串（AUTH_ENABLED=false 游客模式）时放行：游客模式下
+    身份本就是客户端自报，无归属可校验，保持既有行为。
+    """
+    if not user_id:
+        return True
+    row = session.get(ConversationSession, session_id)
+    return row is not None and row.user_id == user_id
+
+
 def get_user_risk_events(session: Session, user_id: str, limit: int = 20) -> list[RiskEvent]:
     stmt = select(RiskEvent).where(RiskEvent.user_id == user_id).order_by(desc(RiskEvent.created_at)).limit(limit)
     return list(session.execute(stmt).scalars())
