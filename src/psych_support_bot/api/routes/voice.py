@@ -98,15 +98,6 @@ def _reset_stt_fail_state_for_tests() -> None:
         _stt_fail_state["last_fail"] = 0.0
 
 
-def _voice_user_id(request: Request, declared: str | None) -> str:
-    """与 /v1/conversations 同口径的用户身份（AUTH_ENABLED 时 token 为准）。"""
-
-    class _Payload:
-        user_id = declared or ""
-
-    return request_user_id(request, _Payload())
-
-
 @router.get("/status")
 def voice_status(request: Request, _sub: str = Depends(require_auth)) -> dict[str, bool]:
     return {
@@ -271,6 +262,11 @@ async def backchannel_audio(index: int, _sub: str = Depends(require_auth)) -> Re
 # ---------------------------------------------------------------------------
 
 ws_router = APIRouter(prefix="/v1/voice", tags=["voice"])
+
+# MiniMax live 上游 recv 空闲上限：句间合成块间隔实测 <1s，卡 30s 必是上游
+# 挂起。取 30s 略大于前端 ttsLiveEndRound 的 25s 收束硬上限——前端先收束
+# 兜底，服务端随后自然超时关连（旧值 120s 会把前端假死窗口拉满）。
+_TTS_LIVE_UPSTREAM_RECV_TIMEOUT = 30.0
 
 
 async def _tts_live_mimo(websocket: WebSocket, config, text_q: asyncio.Queue, read_client) -> None:
@@ -451,7 +447,7 @@ async def tts_live(websocket: WebSocket, token: str = Query(default="")):
 
             ct = asyncio.ensure_future(client_to_mm())
             while True:
-                raw = await asyncio.wait_for(mmws.recv(), timeout=120)
+                raw = await asyncio.wait_for(mmws.recv(), timeout=_TTS_LIVE_UPSTREAM_RECV_TIMEOUT)
                 msg = json.loads(raw)
                 base = msg.get("base_resp") or {}
                 status = base.get("status_code", 0)
