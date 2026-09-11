@@ -4314,102 +4314,62 @@
 
     // ---- P1：整轮单会话 TTS（WS /v1/voice/tts/live）----
     // 一条 WS 服务一轮：say(句/整段) → 服务器同个 MiniMax 会话 task_continue →
-    // 音频块实时回推，sentence_end 为分句边界 → 串行播放。句间零 HTTP 往返、
-    // 零 WS 握手，合成与播放重叠。WS 不可用回退句级 HTTP 队列（预取流水线）。
-    const TTS_LIVE = {
-      ws: null, failed: false, pending: [], roundStarted: false, ended: false,
-      curBytes: [], curChars: 0,
-      pendingTexts: [], // 已 say 未播的句子文本，随 sentence_end 出队随音频起播上屏
-      pcm: false, sentenceStart: null, firstAudioMarked: false, sentenceSamples: 0, pendingEnd: false, finalTakeover: false, // PCM 流式播放态（②）+ 每句样本数（字幕按时长铺）+ 定稿接管标记
-      chain: Promise.resolve(),
-      roundDone: null,
-    };
-
-    function ttsLiveReset() {
-      TTS_LIVE.ws = null; TTS_LIVE.failed = false;
-      TTS_LIVE.pending = []; TTS_LIVE.roundStarted = false; TTS_LIVE.ended = false;
-      TTS_LIVE.curBytes = []; TTS_LIVE.curChars = 0; TTS_LIVE.pendingTexts = [];
-      TTS_LIVE.pcm = false; TTS_LIVE.sentenceStart = null; TTS_LIVE.firstAudioMarked = false; TTS_LIVE.sentenceSamples = 0;
-      TTS_LIVE.pendingEnd = false; TTS_LIVE.finalTakeover = false;
-      TTS_LIVE.chain = Promise.resolve();
-      TTS_LIVE.roundDone = null;
-      pcmStopAll(); // 全量复位语义包含掐掉在排播的 PCM 队列
-    }
-
-    function ttsHexToBytes(hex) {
-      const out = new Uint8Array(hex.length / 2);
-      for (let i = 0; i < out.length; i++) out[i] = parseInt(hex.substr(i * 2, 2), 16);
-      return out;
-    }
-
-    // ---- PCM 流式播放（②）：二进制帧到达即入 WebAudio 队列，首块即播 ----
-    // 服务端 tts_live 以 PCM(32k mono s16le) 二进制帧直推音频；ready 消息
-    // 未声明 pcm（旧服务端/降级）时自动回到 mp3-b64 整句合成再播的旧路径。
-    const PCM = {
-      ctx: null, cursor: 0, rate: 32000, sources: [], warnedSuspended: false,
-      // 语速旋钮（playbackRate 同步缩放播放与排程）：localStorage np_tts_speed
-      // 可调 0.8-1.4，默认 1.0（MiMo 冰糖原生语速）。改完刷新页面生效。
-      speed: (() => {
-        const v = parseFloat(localStorage.getItem('np_tts_speed') || '');
-        return v >= 0.8 && v <= 1.4 ? v : 1.0;
-      })(),
-    };
-    function pcmEnsureCtx() {
-      try {
-        if (!PCM.ctx) {
-          const AC = window.AudioContext || window.webkitAudioContext;
-          if (!AC) return null;
-          PCM.ctx = new AC();
-          PCM.cursor = PCM.ctx.currentTime;
-        }
-        if (PCM.ctx.state === 'suspended') {
-          PCM.ctx.resume().catch(() => {});
-          if (!PCM.warnedSuspended) {
-            PCM.warnedSuspended = true;
-            appendDebug('audio ctx suspended → resume()（持续挂起=无声）');
-          }
-        }
-        return PCM.ctx;
-      } catch (err) { return null; }
-    }
-    // buf: ArrayBuffer(s16le mono @ PCM.rate)；返回本块排定的起播时刻（秒，
-    // 供字幕对齐），失败返回 null。32k→设备采样率线性重采样（单声道 64KB/s
-    // 量级，代价可忽略；ctx.sampleRate 常为 48k，ratio=2/3 也稳）
-    function pcmFeed(buf) {
-      const ctx = pcmEnsureCtx();
-      if (!ctx) return null;
-      const i16 = new Int16Array(buf);
-      if (!i16.length) return null;
-      const ratio = PCM.rate / ctx.sampleRate;
-      const len = Math.max(1, Math.round(i16.length / ratio));
-      const out = ctx.createBuffer(1, len, ctx.sampleRate);
-      const ch = out.getChannelData(0);
-      for (let i = 0; i < len; i++) {
-        const s = i * ratio, i0 = s | 0, i1 = Math.min(i16.length - 1, i0 + 1), f = s - i0;
-        ch[i] = (i16[i0] * (1 - f) + i16[i1] * f) / 32768;
-      }
-      const src = ctx.createBufferSource();
-      src.buffer = out;
-      src.playbackRate.value = PCM.speed; // 语速旋钮：变速度也变排程时长
-      src.connect(ctx.destination);
-      const start = Math.max(ctx.currentTime + 0.02, PCM.cursor);
-      src.start(start);
-      PCM.cursor = start + out.duration / PCM.speed;
-      PCM.sources.push(src);
-      src.onended = () => { PCM.sources = PCM.sources.filter((x) => x !== src); };
-      return start;
-    }
-    function pcmStopAll() {
-      PCM.sources.forEach((s) => { try { s.stop(); } catch (err) { /* 已自然结束 */ } });
-      PCM.sources = [];
-      if (PCM.ctx) PCM.cursor = PCM.ctx.currentTime;
-    }
-    // 等本地队列播完（round_end 收束：音频放完才撤黄框）；60s 封顶防悬挂
-    function pcmDrained() {
-      if (!PCM.ctx) return Promise.resolve();
-      const wait = Math.max(0, Math.min(60000, (PCM.cursor - PCM.ctx.currentTime) * 1000));
-      return new Promise((r) => setTimeout(r, wait + 80));
-    }
+    // ---- TTS live 管线（P1 抽取：TTS_LIVE/PCM/ttsLive*/分句 原样迁至 /static/js/voice/）----
+    // 动态 import 在 IIFE 闭包内接线：沿用原符号名，既有调用点全部无感；
+    // 模块本身可在 node --test 用假 WebSocket/AudioContext 单测（tests/frontend/）。
+    // 模块就绪前给安全桩：failed=true → 有声轮走 HTTP 句队列回退、final 走
+    // 即时渲染——竞态窗口（页面打开~百毫秒）内不崩、可恢复，而非 TypeError。
+    let PCM = { ctx: null, cursor: 0, rate: 32000, sources: [], warnedSuspended: false, speed: 1.0 };
+    let TTS_LIVE = { ws: null, failed: true, pending: [], roundStarted: false, ended: true, curBytes: [], curChars: 0, pendingTexts: [], pcm: false, sentenceStart: null, firstAudioMarked: false, sentenceSamples: 0, pendingEnd: false, finalTakeover: false, chain: Promise.resolve(), roundDone: null };
+    let ttsLiveReset = () => {};
+    let ttsLiveRound = () => Promise.resolve();
+    let ttsLiveSay = () => {};
+    let ttsLiveSend = () => {};
+    let ttsLiveEndRound = () => Promise.resolve();
+    let killLiveWs = () => {};
+    let pcmEnsureCtx = () => null;
+    let pcmStopAll = () => {};
+    let pcmDrained = () => Promise.resolve();
+    let splitIntoSentences = (text) => (text.trim() ? [text.trim()] : []);
+    import('/static/js/voice/pcm.js')
+      .then((m) => import('/static/js/voice/live.js').then((lm) => import('/static/js/voice/sentences.js').then((sm) => {
+        const pcm = m.createPcm({
+          createContext: () => { try { const AC = window.AudioContext || window.webkitAudioContext; return AC ? new AC() : null; } catch (err) { return null; } },
+          getSpeed: () => { const v = parseFloat(localStorage.getItem('np_tts_speed') || ''); return v >= 0.8 && v <= 1.4 ? v : 1.0; },
+          debug: appendDebug,
+        });
+        PCM = pcm.state;
+        pcmEnsureCtx = pcm.ensureCtx; pcmStopAll = pcm.stopAll; pcmDrained = pcm.drained;
+        const live = lm.createTtsLive({
+          wsUrl: () => {
+            const proto = location.protocol === 'https:' ? 'wss' : 'ws';
+            const qs = AUTH_TOKEN ? '?token=' + encodeURIComponent(AUTH_TOKEN) : '';
+            return proto + '://' + location.host + '/v1/voice/tts/live' + qs;
+          },
+          debug: appendDebug,
+          pcm,
+          playBlob: playTtsBlob,
+          ui: {
+            getRound: () => LIVE_TEXT_ROUND,
+            appendRound: liveTextAppendRound,
+            turnMark,
+            turnTryReport,
+            resetShownChars: () => { LIVE_TEXT_SHOWN_CHARS = 0; },
+          },
+          fallbackToQueue: (texts) => {
+            const rest = texts.filter(Boolean);
+            if (rest.length && !TTS_QUEUE.aborted) {
+              TTS_QUEUE.items = TTS_QUEUE.items.concat(rest);
+              pumpTtsQueue();
+            }
+          },
+        });
+        TTS_LIVE = live.state;
+        ttsLiveReset = live.ttsLiveReset; ttsLiveRound = live.ttsLiveRound; ttsLiveSay = live.ttsLiveSay;
+        ttsLiveSend = live.ttsLiveSend; ttsLiveEndRound = live.ttsLiveEndRound; killLiveWs = live.killLiveWs;
+        splitIntoSentences = sm.splitIntoSentences;
+      })))
+      .catch((err) => appendDebug('voice modules load failed: ' + err.message));
 
     // 播一句（blob），resolve 于播放结束；带 iOS 打断超时看护。
     // speakText：该句文字在音频真实起播瞬间上屏（眼耳同步的挂点）
@@ -4435,205 +4395,6 @@
         audio.play().then(() => { turnMark('firstAudio'); turnTryReport(); liveTextAppend(speakText, 0, Math.max(700, blob.size * 0.125)); })
           .catch(() => { clearTimeout(watchdog); URL.revokeObjectURL(url); resolve(); });
       });
-    }
-
-    // 当前句音频攒齐（sentence_end）→ 入串行播放链（句间零空等）。
-    // 文本随播上屏：MiniMax 的分句边界与我们的 say 近似 1:1（LLM 句已短），
-    // 出队错位最坏是某句文字提前/延后一拍，final 会统一纠正。
-    function ttsLiveFlushSentence() {
-      if (!TTS_LIVE.curBytes.length) return;
-      const bytes = TTS_LIVE.curBytes;
-      const chars = TTS_LIVE.curChars;
-      const text = TTS_LIVE.pendingTexts.shift() || '';
-      TTS_LIVE.curBytes = []; TTS_LIVE.curChars = 0;
-      const blob = new Blob(bytes, { type: 'audio/mpeg' });
-      TTS_LIVE.chain = TTS_LIVE.chain.then(() => playTtsBlob(blob, chars, text));
-    }
-
-    async function ttsLiveEnsure() {
-      if (TTS_LIVE.ws && TTS_LIVE.ws.readyState === 1) return TTS_LIVE.ws;
-      const proto = location.protocol === 'https:' ? 'wss' : 'ws';
-      const qs = AUTH_TOKEN ? '?token=' + encodeURIComponent(AUTH_TOKEN) : '';
-      const ws = new WebSocket(proto + '://' + location.host + '/v1/voice/tts/live' + qs);
-      ws.binaryType = 'arraybuffer';
-      ws.onmessage = (e) => {
-        // 连接代次守卫：abort 后 MiniMax 取消生效前仍会泵出残余 PCM 块，
-        // 旧连接在途帧若入队就是"多条信息杂乱堆叠"的串音根因——一律作废
-        if (TTS_LIVE.ws && TTS_LIVE.ws !== ws) return;
-        // 二进制帧 = PCM 音频块（②协议）：直接入队，首块即排定起播
-        if (TTS_LIVE.pcm && e.data instanceof ArrayBuffer) {
-          TTS_LIVE.sentenceSamples += e.data.byteLength / 2; // s16le 单声道 → 样本数
-          const start = pcmFeed(e.data);
-          if (start != null) {
-            if (TTS_LIVE.sentenceStart == null) TTS_LIVE.sentenceStart = start; // 当前句的首块时刻
-            if (!TTS_LIVE.firstAudioMarked) {
-              TTS_LIVE.firstAudioMarked = true;
-              setTimeout(() => { turnMark('firstAudio'); turnTryReport(); },
-                Math.max(0, (start - PCM.ctx.currentTime) * 1000));
-            }
-          }
-          return;
-        }
-        let ev; try { ev = JSON.parse(e.data); } catch (err) { return; }
-        if (ev.type === 'ready') {
-          // 能力协商：服务端声明 PCM → 流式起播；否则维持 mp3-b64 整句旧路径
-          TTS_LIVE.pcm = !!(ev.audio && ev.audio.format === 'pcm');
-          if (ev.audio && ev.audio.sample_rate) PCM.rate = ev.audio.sample_rate;
-        } else if (ev.type === 'audio' && ev.b64) {
-          TTS_LIVE.curBytes.push(ttsHexToBytes(ev.b64));
-          TTS_LIVE.curChars += 4; // 粗略累加字数供播放看护估算
-        } else if (ev.type === 'sentence_end') {
-          if (TTS_LIVE.pcm) {
-            // 定稿接管后正式气泡负责铺字，live 字幕退场（只出队、清计数）
-            if (TTS_LIVE.finalTakeover) {
-              TTS_LIVE.pendingTexts.shift();
-              TTS_LIVE.sentenceStart = null; TTS_LIVE.sentenceSamples = 0;
-              return;
-            }
-            // 文字贴语音铺：reveal 总时长 = 该句 PCM 实际时长；该句音频起播
-            // 时刻若已过（合成快于实时、sentence_end 晚于起播），文字按已过
-            // 时间追平进度。leadMs>0 则等音频开场再开始铺。
-            const text = TTS_LIVE.pendingTexts.shift() || '';
-            const at = TTS_LIVE.sentenceStart;
-            const samples = TTS_LIVE.sentenceSamples;
-            TTS_LIVE.sentenceStart = null; TTS_LIVE.sentenceSamples = 0;
-            if (text) {
-              const durMs = Math.max(700, Math.min(9000, (samples / PCM.rate) * 1000 / PCM.speed));
-              const leadMs = (at != null && PCM.ctx) ? (at - PCM.ctx.currentTime) * 1000 : 0;
-              const round = LIVE_TEXT_ROUND;
-              if (leadMs > 20) {
-                setTimeout(() => liveTextAppendRound(round, text, 0, durMs), leadMs);
-              } else {
-                liveTextAppendRound(round, text, -leadMs, durMs);
-              }
-            }
-          } else {
-            ttsLiveFlushSentence();
-          }
-        } else if (ev.type === 'round_end') {
-          if (TTS_LIVE.pcm) {
-            TTS_LIVE.ws = null;
-            const done = TTS_LIVE.roundDone; TTS_LIVE.roundDone = null;
-            if (done) pcmDrained().then(done); // 队列播完才收黄框
-          } else {
-            ttsLiveFlushSentence();
-            TTS_LIVE.ws = null;
-            const done = TTS_LIVE.roundDone; TTS_LIVE.roundDone = null;
-            if (done) done();
-          }
-        } else if (ev.type === 'error') {
-          appendDebug('tts live: ' + (ev.detail || 'error'));
-          // 上游会话中断（配额/风控等）：剩余未获句尾事件的句子转投 HTTP 句
-          // 队列续读，后半段不再静默消失；本页 WS 通道本会话弃用
-          TTS_LIVE.failed = true;
-          const rest = TTS_LIVE.pending.splice(0).concat(TTS_LIVE.pendingTexts.splice(0));
-          if (rest.length && !TTS_QUEUE.aborted) {
-            TTS_QUEUE.items = TTS_QUEUE.items.concat(rest.filter(Boolean));
-            pumpTtsQueue();
-          }
-        }
-      };
-      ws.onclose = () => {
-        if (TTS_LIVE.ws && TTS_LIVE.ws !== ws) return; // 废弃连接的尾巴事件
-        // 连接中断：冲刷未完句，唤醒等待者（其上方 onmessage 已尽力收尾）
-        ttsLiveFlushSentence();
-        if (TTS_LIVE.ws === ws) TTS_LIVE.ws = null;
-        const done = TTS_LIVE.roundDone; TTS_LIVE.roundDone = null;
-        if (done) done();
-      };
-      await new Promise((resolve, reject) => {
-        ws.onopen = () => resolve();
-        ws.onerror = () => reject(new Error('ws open failed'));
-        setTimeout(() => reject(new Error('ws open timeout')), 5000);
-      });
-      TTS_LIVE.ws = ws;
-      return ws;
-    }
-
-    // 一轮朗读（全文）：say 全文 + end，MiniMax 原生攒句，音频按 sentence_end
-    // 渐进串播，round_end 后等播放链排空再 resolve（保证朗读完整）。
-    // 失败向上抛，由调用方回退 HTTP 句队列。
-    async function ttsLiveRound(text) {
-      // 新一轮：重置上一轮残留状态（ws 在 round_end 后已被服务端关闭）。
-      // revise 整轮不逐句上屏（MiniMax 分句 ≠ 我们的句），文字照旧等 final。
-      TTS_LIVE.pending = [];
-      TTS_LIVE.curBytes = []; TTS_LIVE.curChars = 0; TTS_LIVE.pendingTexts = [];
-      TTS_LIVE.sentenceStart = null; TTS_LIVE.firstAudioMarked = false; TTS_LIVE.sentenceSamples = 0;
-      TTS_LIVE.pendingEnd = false; TTS_LIVE.finalTakeover = false;
-      LIVE_TEXT_SHOWN_CHARS = 0; // revise 整轮重读：live 泡作废，字数预算清零
-      pcmStopAll();
-      TTS_LIVE.chain = Promise.resolve();
-      TTS_LIVE.roundStarted = true; TTS_LIVE.ended = true;
-      await ttsLiveEnsure();
-      ttsLiveSend({ type: 'say', text });
-      ttsLiveSend({ type: 'end' });
-      await new Promise((resolve) => {
-        TTS_LIVE.roundDone = () => { TTS_LIVE.chain.then(resolve); };
-      });
-    }
-
-    function ttsLiveSend(obj) {
-      if (TTS_LIVE.ws && TTS_LIVE.ws.readyState === 1) TTS_LIVE.ws.send(JSON.stringify(obj));
-    }
-
-    // 打断 = 断连弃用：abort 帧发出后立刻掐掉这条 WS——MiniMax 的 task_cancel
-    // 生效前残余音频仍会下发，留着连接就是下一轮开头串进上一轮尾巴的杂音。
-    function killLiveWs(ws) {
-      if (!ws) return;
-      try { ws.onmessage = ws.onclose = ws.onerror = null; ws.close(); } catch (err) { /* 已关 */ }
-      if (TTS_LIVE.ws === ws) TTS_LIVE.ws = null;
-    }
-
-    // LLM 流式句：直灌同一 WS 会话（say），播放由 sentence_end 驱动；
-    // ws 未就绪时排队 pending，就绪后 drain。不重置 curBytes——上一句的
-    // 尾部音频可能仍在途，冲刷只由服务端 sentence_end 事件触发。
-    function ttsLiveSay(text) {
-      TTS_LIVE.pending.push(text);
-      TTS_LIVE.pendingTexts.push(text);
-      TTS_LIVE.roundStarted = true;
-      if (TTS_LIVE.ws && TTS_LIVE.ws.readyState === 1) {
-        ttsLiveDrainPending();
-      } else if (!TTS_LIVE.failed) {
-        ttsLiveEnsure().then(ttsLiveDrainPending).catch(() => { TTS_LIVE.failed = true; pcmStopAll(); });
-      }
-    }
-
-    function ttsLiveDrainPending() {
-      while (TTS_LIVE.pending.length && TTS_LIVE.ws && TTS_LIVE.ws.readyState === 1) {
-        ttsLiveSend({ type: 'say', text: TTS_LIVE.pending.shift() });
-      }
-      // says 补发完后若有等待中的 end（握手期排队的），此刻一并送达
-      if (TTS_LIVE.pendingEnd && TTS_LIVE.ws && TTS_LIVE.ws.readyState === 1) {
-        TTS_LIVE.pendingEnd = false;
-        ttsLiveSend({ type: 'end' });
-      }
-    }
-
-    // 流式轮收轮：end + 等 round_end（此时 chain 里可能还有未播完的句，
-    // 等 chain 也结束再 resolve，保证朗读完整）
-    async function ttsLiveEndRound() {
-      TTS_LIVE.ended = true;
-      // 先 drain 任何 pending says 再发 end
-      ttsLiveDrainPending();
-      if (TTS_LIVE.ws && TTS_LIVE.ws.readyState === 1) {
-        ttsLiveSend({ type: 'end' });
-      } else {
-        // WS 还在握手（投机轮 18 句+final 同帧到达的常态时序）：end 排队等
-        // drain，绝不静默丢——丢了 MiniMax 不吐尾句音频、task_finished 不来，
-        // 表现为"朗读读到一半没了"（2026-09-10 四段例实证）
-        TTS_LIVE.pendingEnd = true;
-      }
-      // 等上游 round_end + 本地 chain 全播完；**硬上限 25s**——MiMo 免费期
-      // 上游偶发挂死会让服务器 round_end 迟到两分钟，黄框假死期间麦克风
-      // 一直被挂起（第二次说话录不进的根因链）。超时=掐队列强制收束。
-      await new Promise((resolve) => {
-        const timer = setTimeout(() => {
-          appendDebug('tts live: round timeout(25s), force finish');
-          resolve();
-        }, 25000);
-        TTS_LIVE.roundDone = () => { clearTimeout(timer); TTS_LIVE.chain.then(resolve); };
-      });
-      pcmStopAll(); // 正常完成=空操作（源已播完）；超时兜底=掐掉滞留队列
     }
 
     async function speakReply(reply, isCrisis) {
@@ -4674,26 +4435,6 @@
       }
       // 未配置服务端 TTS 的部署：浏览器合成是仅有的朗读手段
       speakWithBrowser(text);
-    }
-
-    // 客户端分句：句末标点优先，无标点长段按长度切（与服务端 respond_stream
-    // 的切分语义一致，阈值略宽——这里是朗读粒度不是渲染粒度）
-    function splitIntoSentences(text) {
-      const out = [];
-      let cur = '';
-      for (const ch of text) {
-        cur += ch;
-        const stripped = cur.trim();
-        if ('。！？；!?;\n'.includes(ch)) {
-          if (stripped) out.push(stripped);
-          cur = '';
-        } else if ('，、：, '.includes(ch) && stripped.length >= 40) {
-          out.push(stripped);
-          cur = '';
-        }
-      }
-      if (cur.trim()) out.push(cur.trim());
-      return out.filter(Boolean);
     }
 
     // 队列顺序播完（speakReply 专用）：不依赖免提状态机——打字轮（idle 态）
