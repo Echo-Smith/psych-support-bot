@@ -331,6 +331,82 @@ def test_synthesize_stream_mimo_sse(monkeypatch, tts_key) -> None:
     assert captured["payload"]["audio"]["format"] == "wav"
 
 
+def _mimo_tts_env(tts_key: str) -> None:
+    _configure(
+        tts_key=tts_key,
+        VOICE_TTS_PROVIDER="mimo",
+        VOICE_TTS_BASE_URL="",
+        VOICE_TTS_MODEL="",
+        VOICE_TTS_VOICE="",
+    )
+
+
+def _sse_body(chunks: list[bytes], *, done: bool = True) -> list[str]:
+    lines = [
+        'data: {"choices":[{"delta":{"audio":{"data":"' + base64.b64encode(c).decode() + '"}}}]}'
+        for c in chunks
+    ]
+    return lines + (["data: [DONE]"] if done else [])
+
+
+class _FakeSSEResponse:
+    """上下文管理器式的假 SSE 响应；lines 可为 str 或 Exception（迭代到该处抛出）。"""
+
+    status_code = 200
+
+    def __init__(self, lines: list):
+        self._lines = list(lines)
+
+    def iter_lines(self):
+        for item in self._lines:
+            if isinstance(item, Exception):
+                raise item
+            yield item
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *args):
+        return False
+
+
+def test_mimo_stream_midstream_failure_does_not_retry(monkeypatch, tts_key) -> None:
+    """已产出块后断流：直接抛错，不得整体重试（重试=调用方收到重复前缀，
+    live 路径表现为音频重复念开头；重复内容还会写进 TTS 缓存）。"""
+    _mimo_tts_env(tts_key)
+    calls = {"n": 0}
+
+    def fake_stream(method, url, **kwargs):
+        calls["n"] += 1
+        return _FakeSSEResponse(_sse_body([b"c1", b"c2"], done=False) + [httpx.ReadTimeout("dropped mid-stream")])
+
+    monkeypatch.setattr("psych_support_bot.infra.voice.adapter.httpx.stream", fake_stream)
+    monkeypatch.setattr("psych_support_bot.infra.voice.adapter.time.sleep", lambda s: None)
+    gen = synthesize_stream("慢慢来")
+    assert next(gen) == b"c1"
+    assert next(gen) == b"c2"
+    with pytest.raises(VoiceProviderError):
+        next(gen)
+    assert calls["n"] == 1  # 中途失败不发第二次请求
+
+
+def test_mimo_stream_pre_first_byte_failure_retries(monkeypatch, tts_key) -> None:
+    """首字节前失败（连接/打开阶段）：零产出，允许单次重试（原语义保留）。"""
+    _mimo_tts_env(tts_key)
+    calls = {"n": 0}
+
+    def fake_stream(method, url, **kwargs):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise httpx.ConnectError("conn refused")
+        return _FakeSSEResponse(_sse_body([b"c1"]))
+
+    monkeypatch.setattr("psych_support_bot.infra.voice.adapter.httpx.stream", fake_stream)
+    monkeypatch.setattr("psych_support_bot.infra.voice.adapter.time.sleep", lambda s: None)
+    assert list(synthesize_stream("慢慢来")) == [b"c1"]
+    assert calls["n"] == 2
+
+
 def test_tts_media_type_mimo_vs_others(tts_key) -> None:
     import psych_support_bot.infra.voice.adapter as _adapter
 

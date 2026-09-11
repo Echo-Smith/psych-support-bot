@@ -132,8 +132,9 @@ class TtsConfig:
 
 # MiMo（小米）OpenAI 兼容网关：TTS/ASR 都走 chat.completions
 _MIMO_BASE_URL = "https://api.xiaomimimo.com/v1"
-# 免费期上游偶发 429/5xx/挂起：单次退避重试的间隔与探测上限
-_MIMO_RETRY_BACKOFF = 0.8
+# 免费期上游偶发 429/5xx/挂起：单次退避重试的间隔与探测上限。
+# 全供应商统一（此前仅 MiMo 路径有重试，换供应商即不对称）。
+_UPSTREAM_RETRY_BACKOFF = 0.8
 
 
 def get_stt_config() -> SttConfig | None:
@@ -504,13 +505,13 @@ def _transcribe_mimo(config: SttConfig, audio_bytes: bytes, filename: str, langu
         except httpx.HTTPError as exc:
             last_error = VoiceProviderError(f"STT request failed: {exc}")
             if attempt == 0:
-                time.sleep(_MIMO_RETRY_BACKOFF)
+                time.sleep(_UPSTREAM_RETRY_BACKOFF)
                 continue
             raise last_error from exc
         if response.status_code == 429 or response.status_code >= 500:
             last_error = VoiceProviderError(f"STT upstream {response.status_code}")
             if attempt == 0:
-                time.sleep(_MIMO_RETRY_BACKOFF)
+                time.sleep(_UPSTREAM_RETRY_BACKOFF)
                 continue
             raise last_error
         break
@@ -637,8 +638,8 @@ def synthesize_stream(text: str, *, language: str = "") -> Iterator[bytes]:
     if cached is not None:
         yield cached
         return
+    chunks: list[bytes] = []
     if config.provider == "minimax":
-        chunks: list[bytes] = []
         for chunk in _minimax_stream(config, cleaned):
             chunks.append(chunk)
             yield chunk
@@ -647,8 +648,10 @@ def synthesize_stream(text: str, *, language: str = "") -> Iterator[bytes]:
         chunks = [audio]
         yield audio
     elif config.provider == "mimo":
-        chunks = list(_mimo_stream(config, cleaned, "wav"))
-        for chunk in chunks:
+        # 与 minimax 分支同构：边收边出（旧实现先 list() 全量物化再 yield，
+        # /speak/stream 的首字节退化成整句合成完才到，流式收益归零）
+        for chunk in _mimo_stream(config, cleaned, "wav"):
+            chunks.append(chunk)
             yield chunk
     else:
         raise VoiceNotConfigured(f"Unknown TTS provider: {config.provider}")
@@ -826,13 +829,13 @@ def _synthesize_mimo(config: TtsConfig, cleaned: str) -> bytes:
         except httpx.HTTPError as exc:
             last_error = VoiceProviderError(f"TTS request failed: {exc}")
             if attempt == 0:
-                time.sleep(_MIMO_RETRY_BACKOFF)
+                time.sleep(_UPSTREAM_RETRY_BACKOFF)
                 continue
             raise last_error from exc
         if response.status_code == 429 or response.status_code >= 500:
             last_error = VoiceProviderError(f"TTS upstream {response.status_code}")
             if attempt == 0:
-                time.sleep(_MIMO_RETRY_BACKOFF)
+                time.sleep(_UPSTREAM_RETRY_BACKOFF)
                 continue
             raise last_error
         break
@@ -863,6 +866,10 @@ def _mimo_stream(config: TtsConfig, cleaned: str, audio_format: str) -> Iterator
     payload = _mimo_tts_payload(config, cleaned, stream=True, audio_format=audio_format)
     last_error: VoiceProviderError | None = None
     for attempt in range(2):
+        # 本轮已产出的块数：yield 过之后再断流不得整体重试——重试会从头重发，
+        # 调用方收到重复前缀（live 路径=音频重复念开头，synthesize_stream=
+        # 重复内容写进缓存）。只有「零产出」的失败（连接/首字节前）才重试。
+        emitted = 0
         try:
             with httpx.stream(
                 "POST",
@@ -874,7 +881,7 @@ def _mimo_stream(config: TtsConfig, cleaned: str, audio_format: str) -> Iterator
                 if resp.status_code == 429 or resp.status_code >= 500:
                     last_error = VoiceProviderError(f"TTS upstream {resp.status_code}")
                     if attempt == 0:
-                        time.sleep(_MIMO_RETRY_BACKOFF)
+                        time.sleep(_UPSTREAM_RETRY_BACKOFF)
                         continue
                     raise last_error
                 if resp.status_code >= 400:
@@ -894,12 +901,13 @@ def _mimo_stream(config: TtsConfig, cleaned: str, audio_format: str) -> Iterator
                     delta = choices[0].get("delta") or {}
                     b64 = ((delta.get("audio") or {}).get("data")) or ""
                     if b64:
+                        emitted += 1
                         yield base64.b64decode(b64)
                 return
         except httpx.HTTPError as exc:
             last_error = VoiceProviderError(f"MiMo TTS stream failed: {exc}")
-            if attempt == 0:
-                time.sleep(_MIMO_RETRY_BACKOFF)
+            if attempt == 0 and emitted == 0:
+                time.sleep(_UPSTREAM_RETRY_BACKOFF)
                 continue
             raise last_error from exc
     raise last_error or VoiceProviderError("MiMo TTS stream failed")
