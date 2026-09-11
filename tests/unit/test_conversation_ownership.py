@@ -72,9 +72,7 @@ def test_guest_mode_respond_with_session_id_unaffected(monkeypatch) -> None:
 
     sid = f"guest-{uuid4().hex[:8]}"
     _seed_session(sid, "guest-owner")
-    monkeypatch.setattr(
-        ConversationService, "respond", lambda self, payload, session: _canned_response()
-    )
+    monkeypatch.setattr(ConversationService, "respond", lambda self, payload, session: _canned_response())
     resp = client.post("/v1/conversations/respond", json={"user_id": "anyone", "session_id": sid, "message": "好"})
     assert resp.status_code == 200
 

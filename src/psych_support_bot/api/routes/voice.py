@@ -13,6 +13,7 @@
 """
 
 import asyncio
+import contextlib
 import json
 import logging
 import threading
@@ -355,7 +356,7 @@ async def tts_live(websocket: WebSocket, token: str = Query(default="")):
     if settings.auth_enabled:
         try:
             decode_access_token(token)
-        except Exception:
+        except Exception:  # noqa: BLE001 —— 任何签发/解码/过期错误一律拒绝（fail-closed）
             await websocket.close(code=4401)
             return
 
@@ -387,7 +388,7 @@ async def tts_live(websocket: WebSocket, token: str = Query(default="")):
                 elif isinstance(msg, LiveAbort):
                     await text_q.put("__abort__")
                     return
-        except Exception:
+        except Exception:  # noqa: BLE001 —— 断连/坏帧不杀会话；finally 唤醒等待者
             pass
         finally:
             await text_q.put(None)
@@ -398,6 +399,11 @@ async def tts_live(websocket: WebSocket, token: str = Query(default="")):
         return
 
     import websockets as mm_lib
+
+    # 后台任务登记表：ensure_future 的 task 只被事件循环弱引用（RUF006），
+    # 且异常无人 await 会在 GC 时报 "Task exception was never retrieved"。
+    # finally 统一 cancel + 吞异常（终态下任务死于断连/上游关闭是常态）。
+    live_tasks: set[asyncio.Task] = set()
 
     try:
         async with mm_lib.connect(
@@ -442,6 +448,8 @@ async def tts_live(websocket: WebSocket, token: str = Query(default="")):
                 return
             # 客户端读取循环与上游音频泵并行：say 逐句喂入，音频块实时回推
             reader_task = asyncio.ensure_future(read_client())
+            live_tasks.add(reader_task)
+            reader_task.add_done_callback(live_tasks.discard)
 
             async def client_to_mm() -> None:
                 # 客户端句子 → MiniMax task_continue；end → task_finish；
@@ -460,6 +468,8 @@ async def tts_live(websocket: WebSocket, token: str = Query(default="")):
                     await mmws.send(json.dumps({"event": "task_continue", "text": item}))
 
             ct = asyncio.ensure_future(client_to_mm())
+            live_tasks.add(ct)
+            ct.add_done_callback(live_tasks.discard)
             while True:
                 raw = await asyncio.wait_for(mmws.recv(), timeout=_TTS_LIVE_UPSTREAM_RECV_TIMEOUT)
                 msg = json.loads(raw)
@@ -469,9 +479,7 @@ async def tts_live(websocket: WebSocket, token: str = Query(default="")):
                     logger.warning("TTS live upstream error %s: %s", status, base.get("status_msg"))
                     # 错误显式下发（round_end 前）：前端据此把剩余句子转投 HTTP
                     # 队列续读——上游半途故障不再表现为"音频静默消失"
-                    await _send_event(
-                        websocket, LiveError(detail=f"upstream {status}: {base.get('status_msg')}")
-                    )
+                    await _send_event(websocket, LiveError(detail=f"upstream {status}: {base.get('status_msg')}"))
                     await _send_event(websocket, LiveRoundEnd())
                     return
                 event = msg.get("event")
@@ -492,7 +500,10 @@ async def tts_live(websocket: WebSocket, token: str = Query(default="")):
     except Exception as exc:
         logger.warning("TTS live session ended: %s", exc, exc_info=True)
     finally:
-        try:
+        pending = list(live_tasks)
+        for task in pending:
+            task.cancel()
+        # 终态下任务死于断连/上游关闭是常态：吞掉取消与残余异常
+        await asyncio.gather(*pending, return_exceptions=True)
+        with contextlib.suppress(Exception):
             await websocket.close()
-        except Exception:
-            pass

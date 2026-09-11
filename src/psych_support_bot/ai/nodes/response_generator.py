@@ -176,27 +176,27 @@ def _generate_normal_reply(state: GraphState, risk_level: str, no_question_mode:
             )
             state["consultation_opinions"] = opinions
         else:
-            gen_kwargs = dict(
-                user_message=state["user_message"],
-                mode=state["mode"],
-                risk_level=state["risk_result"].risk_level,
-                memory_summary=state.get("memory_summary", ""),
-                knowledge_context=state.get("knowledge_context", ""),
-                consultation_required=False,
-                consultation_agents=[],
-                consultation_framework="",
-                interview_stage=state.get("interview_stage", "engagement"),
-                question_strategy=state.get("question_strategy", "open"),
-                challenge_allowed=bool(state.get("challenge_allowed", False)),
-                loop_hint=state.get("loop_hint", "Start broad, reflect, then narrow."),
-                expected_language=state.get("expected_language", ""),
-                no_question_mode=no_question_mode,
+            gen_kwargs = {
+                "user_message": state["user_message"],
+                "mode": state["mode"],
+                "risk_level": state["risk_result"].risk_level,
+                "memory_summary": state.get("memory_summary", ""),
+                "knowledge_context": state.get("knowledge_context", ""),
+                "consultation_required": False,
+                "consultation_agents": [],
+                "consultation_framework": "",
+                "interview_stage": state.get("interview_stage", "engagement"),
+                "question_strategy": state.get("question_strategy", "open"),
+                "challenge_allowed": bool(state.get("challenge_allowed", False)),
+                "loop_hint": state.get("loop_hint", "Start broad, reflect, then narrow."),
+                "expected_language": state.get("expected_language", ""),
+                "no_question_mode": no_question_mode,
                 # 复读事故（Langfuse 2026-09-02 c4fd09cc）的第二道防线：
                 # 生成时就明确告知上一轮已交付过内容，不要复述。
-                anti_repeat_note=_anti_repeat_note(),
-                emotional_state=state.get("emotional_state", ""),
-                history=[dict(turn) for turn in (state.get("recent_history") or [])],
-            )
+                "anti_repeat_note": _anti_repeat_note(),
+                "emotional_state": state.get("emotional_state", ""),
+                "history": [dict(turn) for turn in (state.get("recent_history") or [])],
+            }
             if state.get("stream_tokens"):
                 # 句子级流式：普通 LLM 路径逐块经 get_stream_writer 推 token，
                 # 供 /respond/stream SSE 消费喂 TTS。同时累积完整文本写入

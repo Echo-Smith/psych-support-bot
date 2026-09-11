@@ -93,13 +93,16 @@ def test_tts_live_ws_round(client, monkeypatch):
             if ev == "task_start":
                 self._out.append(_json.dumps({"event": "task_started", "base_resp": {"status_code": 0}}))
             elif ev == "task_continue":
-                self._out.append(_json.dumps({"data": {"audio": "abcd"}, "is_final": True, "base_resp": {"status_code": 0}}))
+                self._out.append(
+                    _json.dumps({"data": {"audio": "abcd"}, "is_final": True, "base_resp": {"status_code": 0}})
+                )
             elif ev == "task_finish":
                 self._out.append(_json.dumps({"event": "task_finished", "base_resp": {"status_code": 0}}))
 
         async def recv(self):
             # 真实 websockets.recv 会阻塞到有消息；空队列时轮询等待
             import asyncio as _a
+
             for _ in range(200):
                 if self._out:
                     return self._out.pop(0)
@@ -113,6 +116,7 @@ def test_tts_live_ws_round(client, monkeypatch):
             return None
 
     import websockets
+
     monkeypatch.setattr(websockets, "connect", lambda *a, **k: FakeMM())
 
     with client.websocket_connect("/v1/voice/tts/live") as ws:

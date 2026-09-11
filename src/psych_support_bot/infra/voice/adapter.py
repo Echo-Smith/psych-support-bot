@@ -428,9 +428,7 @@ def _transcribe_dots(config: SttConfig, audio_bytes: bytes, filename: str, langu
     prompt = _stt_prompt_for(config, language)
     if prompt:
         instruction += (
-            f" The speaker may use these terms: {prompt}."
-            if language == "en"
-            else f"讲话者可能用到这些词：{prompt}。"
+            f" The speaker may use these terms: {prompt}." if language == "en" else f"讲话者可能用到这些词：{prompt}。"
         )
     payload = {
         "model": config.model,
@@ -778,7 +776,7 @@ def _minimax_stream(config: TtsConfig, cleaned: str) -> Iterator[bytes]:
     def _worker() -> None:
         try:
             asyncio.run(_run_minimax_session(config, cleaned, q.put))
-        except BaseException as exc:  # 线程边界：异常作为队列结果上抛
+        except BaseException as exc:  # noqa: BLE001 —— 线程边界：CancelledError/SystemExit 也须装进队列交主线程
             q.put(exc)
         finally:
             q.put(None)

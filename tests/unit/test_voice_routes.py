@@ -445,9 +445,7 @@ def test_tts_live_mimo_protocol(client, monkeypatch):
     from psych_support_bot.infra.config.settings import get_settings
 
     get_settings.cache_clear()
-    monkeypatch.setattr(
-        voice_routes, "_mimo_stream", lambda config, text, fmt: iter([b"\x01\x02", b"\x03\x04"])
-    )
+    monkeypatch.setattr(voice_routes, "_mimo_stream", lambda config, text, fmt: iter([b"\x01\x02", b"\x03\x04"]))
 
     with client.websocket_connect("/v1/voice/tts/live") as ws:
         ready = ws.receive_json()

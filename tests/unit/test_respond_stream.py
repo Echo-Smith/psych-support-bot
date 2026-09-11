@@ -19,7 +19,6 @@ from psych_support_bot.services.conversation import (
     conversation_service,
 )
 
-
 # ---------------------------------------------------------------------------
 # 句子切分器
 # ---------------------------------------------------------------------------
@@ -127,16 +126,24 @@ def _stream_env(monkeypatch):
     return saved
 
 
-from psych_support_bot.services.conversation import ConversationService  # noqa: E402
+from psych_support_bot.services.conversation import ConversationService
 
 
 def test_respond_stream_emits_sentences_and_final(monkeypatch, _stream_env) -> None:
     final_state = _done_state("嗯，我听到了。慢慢来，我陪你。")
     monkeypatch.setattr(
         "psych_support_bot.services.conversation.conversation_graph",
-        type("G", (), {"stream": staticmethod(lambda state, stream_mode: _graph_stream_events(
-            ["嗯，我听到了。", "慢慢来，", "我陪你。"], final_state
-        ))})(),
+        type(
+            "G",
+            (),
+            {
+                "stream": staticmethod(
+                    lambda state, stream_mode: _graph_stream_events(
+                        ["嗯，我听到了。", "慢慢来，", "我陪你。"], final_state
+                    )
+                )
+            },
+        )(),
     )
     payload = ConversationRequest(user_id="u1", message="我心里有点乱")
     events = list(conversation_service.respond_stream(payload, session=cast(Any, object())))
@@ -156,20 +163,31 @@ def test_respond_stream_revise_on_reviewer_diff(monkeypatch, _stream_env) -> Non
     final_state = _done_state("我会陪着你，慢慢来。")
     monkeypatch.setattr(
         "psych_support_bot.services.conversation.conversation_graph",
-        type("G", (), {"stream": staticmethod(lambda state, stream_mode: _graph_stream_events(
-            ["你得了抑郁症。", "我会陪着你，慢慢来。"], final_state
-        ))})(),
+        type(
+            "G",
+            (),
+            {
+                "stream": staticmethod(
+                    lambda state, stream_mode: _graph_stream_events(
+                        ["你得了抑郁症。", "我会陪着你，慢慢来。"], final_state
+                    )
+                )
+            },
+        )(),
     )
     payload = ConversationRequest(user_id="u1", message="我心里有点乱")
     events = list(conversation_service.respond_stream(payload, session=cast(Any, object())))
     types = [e["type"] for e in events]
     # 红线句被逐句扫描拦下（无 sentence 事件）；最终文本与朗读内容一致 → 无 revise
-    assert "sentence" not in types[:2] or all("抑郁症" not in e.get("text", "") for e in events if e["type"] == "sentence")
+    assert "sentence" not in types[:2] or all(
+        "抑郁症" not in e.get("text", "") for e in events if e["type"] == "sentence"
+    )
     assert types[-1] == "final"
 
 
 def test_respond_stream_graph_failure_falls_back(monkeypatch, _stream_env) -> None:
     """图流失败 → 回退非流式 respond（未持久化过，无重复副作用）。"""
+
     def broken_stream(state, stream_mode):
         raise RuntimeError("graph boom")
         yield  # pragma: no cover

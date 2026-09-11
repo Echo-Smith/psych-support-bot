@@ -26,9 +26,7 @@ from psych_support_bot.services.conversation import conversation_service
 router = APIRouter(prefix="/v1/conversations", tags=["conversations"])
 
 
-def _verify_session_ownership(
-    payload: ConversationRequest, request: Request, session: Session
-) -> None:
+def _verify_session_ownership(payload: ConversationRequest, request: Request, session: Session) -> None:
     """认证开启时校验客户端自报 session_id 的归属（Mimosa scan-c02b1f85311d 修复）。
 
     respond 允许客户端自带 session_id 续聊，历史消息原文会进 LLM 上下文——

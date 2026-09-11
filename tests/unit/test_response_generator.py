@@ -2,7 +2,8 @@ import time
 from typing import cast
 
 from psych_support_bot.ai.nodes.response_generator import generate_response
-from psych_support_bot.ai.schemas.messages import (    ConversationMode,
+from psych_support_bot.ai.schemas.messages import (
+    ConversationMode,
     GeneratedReply,
     RiskLevel,
     RiskResult,

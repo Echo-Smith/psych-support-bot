@@ -4,12 +4,12 @@ from typing import cast
 
 from psych_support_bot.ai.nodes.safety_reviewer import (
     _detect_challenge,
-    scan_sentence_speakable,
     _detect_redline,
     _fallback_text,
     _sanitize_challenge,
     _sanitize_text,
     review_response,
+    scan_sentence_speakable,
 )
 from psych_support_bot.ai.schemas.messages import (
     GeneratedReply,

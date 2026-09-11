@@ -69,8 +69,8 @@ logger = logging.getLogger(__name__)
 # 无句末标点但已攒够长度时按软标点兜底切，避免首句迟迟不出声。
 _SENTENCE_END = "。！？；!?;\n"
 _SENTENCE_SOFT = "，、：,: "
-_FIRST_SENTENCE_MIN = 14   # 首句兜底切阈值（字）——首句越短，整句合成越早完成、首响越快
-_LATER_SENTENCE_MIN = 56   # 后续句兜底切阈值——句更长→边界更少，句间空隙不增
+_FIRST_SENTENCE_MIN = 14  # 首句兜底切阈值（字）——首句越短，整句合成越早完成、首响越快
+_LATER_SENTENCE_MIN = 56  # 后续句兜底切阈值——句更长→边界更少，句间空隙不增
 
 
 def _split_complete_sentences(buffer: str, *, first: bool) -> tuple[list[str], str]:
@@ -248,9 +248,7 @@ class ConversationService:
             response.debug["practice_action"] = action
             response.debug["practice_step"] = practice.get("step")
 
-    def _build_state(
-        self, payload: ConversationRequest, session: Session
-    ) -> tuple[GraphState, str, str]:
+    def _build_state(self, payload: ConversationRequest, session: Session) -> tuple[GraphState, str, str]:
         """从 DB 重建本轮 GraphState（respond 与 respond_stream 共用）。
 
         返回 (state, session_id, expected_language)。
@@ -444,9 +442,7 @@ class ConversationService:
         result: GraphState = cast(GraphState, raw_result)
         return self._finalize(result, payload, session, session_id)
 
-    def respond_stream(
-        self, payload: ConversationRequest, session: Session
-    ) -> Iterator[dict[str, Any]]:
+    def respond_stream(self, payload: ConversationRequest, session: Session) -> Iterator[dict[str, Any]]:
         """LLM→TTS 句子级流式：产出 {type: sentence|revise|final} 事件序列。
 
         仅常规 support 普通 LLM 路径流式（response_generator 经 get_stream_writer
@@ -474,9 +470,7 @@ class ConversationService:
         spoken: list[str] = []
         final_state: GraphState | None = None
         try:
-            for mode, chunk in conversation_graph.stream(
-                cast(Any, state), stream_mode=["custom", "values"]
-            ):
+            for mode, chunk in conversation_graph.stream(cast(Any, state), stream_mode=["custom", "values"]):
                 if mode == "custom":
                     text = chunk.get("text", "") if isinstance(chunk, dict) else ""
                     if not text:

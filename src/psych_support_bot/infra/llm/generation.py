@@ -539,9 +539,19 @@ def generate_clinically_bounded_reply(
     history: list[dict[str, str]] | None = None,
 ) -> str:
     system_prompt, user_context, expected_language = _build_reply_prompt(
-        user_message, mode, risk_level, memory_summary, knowledge_context,
-        interview_stage, question_strategy, challenge_allowed, loop_hint,
-        expected_language, no_question_mode, anti_repeat_note, emotional_state,
+        user_message,
+        mode,
+        risk_level,
+        memory_summary,
+        knowledge_context,
+        interview_stage,
+        question_strategy,
+        challenge_allowed,
+        loop_hint,
+        expected_language,
+        no_question_mode,
+        anti_repeat_note,
+        emotional_state,
     )
     return _invoke(
         system_prompt,
@@ -576,9 +586,19 @@ async def generate_clinically_bounded_reply_stream(
     全文事后审）；瞬时错误直接抛出，由调用方回退到非流式 /respond。
     """
     system_prompt, user_context, expected_language = _build_reply_prompt(
-        user_message, mode, risk_level, memory_summary, knowledge_context,
-        interview_stage, question_strategy, challenge_allowed, loop_hint,
-        expected_language, no_question_mode, anti_repeat_note, emotional_state,
+        user_message,
+        mode,
+        risk_level,
+        memory_summary,
+        knowledge_context,
+        interview_stage,
+        question_strategy,
+        challenge_allowed,
+        loop_hint,
+        expected_language,
+        no_question_mode,
+        anti_repeat_note,
+        emotional_state,
     )
     model = build_chat_model(temperature=get_temperature_for_mode(mode), mode=mode)
     messages = _build_reply_messages(system_prompt, user_message, user_context, history)
@@ -620,9 +640,19 @@ def generate_clinically_bounded_reply_stream_sync(
     语言强制/完整 safety_reviewer 由调用方在全文收齐后施加。
     """
     system_prompt, user_context, expected_language = _build_reply_prompt(
-        user_message, mode, risk_level, memory_summary, knowledge_context,
-        interview_stage, question_strategy, challenge_allowed, loop_hint,
-        expected_language, no_question_mode, anti_repeat_note, emotional_state,
+        user_message,
+        mode,
+        risk_level,
+        memory_summary,
+        knowledge_context,
+        interview_stage,
+        question_strategy,
+        challenge_allowed,
+        loop_hint,
+        expected_language,
+        no_question_mode,
+        anti_repeat_note,
+        emotional_state,
     )
     model = build_chat_model(temperature=get_temperature_for_mode(mode), mode=mode)
     messages = _build_reply_messages(system_prompt, user_message, user_context, history)

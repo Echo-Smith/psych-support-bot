@@ -342,10 +342,7 @@ def _mimo_tts_env(tts_key: str) -> None:
 
 
 def _sse_body(chunks: list[bytes], *, done: bool = True) -> list[str]:
-    lines = [
-        'data: {"choices":[{"delta":{"audio":{"data":"' + base64.b64encode(c).decode() + '"}}}]}'
-        for c in chunks
-    ]
+    lines = ['data: {"choices":[{"delta":{"audio":{"data":"' + base64.b64encode(c).decode() + '"}}}]}' for c in chunks]
     return lines + (["data: [DONE]"] if done else [])
 
 
@@ -378,7 +375,7 @@ def test_mimo_stream_midstream_failure_does_not_retry(monkeypatch, tts_key) -> N
 
     def fake_stream(method, url, **kwargs):
         calls["n"] += 1
-        return _FakeSSEResponse(_sse_body([b"c1", b"c2"], done=False) + [httpx.ReadTimeout("dropped mid-stream")])
+        return _FakeSSEResponse([*_sse_body([b"c1", b"c2"], done=False), httpx.ReadTimeout("dropped mid-stream")])
 
     monkeypatch.setattr("psych_support_bot.infra.voice.adapter._client.stream", fake_stream)
     monkeypatch.setattr("psych_support_bot.infra.voice.adapter.time.sleep", lambda s: None)

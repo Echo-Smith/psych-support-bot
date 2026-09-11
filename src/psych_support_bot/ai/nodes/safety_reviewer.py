@@ -502,9 +502,7 @@ def _detect_redline(text: str) -> bool:
     return any(p.search(text) for p in _ALL_REDLINED_REGEX)
 
 
-def scan_sentence_speakable(
-    text: str, *, challenge_allowed: bool = False, expected_language: str = ""
-) -> bool:
+def scan_sentence_speakable(text: str, *, challenge_allowed: bool = False, expected_language: str = "") -> bool:
     """句子级安全扫描：该句能否在全文审查完成前安全朗读（流式 TTS 用）。
 
     复用与全文审查完全同源的纯规则（LEAK_MARKERS / vendor / redline /
@@ -523,9 +521,7 @@ def scan_sentence_speakable(
         return False
     # 内部临床脚手架标签（观察/形成/…）：整段会被清洗，句子含标签则不抢跑朗读
     _, had_labels = _sanitize_internal_labels(text)
-    if had_labels:
-        return False
-    return True
+    return not had_labels
 
 
 def review_response(state: GraphState) -> GraphState:
