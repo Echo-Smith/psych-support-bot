@@ -450,12 +450,34 @@ def test_transcribe_unconfigured_raises_not_configured() -> None:
 
 def test_transcribe_openai_upstream_error(stt_key, monkeypatch) -> None:
     _configure(stt_key=stt_key)
-    monkeypatch.setattr(
-        "psych_support_bot.infra.voice.adapter.httpx.post",
-        lambda url, **kw: httpx.Response(500, request=httpx.Request("POST", url)),
-    )
+    calls = {"n": 0}
+
+    def fake_post(url, **kw):
+        calls["n"] += 1
+        return httpx.Response(500, request=httpx.Request("POST", url))
+
+    monkeypatch.setattr("psych_support_bot.infra.voice.adapter.httpx.post", fake_post)
+    monkeypatch.setattr("psych_support_bot.infra.voice.adapter.time.sleep", lambda s: None)
     with pytest.raises(VoiceProviderError):
         transcribe(b"audio", "a.webm")
+    assert calls["n"] == 2  # 5xx 属瞬时失败：单次退避重试后仍失败才抛
+
+
+def test_transcribe_openai_retries_on_5xx(monkeypatch, stt_key) -> None:
+    """重试策略全供应商统一：openai STT 5xx 也走单次退避重试（此前仅 MiMo 有）。"""
+    _configure(stt_key=stt_key)
+    calls = {"n": 0}
+
+    def fake_post(url, **kw):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            return httpx.Response(502, request=httpx.Request("POST", url))
+        return httpx.Response(200, json={"text": "恢复了"}, request=httpx.Request("POST", url))
+
+    monkeypatch.setattr("psych_support_bot.infra.voice.adapter.httpx.post", fake_post)
+    monkeypatch.setattr("psych_support_bot.infra.voice.adapter.time.sleep", lambda s: None)
+    assert transcribe(b"audio", "a.webm") == "恢复了"
+    assert calls["n"] == 2
 
 
 def test_transcribe_minimax_success(monkeypatch, tts_key) -> None:
@@ -583,6 +605,7 @@ def test_transcribe_dots_upstream_error(monkeypatch, dots_key) -> None:
         return httpx.Response(502, request=httpx.Request("POST", url))
 
     monkeypatch.setattr("psych_support_bot.infra.voice.adapter.httpx.post", fake_post)
+    monkeypatch.setattr("psych_support_bot.infra.voice.adapter.time.sleep", lambda s: None)
     with pytest.raises(VoiceProviderError):
         transcribe(b"audio-bytes", "a.webm")
 
@@ -760,11 +783,12 @@ def test_tts_cache_does_not_cache_errors(monkeypatch, tts_key) -> None:
         return httpx.Response(500, request=httpx.Request("POST", url))
 
     monkeypatch.setattr("psych_support_bot.infra.voice.adapter.httpx.post", fake_post)
+    monkeypatch.setattr("psych_support_bot.infra.voice.adapter.time.sleep", lambda s: None)
     with pytest.raises(VoiceProviderError):
         synthesize("你好")
     with pytest.raises(VoiceProviderError):
         synthesize("你好")
-    assert calls["n"] == 2  # 失败不缓存，每次照打
+    assert calls["n"] == 4  # 失败不缓存，每次照打（5xx 含单次重试：2×2）
 
 
 def test_tts_cache_lru_eviction(monkeypatch, tts_key) -> None:

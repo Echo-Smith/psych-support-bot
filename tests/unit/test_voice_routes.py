@@ -228,6 +228,7 @@ def test_stt_fail_streak_sets_degraded_then_recovers(client, monkeypatch):
     _configure_openai_stt(monkeypatch)
     fail = lambda url, **kw: httpx.Response(500, request=httpx.Request("POST", url))
     monkeypatch.setattr("psych_support_bot.infra.voice.adapter.httpx.post", fail)
+    monkeypatch.setattr("psych_support_bot.infra.voice.adapter.time.sleep", lambda s: None)  # 跳过 5xx 退避
     for _ in range(3):
         assert (
             client.post("/v1/voice/transcribe", files={"file": ("a.webm", b"audio", "audio/webm")}).status_code == 502
@@ -251,6 +252,7 @@ def test_stt_fail_below_threshold_not_degraded(client, monkeypatch):
         "psych_support_bot.infra.voice.adapter.httpx.post",
         lambda url, **kw: httpx.Response(500, request=httpx.Request("POST", url)),
     )
+    monkeypatch.setattr("psych_support_bot.infra.voice.adapter.time.sleep", lambda s: None)  # 跳过 5xx 退避
     for _ in range(2):  # 未达阈值 3
         assert (
             client.post("/v1/voice/transcribe", files={"file": ("a.webm", b"audio", "audio/webm")}).status_code == 502

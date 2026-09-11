@@ -47,6 +47,48 @@ MAX_AUDIO_BYTES = 25 * 1024 * 1024
 _REQUEST_TIMEOUT = 60.0
 
 
+def _post_with_retry(
+    kind: str,
+    url: str,
+    *,
+    headers: dict[str, str],
+    json: dict | None = None,
+    files: dict | None = None,
+    data: dict | None = None,
+    timeout: float = _REQUEST_TIMEOUT,
+) -> httpx.Response:
+    """统一上游 POST：429/5xx/网络错误退避单次重试，其余 4xx 直接抛。
+
+    免费期上游偶发 429/5xx/挂起（MiMo 实测高发），重试策略对全部供应商
+    一致——此前只有 MiMo 路径有，换供应商即不对称。注意：仅适用于
+    「响应式」请求；流式请求（_mimo_stream）失败后不得整体重试（已产出
+    块会重复），自行守恒。
+    消息前缀 kind（"STT"/"TTS"）沿用各家原文案：重试耗尽为
+    "{kind} upstream {code}"，非重试 4xx 为 "{kind} upstream error {code}"，
+    网络错误为 "{kind} request failed: {exc}"。
+    """
+    last_error: VoiceProviderError | None = None
+    for attempt in range(2):
+        try:
+            response = httpx.post(url, headers=headers, json=json, files=files, data=data, timeout=timeout)
+        except httpx.HTTPError as exc:
+            last_error = VoiceProviderError(f"{kind} request failed: {exc}")
+            if attempt == 0:
+                time.sleep(_UPSTREAM_RETRY_BACKOFF)
+                continue
+            raise last_error from exc
+        if response.status_code == 429 or response.status_code >= 500:
+            last_error = VoiceProviderError(f"{kind} upstream {response.status_code}")
+            if attempt == 0:
+                time.sleep(_UPSTREAM_RETRY_BACKOFF)
+                continue
+            raise last_error
+        if response.status_code >= 400:
+            raise VoiceProviderError(f"{kind} upstream error {response.status_code}")
+        return response
+    raise last_error or VoiceProviderError(f"{kind} request failed")
+
+
 class VoiceNotConfigured(Exception):
     """所需语音端点未配置（路由层转 503，前端降级）。"""
 
@@ -325,18 +367,13 @@ def _transcribe_openai(config: SttConfig, audio_bytes: bytes, filename: str, lan
     prompt = _stt_prompt_for(config, language)
     if prompt:
         data["prompt"] = prompt
-    try:
-        response = httpx.post(
-            f"{config.base_url}/audio/transcriptions",
-            headers={"Authorization": f"Bearer {config.api_key}"},
-            files={"file": (filename, audio_bytes)},
-            data=data,
-            timeout=_REQUEST_TIMEOUT,
-        )
-    except httpx.HTTPError as exc:
-        raise VoiceProviderError(f"STT request failed: {exc}") from exc
-    if response.status_code >= 400:
-        raise VoiceProviderError(f"STT upstream error {response.status_code}")
+    response = _post_with_retry(
+        "STT",
+        f"{config.base_url}/audio/transcriptions",
+        headers={"Authorization": f"Bearer {config.api_key}"},
+        files={"file": (filename, audio_bytes)},
+        data=data,
+    )
     try:
         text = (response.json() or {}).get("text", "")
     except ValueError as exc:
@@ -410,17 +447,12 @@ def _transcribe_dots(config: SttConfig, audio_bytes: bytes, filename: str, langu
         # 思考已关：纯转写文本预算足够（旧值 1024 是给共享思考留的）
         "max_tokens": 512,
     }
-    try:
-        response = httpx.post(
-            f"{config.base_url}/chat/completions",
-            headers={"Content-Type": "application/json", "api-key": config.api_key},
-            json=payload,
-            timeout=_REQUEST_TIMEOUT,
-        )
-    except httpx.HTTPError as exc:
-        raise VoiceProviderError(f"STT request failed: {exc}") from exc
-    if response.status_code >= 400:
-        raise VoiceProviderError(f"STT upstream error {response.status_code}")
+    response = _post_with_retry(
+        "STT",
+        f"{config.base_url}/chat/completions",
+        headers={"Content-Type": "application/json", "api-key": config.api_key},
+        json=payload,
+    )
     try:
         choices = response.json().get("choices") or []
         text = ((choices[0].get("message") or {}).get("content") or "").strip() if choices else ""
@@ -446,18 +478,13 @@ def _transcribe_minimax(config: SttConfig, audio_bytes: bytes, filename: str, la
     language = language_hint or config.language
     if language:
         data["language"] = language
-    try:
-        response = httpx.post(
-            f"{config.base_url}/speech_to_text",
-            headers={"Authorization": f"Bearer {config.api_key}"},
-            files={"file": (filename, audio_bytes)},
-            data=data,
-            timeout=_REQUEST_TIMEOUT,
-        )
-    except httpx.HTTPError as exc:
-        raise VoiceProviderError(f"STT request failed: {exc}") from exc
-    if response.status_code >= 400:
-        raise VoiceProviderError(f"STT upstream error {response.status_code}")
+    response = _post_with_retry(
+        "STT",
+        f"{config.base_url}/speech_to_text",
+        headers={"Authorization": f"Bearer {config.api_key}"},
+        files={"file": (filename, audio_bytes)},
+        data=data,
+    )
     try:
         body = response.json() or {}
     except ValueError as exc:
@@ -492,31 +519,12 @@ def _transcribe_mimo(config: SttConfig, audio_bytes: bytes, filename: str, langu
     language = (language_hint or config.language or "").strip()
     if language in {"zh", "en"}:
         payload["asr_options"] = {"language": language}
-    response = None
-    last_error: VoiceProviderError | None = None
-    for attempt in range(2):
-        try:
-            response = httpx.post(
-                f"{config.base_url}/chat/completions",
-                headers={"Authorization": f"Bearer {config.api_key}"},
-                json=payload,
-                timeout=_REQUEST_TIMEOUT,
-            )
-        except httpx.HTTPError as exc:
-            last_error = VoiceProviderError(f"STT request failed: {exc}")
-            if attempt == 0:
-                time.sleep(_UPSTREAM_RETRY_BACKOFF)
-                continue
-            raise last_error from exc
-        if response.status_code == 429 or response.status_code >= 500:
-            last_error = VoiceProviderError(f"STT upstream {response.status_code}")
-            if attempt == 0:
-                time.sleep(_UPSTREAM_RETRY_BACKOFF)
-                continue
-            raise last_error
-        break
-    if response is None or response.status_code >= 400:
-        raise last_error or VoiceProviderError(f"STT upstream error {response.status_code if response else 'n/a'}")
+    response = _post_with_retry(
+        "STT",
+        f"{config.base_url}/chat/completions",
+        headers={"Authorization": f"Bearer {config.api_key}"},
+        json=payload,
+    )
     try:
         choices = response.json().get("choices") or []
         text = ((choices[0].get("message") or {}).get("content") or "").strip() if choices else ""
@@ -659,23 +667,18 @@ def synthesize_stream(text: str, *, language: str = "") -> Iterator[bytes]:
 
 
 def _synthesize_openai(config: TtsConfig, cleaned: str) -> bytes:
-    try:
-        response = httpx.post(
-            f"{config.base_url}/audio/speech",
-            headers={"Authorization": f"Bearer {config.api_key}"},
-            json={
-                "model": config.model,
-                "voice": config.voice,
-                "input": cleaned,
-                "response_format": "mp3",
-                "speed": 1.05,
-            },
-            timeout=_REQUEST_TIMEOUT,
-        )
-    except httpx.HTTPError as exc:
-        raise VoiceProviderError(f"TTS request failed: {exc}") from exc
-    if response.status_code >= 400:
-        raise VoiceProviderError(f"TTS upstream error {response.status_code}")
+    response = _post_with_retry(
+        "TTS",
+        f"{config.base_url}/audio/speech",
+        headers={"Authorization": f"Bearer {config.api_key}"},
+        json={
+            "model": config.model,
+            "voice": config.voice,
+            "input": cleaned,
+            "response_format": "mp3",
+            "speed": 1.05,
+        },
+    )
     audio = response.content or b""
     if not audio:
         raise VoiceProviderError("TTS upstream returned empty audio")
@@ -816,31 +819,12 @@ def _mimo_tts_payload(config: TtsConfig, text: str, *, stream: bool, audio_forma
 
 def _synthesize_mimo(config: TtsConfig, cleaned: str) -> bytes:
     """MiMo TTS 整段（wav 24kHz）：非流式一次取回，message.audio.data 为 base64。"""
-    response = None
-    last_error: VoiceProviderError | None = None
-    for attempt in range(2):
-        try:
-            response = httpx.post(
-                f"{config.base_url}/chat/completions",
-                headers={"Authorization": f"Bearer {config.api_key}"},
-                json=_mimo_tts_payload(config, cleaned, stream=False, audio_format="wav"),
-                timeout=_REQUEST_TIMEOUT,
-            )
-        except httpx.HTTPError as exc:
-            last_error = VoiceProviderError(f"TTS request failed: {exc}")
-            if attempt == 0:
-                time.sleep(_UPSTREAM_RETRY_BACKOFF)
-                continue
-            raise last_error from exc
-        if response.status_code == 429 or response.status_code >= 500:
-            last_error = VoiceProviderError(f"TTS upstream {response.status_code}")
-            if attempt == 0:
-                time.sleep(_UPSTREAM_RETRY_BACKOFF)
-                continue
-            raise last_error
-        break
-    if response is None or response.status_code >= 400:
-        raise last_error or VoiceProviderError(f"TTS upstream error {response.status_code if response else 'n/a'}")
+    response = _post_with_retry(
+        "TTS",
+        f"{config.base_url}/chat/completions",
+        headers={"Authorization": f"Bearer {config.api_key}"},
+        json=_mimo_tts_payload(config, cleaned, stream=False, audio_format="wav"),
+    )
     try:
         choices = response.json().get("choices") or []
         msg = (choices[0].get("message") or {}) if choices else {}
