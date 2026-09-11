@@ -17,6 +17,9 @@ export function createTtsLive(deps) {
     setTimeout: (...a) => setTimeout(...a),
     clearTimeout: (...a) => clearTimeout(...a),
   };
+  // 注入 WS 构造器：浏览器用原生 WebSocket；node 环境恰好也有全局 WebSocket
+  // （undici，会真联网），测试必须显式给假的。
+  const WebSocketCtor = deps.WebSocket || globalThis.WebSocket;
   const roundTimeoutMs = deps.roundTimeoutMs || ROUND_TIMEOUT_MS;
 
   const TTS_LIVE = {
@@ -60,7 +63,7 @@ export function createTtsLive(deps) {
 
   async function ttsLiveEnsure() {
     if (TTS_LIVE.ws && TTS_LIVE.ws.readyState === 1) return TTS_LIVE.ws;
-    const ws = new WebSocket(wsUrl());
+    const ws = new WebSocketCtor(wsUrl());
     ws.binaryType = 'arraybuffer';
     ws.onmessage = (e) => {
       // 连接代次守卫：abort 后 MiniMax 取消生效前仍会泵出残余 PCM 块，

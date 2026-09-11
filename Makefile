@@ -1,4 +1,4 @@
-.PHONY: setup dev test test-unit test-integration test-eval lint format migrate migrate-new db-reset serve deploy clean help
+.PHONY: setup dev test test-unit test-integration test-eval test-frontend lint format migrate migrate-new db-reset serve deploy clean help
 
 PY := uv run
 PORT ?= 8000
@@ -31,6 +31,9 @@ test-integration: ## 仅运行集成测试
 
 test-eval: ## 仅运行安全评估测试
 	$(PY) pytest tests/evals/ -v
+
+test-frontend: ## 前端语音模块特征测试（node --test，零依赖）
+	node --test tests/frontend/
 
 lint: ## 代码风格检查（ruff）
 	$(PY) ruff check src/ tests/
