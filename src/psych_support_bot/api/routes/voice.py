@@ -22,7 +22,7 @@ from typing import Any
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, UploadFile, WebSocket, WebSocketDisconnect
 from fastapi.responses import Response, StreamingResponse
 
-from psych_support_bot.api.auth import decode_access_token, request_user_id, require_auth
+from psych_support_bot.api.auth import decode_access_token, require_auth
 from psych_support_bot.infra.config.settings import get_settings
 from psych_support_bot.infra.voice.adapter import (
     _MINIMAX_SAMPLE_RATE,
@@ -36,6 +36,18 @@ from psych_support_bot.infra.voice.adapter import (
     synthesize_stream,
     transcribe,
     tts_media_type,
+)
+from psych_support_bot.infra.voice.protocol import (
+    LiveAbort,
+    LiveAudioFormat,
+    LiveEnd,
+    LiveError,
+    LiveReady,
+    LiveRoundEnd,
+    LiveSay,
+    LiveSentenceEnd,
+    LiveServerEvent,
+    parse_live_client_message,
 )
 
 logger = logging.getLogger(__name__)
@@ -269,6 +281,11 @@ ws_router = APIRouter(prefix="/v1/voice", tags=["voice"])
 _TTS_LIVE_UPSTREAM_RECV_TIMEOUT = 30.0
 
 
+async def _send_event(websocket: WebSocket, event: LiveServerEvent) -> None:
+    """控制面事件统一下发口：形状由 protocol.py 模型保证（前端契约的唯一权威）。"""
+    await websocket.send_json(event.model_dump())
+
+
 async def _tts_live_mimo(websocket: WebSocket, config, text_q: asyncio.Queue, read_client) -> None:
     """MiMo live 管道：无上游 WS，每条 say 起一个 HTTP SSE 合成。
 
@@ -281,7 +298,7 @@ async def _tts_live_mimo(websocket: WebSocket, config, text_q: asyncio.Queue, re
     import threading
     from contextlib import suppress
 
-    await websocket.send_json({"type": "ready", "audio": {"format": "pcm", "sample_rate": 24000}})
+    await _send_event(websocket, LiveReady(audio=LiveAudioFormat(sample_rate=24000)))
     loop = asyncio.get_running_loop()
 
     async def pump_say(text: str) -> None:
@@ -313,15 +330,15 @@ async def _tts_live_mimo(websocket: WebSocket, config, text_q: asyncio.Queue, re
             if item == "__abort__":
                 return
             if item is None:
-                await websocket.send_json({"type": "round_end"})
+                await _send_event(websocket, LiveRoundEnd())
                 return
             try:
                 await pump_say(item)
-                await websocket.send_json({"type": "sentence_end"})
+                await _send_event(websocket, LiveSentenceEnd())
             except VoiceProviderError as exc:
                 logger.warning("TTS live mimo: %s", exc)
-                await websocket.send_json({"type": "error", "detail": str(exc)[:200]})
-                await websocket.send_json({"type": "round_end"})
+                await _send_event(websocket, LiveError(detail=str(exc)[:200]))
+                await _send_event(websocket, LiveRoundEnd())
                 return
     except WebSocketDisconnect:
         logger.info("TTS live mimo: client disconnected")
@@ -346,7 +363,7 @@ async def tts_live(websocket: WebSocket, token: str = Query(default="")):
     await websocket.accept()
     if config is None or config.provider not in {"minimax", "mimo"}:
         logger.warning("TTS live: TTS not configured, closing")
-        await websocket.send_json({"type": "error", "detail": "TTS not configured"})
+        await _send_event(websocket, LiveError(detail="TTS not configured"))
         await websocket.close()
         return
 
@@ -357,18 +374,17 @@ async def tts_live(websocket: WebSocket, token: str = Query(default="")):
             while True:
                 raw = await websocket.receive_text()
                 try:
-                    msg = json.loads(raw)
+                    msg = parse_live_client_message(raw)
                 except ValueError:
-                    continue
-                t = msg.get("type")
-                if t == "say":
-                    text = str(msg.get("text") or "").strip()
+                    continue  # 垃圾帧不杀会话（协议边界拒绝，行为同历史）
+                if isinstance(msg, LiveSay):
+                    text = msg.text.strip()
                     if text:
                         await text_q.put(text)
-                elif t == "end":
+                elif isinstance(msg, LiveEnd):
                     await text_q.put(None)
                     return
-                elif t == "abort":
+                elif isinstance(msg, LiveAbort):
                     await text_q.put("__abort__")
                     return
         except Exception:
@@ -393,9 +409,7 @@ async def tts_live(websocket: WebSocket, token: str = Query(default="")):
             logger.info("TTS live: upstream connected")
             # 音频面改 PCM 直推：浏览器收到二进制帧即入 WebAudio 播放队列，
             # 首块（~0.1-0.3s 音频）到达就能起播，不等整句合成完
-            await websocket.send_json(
-                {"type": "ready", "audio": {"format": "pcm", "sample_rate": _MINIMAX_SAMPLE_RATE}}
-            )
+            await _send_event(websocket, LiveReady(audio=LiveAudioFormat(sample_rate=_MINIMAX_SAMPLE_RATE)))
             # 上游任务开启（音色与整段合成路径一致；PCM 无码率概念）
             await mmws.send(
                 json.dumps(
@@ -423,8 +437,8 @@ async def tts_live(websocket: WebSocket, token: str = Query(default="")):
             if started.get("event") != "task_started":
                 base = started.get("base_resp") or {}
                 logger.warning("TTS live task_start failed: %s", base)
-                await websocket.send_json({"type": "error", "detail": f"task_start failed: {base.get('status_code')}"})
-                await websocket.send_json({"type": "round_end"})
+                await _send_event(websocket, LiveError(detail=f"task_start failed: {base.get('status_code')}"))
+                await _send_event(websocket, LiveRoundEnd())
                 return
             # 客户端读取循环与上游音频泵并行：say 逐句喂入，音频块实时回推
             reader_task = asyncio.ensure_future(read_client())
@@ -455,8 +469,10 @@ async def tts_live(websocket: WebSocket, token: str = Query(default="")):
                     logger.warning("TTS live upstream error %s: %s", status, base.get("status_msg"))
                     # 错误显式下发（round_end 前）：前端据此把剩余句子转投 HTTP
                     # 队列续读——上游半途故障不再表现为"音频静默消失"
-                    await websocket.send_json({"type": "error", "detail": f"upstream {status}: {base.get('status_msg')}"})
-                    await websocket.send_json({"type": "round_end"})
+                    await _send_event(
+                        websocket, LiveError(detail=f"upstream {status}: {base.get('status_msg')}")
+                    )
+                    await _send_event(websocket, LiveRoundEnd())
                     return
                 event = msg.get("event")
                 data = msg.get("data") or {}
@@ -467,9 +483,9 @@ async def tts_live(websocket: WebSocket, token: str = Query(default="")):
                 if msg.get("is_final"):
                     # 句级边界：前端以此切分播放单元（sentence_start/end 事件
                     # 名沿用语义）。会话不终态，下一句 task_continue 继续喂。
-                    await websocket.send_json({"type": "sentence_end"})
+                    await _send_event(websocket, LiveSentenceEnd())
                 if event in ("task_finished", "task_failed"):
-                    await websocket.send_json({"type": "round_end"})
+                    await _send_event(websocket, LiveRoundEnd())
                     return
     except WebSocketDisconnect:
         logger.info("TTS live: client disconnected")
