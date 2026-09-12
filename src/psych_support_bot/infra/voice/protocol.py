@@ -61,11 +61,22 @@ class LiveAudioFormat(BaseModel):
     sample_rate: int
 
 
+class LiveTtsProfile(BaseModel):
+    """TTS 延迟画像：前端据 first_audio_timeout_ms 放宽「无首音」收束上限。
+
+    预置音色首包 ~1-2s（6s 收束够）；音色复刻为兼容模式流式——整句合成完
+    才返回单块，首包 5-20s，6s 会掐掉整轮（20260912 实证：只读到最短一句）。
+    可选字段：旧前端忽略（前向兼容约定）。"""
+
+    first_audio_timeout_ms: int
+
+
 class LiveReady(BaseModel):
     """会话就绪 + 音频面声明。此后二进制帧即音频块，可首块即播。"""
 
     type: Literal["ready"] = "ready"
     audio: LiveAudioFormat
+    tts: LiveTtsProfile | None = None
 
 
 class LiveSentenceEnd(BaseModel):

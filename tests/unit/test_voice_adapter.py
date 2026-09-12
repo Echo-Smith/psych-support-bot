@@ -264,7 +264,7 @@ def test_tts_config_mimo(tts_key) -> None:
     assert config is not None and config.provider == "mimo"
     assert config.base_url == "https://api.xiaomimimo.com/v1"
     assert config.model == "mimo-v2.5-tts"
-    assert config.voice == "冰糖"
+    assert config.voice == "茉莉"
     assert config.ws_url == ""
 
 
@@ -279,7 +279,7 @@ def test_synthesize_mimo_success(monkeypatch, tts_key) -> None:
 
     def fake_post(url, **kwargs):
         assert url.endswith("/chat/completions")
-        assert kwargs["json"]["audio"] == {"format": "wav", "voice": "冰糖"}
+        assert kwargs["json"]["audio"] == {"format": "wav", "voice": "茉莉"}
         assert kwargs["json"]["messages"][0]["role"] == "assistant"
         return httpx.Response(
             200,
@@ -1053,3 +1053,82 @@ def test_synthesize_minimax_ws_url_ssrf_guard(tts_key) -> None:
         with pytest.raises(VoiceProviderError):
             synthesize("你好")  # validate 在建连前抛出，不会触达 fake connect
     del websockets
+
+
+# ---------------------------------------------------------------------------
+# 音色复刻（MiMo VoiceClone）：voice=样本文件路径 → 内联 data URI
+# ---------------------------------------------------------------------------
+
+
+def _mimo_config(voice: str):
+    from psych_support_bot.infra.voice.adapter import TtsConfig
+
+    return TtsConfig(
+        provider="mimo",
+        base_url="https://api.xiaomimimo.com/v1",
+        ws_url="",
+        api_key=_fake_key("mimo"),
+        model="mimo-v2.5-tts-voiceclone",
+        voice=voice,
+    )
+
+
+def test_voice_reference_preset_name_passthrough() -> None:
+    """预置音色名（非文件）原样直传——冰糖等旧行为不变。"""
+    from psych_support_bot.infra.voice.adapter import _mimo_voice_reference
+
+    assert _mimo_voice_reference("冰糖") == "冰糖"
+    assert _mimo_voice_reference("Chinese (Mandarin)_Warm_Bestie") == "Chinese (Mandarin)_Warm_Bestie"
+    assert _mimo_voice_reference("") == ""
+
+
+def test_voice_reference_file_becomes_data_uri(tmp_path) -> None:
+    """存在的 .mp3/.wav 文件按 mime 内联为 data URI（复刻样本语义）。"""
+    from psych_support_bot.infra.voice.adapter import _mimo_tts_payload, _mimo_voice_reference
+
+    sample = tmp_path / "ref.mp3"
+    sample.write_bytes(b"\xff\xfb" + b"ID3fake-audio" * 4)
+    uri = _mimo_voice_reference(str(sample))
+    assert uri.startswith("data:audio/mpeg;base64,")
+    import base64 as _b64
+
+    assert _b64.b64decode(uri.split(",", 1)[1]) == sample.read_bytes()
+
+    # payload 装配走同一入口（合成/流式共用）
+    payload = _mimo_tts_payload(_mimo_config(str(sample)), "你好", stream=True, audio_format="pcm16")
+    assert payload["audio"]["voice"] == uri
+    assert payload["model"] == "mimo-v2.5-tts-voiceclone"
+
+
+def test_voice_reference_wav_mime_and_cache(tmp_path) -> None:
+    """wav 后缀映射 audio/wav；同文件同 mtime 二次读取命中缓存（不重编码）。"""
+    from psych_support_bot.infra.voice import adapter as _adapter
+    from psych_support_bot.infra.voice.adapter import _mimo_voice_reference
+
+    sample = tmp_path / "ref.wav"
+    sample.write_bytes(b"RIFF....WAVEfmt ")
+    first = _mimo_voice_reference(str(sample))
+    assert first.startswith("data:audio/wav;base64,")
+    assert str(sample) in _adapter._VOICE_REF_CACHE  # 已缓存
+    assert _mimo_voice_reference(str(sample)) == first
+
+
+def test_voice_reference_rejects_unsupported_ext(tmp_path) -> None:
+    from psych_support_bot.infra.voice.adapter import _mimo_voice_reference
+
+    sample = tmp_path / "ref.m4a"
+    sample.write_bytes(b"\x00\x00\x00")
+    with pytest.raises(VoiceProviderError, match=r"\.mp3 or \.wav"):
+        _mimo_voice_reference(str(sample))
+
+
+def test_voice_reference_rejects_oversize(tmp_path, monkeypatch) -> None:
+    """base64 超 10MB 拒绝（网关硬限制，配置期报错优于运行期 4xx）。"""
+    from psych_support_bot.infra.voice import adapter as _adapter
+    from psych_support_bot.infra.voice.adapter import _mimo_voice_reference
+
+    sample = tmp_path / "big.mp3"
+    sample.write_bytes(b"\xff\xfb" + b"\x00" * 100)
+    monkeypatch.setattr(_adapter, "_VOICE_REF_MAX_B64", 8)  # 压低阈值触发
+    with pytest.raises(VoiceProviderError, match="too large"):
+        _mimo_voice_reference(str(sample))

@@ -200,7 +200,7 @@ CBT_EXERCISES: dict[str, CBTExercise] = {
             "Can you use this thought record again next time you notice strong emotions?",
         ],
     ),
-    " downward_arrow": CBTExercise(
+    "downward_arrow": CBTExercise(
         exercise_id="downward_arrow",
         name="Downward Arrow Technique",
         description=(

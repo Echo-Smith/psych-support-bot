@@ -13,7 +13,11 @@ export const end = () => ({ type: CLIENT.END });
 export const abort = () => ({ type: CLIENT.ABORT });
 
 // 服务端 → 客户端事件构造器（仅文档/测试用；运行时由服务端下发）
-export const ready = (sampleRate) => ({ type: SERVER.READY, audio: { format: 'pcm', sample_rate: sampleRate } });
+export const ready = (sampleRate, tts) => ({
+  type: SERVER.READY,
+  audio: { format: 'pcm', sample_rate: sampleRate },
+  ...(tts ? { tts } : {}), // 可选 TTS 延迟画像 {first_audio_timeout_ms}：复刻音色下发，预置音色省略
+});
 export const sentenceEnd = () => ({ type: SERVER.SENTENCE_END });
 export const roundEnd = () => ({ type: SERVER.ROUND_END });
 export const error = (detail) => ({ type: SERVER.ERROR, detail });

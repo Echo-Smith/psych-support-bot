@@ -62,10 +62,17 @@ def test_parse_say_empty_text_is_valid_frame() -> None:
 
 def test_outgoing_wire_shapes_unchanged() -> None:
     """前端（含线上旧版本）按 type 分派：字段名/形状漂移=全体用户静默故障。"""
-    assert LiveReady(audio={"format": "pcm", "sample_rate": 24000}).model_dump() == {
+    ready = LiveReady(audio={"format": "pcm", "sample_rate": 24000}).model_dump()
+    assert ready == {
         "type": "ready",
         "audio": {"format": "pcm", "sample_rate": 24000},
+        "tts": None,  # 预置音色：无延迟画像，前端按 null 走 6s 快收束
     }
+    clone_ready = LiveReady(
+        audio={"format": "pcm", "sample_rate": 24000},
+        tts={"first_audio_timeout_ms": 20000},
+    ).model_dump()
+    assert clone_ready["tts"] == {"first_audio_timeout_ms": 20000}
     assert LiveSentenceEnd().model_dump() == {"type": "sentence_end"}
     assert LiveRoundEnd().model_dump() == {"type": "round_end"}
     assert LiveError(detail="boom").model_dump() == {"type": "error", "detail": "boom"}

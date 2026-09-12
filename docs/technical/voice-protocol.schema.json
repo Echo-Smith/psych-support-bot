@@ -124,6 +124,17 @@
           },
           "audio": {
             "$ref": "#/$defs/LiveAudioFormat"
+          },
+          "tts": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/LiveTtsProfile"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
           }
         },
         "required": [
@@ -156,6 +167,20 @@
           }
         },
         "title": "LiveSentenceEnd",
+        "type": "object"
+      },
+      "LiveTtsProfile": {
+        "description": "TTS 延迟画像：前端据 first_audio_timeout_ms 放宽「无首音」收束上限。\n\n预置音色首包 ~1-2s（6s 收束够）；音色复刻为兼容模式流式——整句合成完\n才返回单块，首包 5-20s，6s 会掐掉整轮（20260912 实证：只读到最短一句）。\n可选字段：旧前端忽略（前向兼容约定）。",
+        "properties": {
+          "first_audio_timeout_ms": {
+            "title": "First Audio Timeout Ms",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "first_audio_timeout_ms"
+        ],
+        "title": "LiveTtsProfile",
         "type": "object"
       }
     },

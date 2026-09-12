@@ -7,8 +7,9 @@
 
 // round 收束硬上限——MiMo 免费期上游偶发挂死会让服务器 round_end 迟到两
 // 分钟，黄框假死期间麦克风一直被挂起（第二次说话录不进的根因链）。取值
-// 与服务端 _TTS_LIVE_UPSTREAM_RECV_TIMEOUT=30s 对齐（略小，前端先收束），
-// 详见 docs/technical/VOICE_PROTOCOL.md 超时对齐表。
+// 与服务端 _TTS_LIVE_UPSTREAM_RECV_TIMEOUT=30s 对齐（略小，前端先收束）；
+// 首音未出（上游挂死、无回声可防）时 6s 加速还麦并弃用中毒 WS，见
+// ttsLiveEndRound 与 docs/technical/VOICE_PROTOCOL.md 超时对齐表。
 export const ROUND_TIMEOUT_MS = 25000;
 
 export function createTtsLive(deps) {
@@ -29,6 +30,7 @@ export function createTtsLive(deps) {
     pcm: false, sentenceStart: null, firstAudioMarked: false, sentenceSamples: 0, pendingEnd: false, finalTakeover: false, // PCM 流式播放态（②）+ 每句样本数（字幕按时长铺）+ 定稿接管标记
     chain: Promise.resolve(),
     roundDone: null,
+    firstAudioTimeoutMs: 0, // ready.tts 下发的无首音收束预算（0=未下发，用 6s 缺省）
   };
 
   function ttsLiveReset() {
@@ -39,7 +41,21 @@ export function createTtsLive(deps) {
     TTS_LIVE.pendingEnd = false; TTS_LIVE.finalTakeover = false;
     TTS_LIVE.chain = Promise.resolve();
     TTS_LIVE.roundDone = null;
+    TTS_LIVE.firstAudioTimeoutMs = 0;
     pcm.stopAll(); // 全量复位语义包含掐掉在排播的 PCM 队列
+  }
+
+  // 流式轮开拍：清上一轮残留的字幕/攒积态。只清「内容」不清通道——ws/failed
+  // 由各自失败路径管理。残留危害（20260912 实证）：
+  // - finalTakeover 残留 true → 下一轮 sentence_end 全部静默，字幕不逐句
+  //   上屏，final 到达时多条信息一次性蹦出；
+  // - pendingTexts 残留 → 下一轮字幕整体错位，音频读到「还没上屏的句子」。
+  function ttsLiveBeginTurn() {
+    TTS_LIVE.pending = [];
+    TTS_LIVE.curBytes = []; TTS_LIVE.curChars = 0;
+    TTS_LIVE.pendingTexts = [];
+    TTS_LIVE.sentenceStart = null; TTS_LIVE.firstAudioMarked = false; TTS_LIVE.sentenceSamples = 0;
+    TTS_LIVE.pendingEnd = false; TTS_LIVE.finalTakeover = false;
   }
 
   function ttsHexToBytes(hex) {
@@ -88,6 +104,11 @@ export function createTtsLive(deps) {
         // 能力协商：服务端声明 PCM → 流式起播；否则维持 mp3-b64 整句旧路径
         TTS_LIVE.pcm = !!(ev.audio && ev.audio.format === 'pcm');
         if (ev.audio && ev.audio.sample_rate) pcm.state.rate = ev.audio.sample_rate;
+        // TTS 延迟画像（音色复刻=兼容模式流式，首包 5-20s）：服务端下发的
+        // 无首音收束预算；预置音色不带此字段，维持 6s 快收束还麦
+        if (ev.tts && typeof ev.tts.first_audio_timeout_ms === 'number') {
+          TTS_LIVE.firstAudioTimeoutMs = Math.max(6000, Math.min(25000, ev.tts.first_audio_timeout_ms));
+        }
       } else if (ev.type === 'audio' && ev.b64) {
         TTS_LIVE.curBytes.push(ttsHexToBytes(ev.b64));
         TTS_LIVE.curChars += 4; // 粗略累加字数供播放看护估算
@@ -230,20 +251,36 @@ export function createTtsLive(deps) {
       // 表现为"朗读读到一半没了"（2026-09-10 四段例实证）
       TTS_LIVE.pendingEnd = true;
     }
-    // 等上游 round_end + 本地 chain 全播完；**硬上限 roundTimeoutMs**——
-    // 上游挂死时超时=掐队列强制收束（麦克风不能被黄框假死挂住）。
+    // 等上游 round_end + 本地 chain 全播完。硬上限分档：
+    // - 首音已出（firstAudioMarked）：真在播，用满 roundTimeoutMs 等尾句；
+    // - 首音未出（上游挂死）：没有任何回声要防，尽快收束还麦。预算取
+    //   ready.tts 下发的 firstAudioTimeoutMs（音色复刻=兼容模式流式，
+    //   首包 5-20s，6s 会掐掉整轮——20260912 实证只读到最短一句）；
+    //   未下发时维持 6s（预置音色口径）。
+    const cap = TTS_LIVE.firstAudioMarked
+      ? roundTimeoutMs
+      : Math.min(roundTimeoutMs, TTS_LIVE.firstAudioTimeoutMs || 6000);
     await new Promise((resolve) => {
       const timer = timers.setTimeout(() => {
-        debug('tts live: round timeout(' + roundTimeoutMs + 'ms), force finish');
+        debug('tts live: round timeout(' + cap + 'ms), force finish');
+        // 挂死的会话就地弃用（打断=断连弃用的同一立场）：留着中毒 WS，
+        // 下一轮 say 仍灌进旧 task，第二轮朗读继续假死
+        killLiveWs(TTS_LIVE.ws);
+        // 死轮的字幕队列一并清空：残留 pendingTexts 会被下一轮的
+        // sentence_end 错位消费——音频读第 1 句、屏幕显示的是旧句
+        TTS_LIVE.pending = [];
+        TTS_LIVE.pendingTexts = [];
+        TTS_LIVE.curBytes = []; TTS_LIVE.curChars = 0;
+        TTS_LIVE.pendingEnd = false; TTS_LIVE.finalTakeover = false;
         resolve();
-      }, roundTimeoutMs);
+      }, cap);
       TTS_LIVE.roundDone = () => { timers.clearTimeout(timer); TTS_LIVE.chain.then(resolve); };
     });
     pcm.stopAll(); // 正常完成=空操作（源已播完）；超时兜底=掐掉滞留队列
   }
 
   return {
-    state: TTS_LIVE, ttsLiveReset, ttsHexToBytes, ttsLiveFlushSentence,
+    state: TTS_LIVE, ttsLiveReset, ttsLiveBeginTurn, ttsHexToBytes, ttsLiveFlushSentence,
     ttsLiveEnsure, ttsLiveRound, ttsLiveSend, killLiveWs, ttsLiveSay,
     ttsLiveDrainPending, ttsLiveEndRound,
   };

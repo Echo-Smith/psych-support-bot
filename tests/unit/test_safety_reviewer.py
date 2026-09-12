@@ -454,3 +454,48 @@ def test_scan_sentence_speakable_rejects_vendor() -> None:
 def test_scan_sentence_speakable_rejects_internal_labels() -> None:
     # 内部临床脚手架标签整段会被清洗，含标签的句子不抢跑朗读
     assert scan_sentence_speakable("观察：用户情绪低落。") is False
+
+
+# ---------------------------------------------------------------------------
+# 审查改写后的 messages 不变量（20260912 屏显/朗读分裂实证）
+# ---------------------------------------------------------------------------
+
+
+def test_review_rewrite_rebuilds_messages() -> None:
+    """审查改写 text 后 messages 必须重建：否则前端气泡显示被审查掉的内容、
+    TTS 读的是替换句——屏显与朗读两路文本不同。"""
+    from psych_support_bot.ai.nodes.response_generator import _split_reply_messages
+
+    original = "嗯，我听到了。\n\n你确定你真的没事吗？这样想是不是太绝对了？"
+    state = _build_state(reply_text=original)
+    # 模拟 response_generator 的产出：messages 是 original 的切分
+    state["generated_reply"].messages = _split_reply_messages(original)
+
+    result = review_response(state)
+    reply = result["generated_reply"]
+    assert reply.text != original, "用例前提：审查确实改写了文本"
+    assert reply.messages == _split_reply_messages(reply.text), (
+        "改写后 messages 必须与新 text 逐字一致（旧 messages = 被审查掉的内容）"
+    )
+
+
+def test_review_no_rewrite_keeps_messages() -> None:
+    """未触发改写时 messages 原样保留。"""
+    from psych_support_bot.ai.nodes.response_generator import _split_reply_messages
+
+    clean = "嗯，我听到了。\n\n愿意多说说吗？我在这里。"
+    state = _build_state(reply_text=clean)
+    state["generated_reply"].messages = _split_reply_messages(clean)
+    result = review_response(state)
+    assert result["generated_reply"].messages == _split_reply_messages(clean)
+
+
+def test_review_rewrite_non_bubble_risk_clears_messages() -> None:
+    """非 low/elevated 路径 messages 恒为空（crisis 整段单气泡语义不变）。"""
+    from psych_support_bot.ai.nodes.response_generator import _split_reply_messages
+
+    original = "我在这里陪你。\n\n你确定你真的没事吗？"
+    state = _build_state(reply_text=original, risk_level="high", needs_crisis_mode=True)
+    state["generated_reply"].messages = _split_reply_messages(original)
+    result = review_response(state)
+    assert result["generated_reply"].messages == []

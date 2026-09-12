@@ -48,6 +48,7 @@ from psych_support_bot.infra.voice.protocol import (
     LiveSay,
     LiveSentenceEnd,
     LiveServerEvent,
+    LiveTtsProfile,
     parse_live_client_message,
 )
 
@@ -299,7 +300,10 @@ async def _tts_live_mimo(websocket: WebSocket, config, text_q: asyncio.Queue, re
     import threading
     from contextlib import suppress
 
-    await _send_event(websocket, LiveReady(audio=LiveAudioFormat(sample_rate=24000)))
+    # 复刻模型（兼容模式流式）整句合成完才返回：首包预算同步放宽，
+    # 前端「无首音收束」按此放宽（缺省/预置音色维持 6s 快收束还麦）
+    tts_profile = LiveTtsProfile(first_audio_timeout_ms=20_000) if "voiceclone" in (config.model or "") else None
+    await _send_event(websocket, LiveReady(audio=LiveAudioFormat(sample_rate=24000), tts=tts_profile))
     loop = asyncio.get_running_loop()
 
     async def pump_say(text: str) -> None:

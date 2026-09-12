@@ -64,10 +64,11 @@
 | 位置 | 值 | 说明 |
 |---|---|---|
 | 服务端上游 recv 空闲 | 30s（`_TTS_LIVE_UPSTREAM_RECV_TIMEOUT`） | 句间间隔实测 <1s，卡 30s=上游挂起 |
-| 前端 round 收束硬上限 | 25s（`ttsLiveEndRound`） | **略小于服务端**：前端先收束，麦克风不被假死挂起 |
-| MiMo 流 read 超时 | 8s（adapter `_mimo_stream`） | 句级合成块间隔 <1s，卡 8s=上游挂起 |
+| 前端 round 收束硬上限（首音已出） | 25s（`ttsLiveEndRound`） | **略小于服务端**：前端先收束，麦克风不被假死挂起 |
+| 前端 round 收束硬上限（首音未出） | 6s / ready.tts 下发值（`ttsLiveEndRound`） | 预置音色 6s（挂死无回声可防，快收束还麦）；音色复刻为兼容模式流式（整句合成完才返回单块，首包 5-20s），服务端经 `ready.tts.first_audio_timeout_ms` 下发 20s（20260912：6s 会掐掉整轮，只读到最短一句）。字段可选，旧前端忽略 |
+| 服务端 MiMo 流 read 超时 | 8s 预置 / 30s 复刻（adapter `_mimo_stream`） | 预置音色块间隔 <1s，卡 8s=上游挂起；复刻整句合成完才出块，read 须覆盖整句合成时长 |
 
-改其中任何一个，其余两个的注释必须同步复核。
+改其中任何一个，其余的注释必须同步复核。
 
 ## 兼容性约定
 

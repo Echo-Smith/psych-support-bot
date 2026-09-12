@@ -33,6 +33,7 @@ import time
 from collections import OrderedDict
 from collections.abc import Iterator
 from dataclasses import dataclass
+from pathlib import Path
 from urllib.parse import urlparse
 
 import httpx
@@ -328,7 +329,7 @@ def get_tts_config() -> TtsConfig | None:
             ws_url="",
             api_key=api_key,
             model=s.voice_tts_model or "mimo-v2.5-tts",
-            voice=s.voice_tts_voice or "冰糖",
+            voice=s.voice_tts_voice or "茉莉",
         )
     return None
 
@@ -811,13 +812,46 @@ def _synthesize_minimax(config: TtsConfig, cleaned: str) -> bytes:
 # 文本放 assistant 消息；语速/情感无独立参数，用文本标签（(怅然) 等）控制
 # ---------------------------------------------------------------------------
 
+# 音色复刻（MiMo-V2.5-TTS-VoiceClone）：无持久音色 ID——参考音频按请求内联
+# （audio.voice = data:audio/<mime>;base64,...，编码后 ≤10MB，仅 mp3/wav）。
+# VOICE_TTS_VOICE 指向存在的文件即视为复刻样本；否则按预置音色名直传。
+_MIME_BY_EXT = {".mp3": "audio/mpeg", ".wav": "audio/wav"}
+_VOICE_REF_MAX_B64 = 10 * 1024 * 1024
+# 读盘+编码结果按 (路径, mtime) 缓存：live 路径每句一请求，不能每句重读重编码
+_VOICE_REF_CACHE: dict[str, tuple[float, str]] = {}
+
+
+def _mimo_voice_reference(voice: str) -> str:
+    if not voice:
+        return voice
+    path = Path(voice)
+    if not path.is_file():
+        return voice  # 预置音色名（冰糖等）
+    mime = _MIME_BY_EXT.get(path.suffix.lower())
+    if mime is None:
+        raise VoiceProviderError(f"Voice reference must be .mp3 or .wav (got {path.suffix or 'no extension'})")
+    try:
+        mtime = path.stat().st_mtime
+        cached = _VOICE_REF_CACHE.get(str(path))
+        if cached and cached[0] == mtime:
+            return cached[1]
+        raw = path.read_bytes()
+    except OSError as exc:
+        raise VoiceProviderError(f"Voice reference unreadable: {exc}") from exc
+    b64 = base64.b64encode(raw).decode("ascii")
+    if len(b64) > _VOICE_REF_MAX_B64:
+        raise VoiceProviderError(f"Voice reference too large: base64 {len(b64)} bytes > 10MB; trim the sample")
+    uri = f"data:{mime};base64,{b64}"
+    _VOICE_REF_CACHE[str(path)] = (mtime, uri)
+    return uri
+
 
 def _mimo_tts_payload(config: TtsConfig, text: str, *, stream: bool, audio_format: str) -> dict:
     return {
         "model": config.model,
         "messages": [{"role": "assistant", "content": text}],
         "stream": stream,
-        "audio": {"format": audio_format, "voice": config.voice},
+        "audio": {"format": audio_format, "voice": _mimo_voice_reference(config.voice)},
     }
 
 
@@ -853,6 +887,11 @@ def _mimo_stream(config: TtsConfig, cleaned: str, audio_format: str) -> Iterator
 
     payload = _mimo_tts_payload(config, cleaned, stream=True, audio_format=audio_format)
     last_error: VoiceProviderError | None = None
+    # 复刻模型流式为兼容模式（整句合成完才返回单块）：read 须覆盖整句合成
+    # 时长（长句实测 10s+）；8s 是预置音色「块间隔 <1s」的口径，会掐掉长句
+    # ——20260912 实证：三分句回复只读出最短的一句（长句全被 8s 跳过）
+    clone = "voiceclone" in (config.model or "")
+    stream_timeout = httpx.Timeout(60.0 if clone else 30.0, connect=5.0, read=30.0 if clone else 8.0)
     for attempt in range(2):
         # 本轮已产出的块数：yield 过之后再断流不得整体重试——重试会从头重发，
         # 调用方收到重复前缀（live 路径=音频重复念开头，synthesize_stream=
@@ -864,7 +903,7 @@ def _mimo_stream(config: TtsConfig, cleaned: str, audio_format: str) -> Iterator
                 f"{config.base_url}/chat/completions",
                 headers={"Authorization": f"Bearer {config.api_key}"},
                 json=payload,
-                timeout=httpx.Timeout(30.0, connect=5.0, read=8.0),
+                timeout=stream_timeout,
             ) as resp:
                 if resp.status_code == 429 or resp.status_code >= 500:
                     last_error = VoiceProviderError(f"TTS upstream {resp.status_code}")

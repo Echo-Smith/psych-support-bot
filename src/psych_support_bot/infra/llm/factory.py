@@ -51,8 +51,13 @@ MODE_LIMITS: dict[str, "ModelCallLimits"] = {
     # 6/6 正确识别且规则通道独立兜底）；risk_classification 思考开二次确认
     # （安全关键分级依赖思维链，evals 基线对照：关思考 routing 大面积滑向
     # support/低危）。快筛判 low 直接采纳，非 low 升级确认。
+    # max_tokens 2048 + timeout 25s（20260912）：思考开时思维链与正文共享
+    # token 预算，1024 下思考挤爆预算 → 正文返回空 → 咽喉层空内容重试
+    # （退避 0.5/1.0s）把单轮拖到 10~25s。上调后实测空内容消失，但思考
+    # 合法变长（成功样本 10.6s），15s 超时成为新瓶颈 → 同步放宽到 25s，
+    # 让多数调用首发成功而非「15s 掐断 → 重试堆叠」。分级语义不变。
     "risk_screen": ModelCallLimits(max_tokens=512, timeout=10.0),
-    "risk_classification": ModelCallLimits(max_tokens=1024, timeout=15.0),
+    "risk_classification": ModelCallLimits(max_tokens=2048, timeout=25.0),
 }
 
 

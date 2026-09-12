@@ -1,6 +1,6 @@
 from datetime import UTC, date, datetime
 
-from sqlalchemy import Boolean, Date, DateTime, Float, Integer, String, Text
+from sqlalchemy import Boolean, Date, DateTime, Float, Integer, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column
 
 from psych_support_bot.infra.db.base import Base
@@ -219,3 +219,98 @@ class ExerciseRecord(Base):
     # 记录列表展示"需要关照"徽标（只记等级词，不记内容）。
     risk_flag: Mapped[str] = mapped_column(String(16), default="", server_default="")
     completed_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+
+class ProfileBelief(Base):
+    """画像信念——自进化画像的"当前状态"行。
+
+    画像不是静态标签表而是 belief 流：本表存当前状态，完整迁移史在
+    profile_belief_events（append-only，可审计、可回答"你为什么认为我
+    XX"）；用户删除画像 = 两表按 user_id 级联删（接入 me_repositories）。
+
+    结构性红线（约束写在代码里，不靠提取器自觉）：
+    - (user_id, key) 唯一：对 key 而非文本去重——被否决的 belief 换措辞
+      重现仍命中同一 key（防"换措辞复活"）。
+    - source="extracted" 的行 layer 强制 L4（仓储层钳制）：L2 只能来自
+      用户确认或程序硬证据，提取器产出永远是待验证假设。
+    - key 以 "distortion." 开头的写入在仓储层直接拒绝：认知歪曲只许
+      当轮识别（identify_only），结构上不给沉淀入口。
+    - 风险内容不入本表：无任何"风险类"字段——自伤/自杀信号只走
+      RiskEvent 结构化通道，画像层零存储。
+
+    字段语义：
+    - layer: L1 用户自述 / L2 已确认演化状态 / L3 情境信号 / L4 待验证假设。
+    - status: active / rejected；rejected 即 D8 负记忆，同 key 永不复活。
+    - claim_text: 临床中性观察句（内部语言；用户可见措辞由展示词典层
+      渲染，术语不出存储层，见 PROFILE_DECISIONS P3）。
+    - confidence: 0-1，支持证据推进、矛盾证据衰减；≥0.7 且跨会话证据
+      ≥2 才有资格进 L4 质询候选池（升级 L2 仍需用户确认）。
+    - last_evidence_at: 90 天无新证据降权排序的时钟基准（不删除）。
+    """
+
+    __tablename__ = "profile_beliefs"
+    __table_args__ = (UniqueConstraint("user_id", "key", name="uq_profile_beliefs_user_key"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    user_id: Mapped[str] = mapped_column(String(64), index=True)
+    dimension: Mapped[str] = mapped_column(String(8), index=True)
+    key: Mapped[str] = mapped_column(String(128))
+    claim_text: Mapped[str] = mapped_column(Text, default="")
+    value_json: Mapped[str] = mapped_column(Text, default="{}")
+    layer: Mapped[str] = mapped_column(String(8), default="L4")
+    status: Mapped[str] = mapped_column(String(16), default="active")
+    confidence: Mapped[float] = mapped_column(Float, default=0.0)
+    source: Mapped[str] = mapped_column(String(32), default="extracted")
+    evidence_json: Mapped[str] = mapped_column(Text, default="[]")
+    origin_stats_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    origin_session_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    last_evidence_session_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    first_seen_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+    last_evidence_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, onupdate=utcnow)
+
+
+class ProfileBeliefEvent(Base):
+    """信念事件日志（append-only）。
+
+    event_type: created / supported / contradicted / downgraded /
+    confirmed / rejected / user_edited。只插入不更新——审计与
+    "每条被确认信念的成本"归因（origin_stats_id → 提取调用统计）都靠它。
+    """
+
+    __tablename__ = "profile_belief_events"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    belief_id: Mapped[int] = mapped_column(Integer, index=True)
+    user_id: Mapped[str] = mapped_column(String(64), index=True)
+    event_type: Mapped[str] = mapped_column(String(32))
+    evidence_json: Mapped[str] = mapped_column(Text, default="[]")
+    detail_json: Mapped[str] = mapped_column(Text, default="{}")
+    origin_stats_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+
+class ProfileExtractionStats(Base):
+    """画像提取调用全量统计（PROFILE_DECISIONS P2：先不设上限，全量统计）。
+
+    每次提取调用一行；熔断阀跳过也记（status="skipped"）——跳过率本身
+    是预算分析素材。决策指标是"每条被确认信念的成本"（belief 的
+    origin_stats_id 可追溯到调用行），不是"每次调用的成本"。只记元数据
+    不记 prompt/响应内容（与 UsageEvent 伦理边界同源）。
+    """
+
+    __tablename__ = "profile_extraction_stats"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    user_id: Mapped[str] = mapped_column(String(64), index=True)
+    session_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    trigger: Mapped[str] = mapped_column(String(32), default="")
+    model: Mapped[str] = mapped_column(String(64), default="")
+    prompt_tokens: Mapped[int] = mapped_column(Integer, default=0)
+    completion_tokens: Mapped[int] = mapped_column(Integer, default=0)
+    latency_ms: Mapped[int] = mapped_column(Integer, default=0)
+    claims_out: Mapped[int] = mapped_column(Integer, default=0)
+    status: Mapped[str] = mapped_column(String(24), default="ok")
+    error: Mapped[str] = mapped_column(Text, default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, index=True)
