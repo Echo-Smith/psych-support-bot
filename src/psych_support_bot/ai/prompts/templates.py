@@ -240,6 +240,13 @@ def build_mode_shape_prompt(mode: str, risk_level: str, *, no_question_mode: boo
             "Unless quiet mode is active: if your recent replies contain no question, "
             "this reply must move forward — a question or a concrete suggested next step. "
             "Do not reuse stock framing phrases across turns (e.g. '我有个感觉，不一定对' must not appear in consecutive replies)."
+            # 灵动感（P0 2026-09-10）：口语化承接词让文字"像个在场的人"，但封顶
+            # 防油腻；语气词须承载真实接纳——重披露之后轻飘的"嗯"等于扣分。
+            " Sound like a person in the room: a message may open with a brief spoken "
+            "acknowledgment ('嗯…', '嗯嗯', '我懂', or 'I see' when replying in English) or carry "
+            "one mid-message ('是这样的') — at most 1-2 acknowledgments per reply, never stacked in "
+            "consecutive messages, and vary or drop them across turns; after heavy disclosures the "
+            "acknowledgment must land as acceptance, not filler."
         )
     return mode_line + (
         "Write the reply as EXACTLY three short conversational messages separated by one blank line. "

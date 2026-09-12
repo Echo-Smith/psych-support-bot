@@ -19,11 +19,13 @@ def test_detect_topics_prioritizes_relevant_matches() -> None:
 
 
 def test_retrieve_entries_returns_indexed_matches() -> None:
+    # limit=6：练习主题映射补全后，惊恐/睡眠查询有了更多切题候选参与竞争，
+    # tipp_full 位居第 5——原 limit=4 只覆盖到旧候选池的行为。
     entries = retrieve_knowledge_entries(
         "I keep having panic attacks at night and I am scared to sleep.",
         mode="intervention",
         risk_level="low",
-        limit=4,
+        limit=6,
     )
 
     entry_ids = {entry.entry_id for entry in entries}

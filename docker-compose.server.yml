@@ -6,18 +6,16 @@ services:
     container_name: psych-bot
     restart: unless-stopped
     ports:
-      - "9958:8000"
+      - "${PSYCHBOT_PORT:-9958}:8000"
+    # 整体透传 .env（OPENAI_*/VOICE_STT_*/VOICE_TTS_*/LANGFUSE_*/AUTH_* 等
+    # 全部随 .env 自动进入容器，新增变量无需再改本文件）。
+    env_file:
+      - .env
     environment:
-      - OPENAI_API_KEY=${OPENAI_API_KEY}
-      - OPENAI_BASE_URL=${OPENAI_BASE_URL}
-      - OPENAI_MODEL=${OPENAI_MODEL}
-      - DATABASE_URL=sqlite:///./data/psych_support_bot.db
-      - LANGFUSE_PUBLIC_KEY=${LANGFUSE_PUBLIC_KEY}
-      - LANGFUSE_SECRET_KEY=${LANGFUSE_SECRET_KEY}
-      - LANGFUSE_HOST=${LANGFUSE_HOST}
+      # 容器内固定项：覆盖 .env 里的本地开发默认值
+      - DATABASE_URL=sqlite:////app/data/psych_support_bot.db
       - ENVIRONMENT=production
       - APP_DEBUG=false
-      - ALLOWED_ORIGINS=${ALLOWED_ORIGINS:-*}
     volumes:
       - bot-data:/app/data
       - bot-logs:/app/logs

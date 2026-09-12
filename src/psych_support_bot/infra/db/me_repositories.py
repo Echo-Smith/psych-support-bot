@@ -28,6 +28,7 @@ from psych_support_bot.infra.db.models import (
     UserProfile,
     WeeklyReportRecord,
 )
+from psych_support_bot.infra.db.profile_repositories import delete_user_profile_beliefs
 
 
 def _iso(value: datetime | None) -> str | None:
@@ -216,7 +217,11 @@ def me_summary(session: Session, user_id: str) -> dict:
 
 
 def clear_user_records(session: Session, user_id: str) -> dict[str, int]:
-    """清空主动记录（测评/练习/打卡），保留聊天与账号。返回逐表删除行数。"""
+    """清空主动记录（测评/练习/打卡），保留聊天与账号。返回逐表删除行数。
+
+    画像信念一并清空：belief 是从记录与对话推导出的推断，底层数据被
+    用户清空后推断不得残留（删除权 = 级联，见 PROFILE_DECISIONS P1）。
+    """
     counts = {
         "assessments": session.query(AssessmentRecord)
         .filter(AssessmentRecord.user_id == user_id)
@@ -228,6 +233,7 @@ def clear_user_records(session: Session, user_id: str) -> dict[str, int]:
         .filter(CheckinRecord.user_id == user_id)
         .delete(synchronize_session=False),
     }
+    counts.update(delete_user_profile_beliefs(session, user_id))
     return {key: int(value) for key, value in counts.items()}
 
 
@@ -279,6 +285,7 @@ def delete_user_account(session: Session, user_id: str) -> dict[str, int]:
     counts["usage_events"] = int(
         session.query(UsageEvent).filter(UsageEvent.user_id == user_id).delete(synchronize_session=False)
     )
+    counts.update(delete_user_profile_beliefs(session, user_id))
     counts["user_profiles"] = int(
         session.query(UserProfile).filter(UserProfile.user_id == user_id).delete(synchronize_session=False)
     )

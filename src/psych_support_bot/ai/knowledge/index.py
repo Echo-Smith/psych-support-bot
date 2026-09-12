@@ -401,6 +401,39 @@ def _entry(
     )
 
 
+# 练习库 → 主题闭集映射。键必须与 CBT/ACT/DBT 练习库 dict 键完全一致
+# （test_knowledge_governance 钉住覆盖与词表合法性）：曾出现键带前导空格
+# 导致映射落空、条目主题退化为默认 stress 的事故。
+EXERCISE_TOPIC_MAP: dict[str, tuple[str, ...]] = {
+    "thought_record_full": ("anxiety", "depression", "rumination", "self_worth"),
+    "behavioral_activation": (
+        "depression",
+        "burnout",
+        "motivation",
+        "procrastination",
+    ),
+    "mindfulness_body_scan": ("anxiety", "panic", "stress", "sleep"),
+    "worry_tree": ("anxiety", "rumination"),
+    "downward_arrow": ("anxiety", "self_worth"),
+    "exposure_hierarchy": ("anxiety", "panic", "ocd"),
+    "worst_best_realistic": ("anxiety", "rumination"),
+    "cost_benefit_analysis": ("procrastination", "motivation"),
+    "self_compassion_letter": ("self_worth", "depression"),
+    "values_card_sort": ("motivation", "stress", "burnout"),
+    "commitment_obstacle": ("procrastination", "motivation", "burnout"),
+    "defusion_labeling": ("rumination", "anxiety", "self_worth"),
+    "defusion_tunnel": ("rumination", "anxiety", "self_worth"),
+    "defusion_sing": ("rumination", "anxiety", "self_worth"),
+    "observing_self": ("rumination", "anxiety", "self_worth"),
+    "willingness_choice": ("anxiety", "stress"),
+    "acceptance_leaves": ("grief", "stress", "rumination"),
+    "tipp_full": ("panic", "anger", "stress"),
+    "wise_mind": ("relationships", "anger", "stress"),
+    "radical_acceptance_walkthrough": ("grief", "stress", "relationships"),
+    "dear_man_assertion": ("relationships",),
+}
+
+
 def build_knowledge_index() -> list[KnowledgeEntry]:
     entries: list[KnowledgeEntry] = []
     module_topics = {
@@ -448,27 +481,6 @@ def build_knowledge_index() -> list[KnowledgeEntry]:
             )
         )
 
-    exercise_topic_map = {
-        "thought_record_full": ("anxiety", "depression", "rumination", "self_worth"),
-        "behavioral_activation": (
-            "depression",
-            "burnout",
-            "motivation",
-            "procrastination",
-        ),
-        "mindfulness_body_scan": ("anxiety", "panic", "stress", "sleep"),
-        "worry_tree": ("anxiety", "rumination"),
-        "downward_arrow": ("anxiety", "self_worth"),
-        "values_card_sort": ("motivation", "stress", "burnout"),
-        "commitment_obstacle": ("procrastination", "motivation", "burnout"),
-        "defusion_labeling": ("rumination", "anxiety", "self_worth"),
-        "acceptance_leaves": ("grief", "stress", "rumination"),
-        "tipp_full": ("panic", "anger", "stress"),
-        "wise_mind": ("relationships", "anger", "stress"),
-        "radical_acceptance_walkthrough": ("grief", "stress", "relationships"),
-        "dear_man_assertion": ("relationships",),
-    }
-
     for exercise_id, exercise in CBT_EXERCISES.items():
         title = exercise.name
         description = exercise.description
@@ -477,9 +489,9 @@ def build_knowledge_index() -> list[KnowledgeEntry]:
                 entry_id=f"cbt-exercise:{exercise_id}",
                 title=title,
                 source="cbt_exercise",
-                topics=tuple(exercise_topic_map.get(exercise_id, ("stress",))),
+                topics=tuple(EXERCISE_TOPIC_MAP.get(exercise_id, ("stress",))),
                 modes=("intervention", "planning"),
-                keywords=_topic_keywords(tuple(exercise_topic_map.get(exercise_id, ("stress",)))),
+                keywords=_topic_keywords(tuple(EXERCISE_TOPIC_MAP.get(exercise_id, ("stress",)))),
                 content=description,
                 action_hint=f"Exercise tag: cbt_{exercise_id}",
             )
@@ -491,9 +503,9 @@ def build_knowledge_index() -> list[KnowledgeEntry]:
                 entry_id=f"act-exercise:{exercise_id}",
                 title=str(exercise["name"]),
                 source="act_exercise",
-                topics=tuple(exercise_topic_map.get(exercise_id, ("stress",))),
+                topics=tuple(EXERCISE_TOPIC_MAP.get(exercise_id, ("stress",))),
                 modes=("intervention", "planning"),
-                keywords=_topic_keywords(tuple(exercise_topic_map.get(exercise_id, ("stress",)))),
+                keywords=_topic_keywords(tuple(EXERCISE_TOPIC_MAP.get(exercise_id, ("stress",)))),
                 content=str(exercise["description"]),
                 action_hint=f"Exercise tag: act_{exercise_id}",
             )
@@ -505,9 +517,9 @@ def build_knowledge_index() -> list[KnowledgeEntry]:
                 entry_id=f"dbt-exercise:{exercise_id}",
                 title=str(exercise["name"]),
                 source="dbt_exercise",
-                topics=tuple(exercise_topic_map.get(exercise_id, ("stress",))),
+                topics=tuple(EXERCISE_TOPIC_MAP.get(exercise_id, ("stress",))),
                 modes=("intervention", "planning", "crisis"),
-                keywords=_topic_keywords(tuple(exercise_topic_map.get(exercise_id, ("stress",)))),
+                keywords=_topic_keywords(tuple(EXERCISE_TOPIC_MAP.get(exercise_id, ("stress",)))),
                 content=str(exercise["description"]),
                 action_hint=f"Exercise tag: dbt_{exercise_id}",
             )
