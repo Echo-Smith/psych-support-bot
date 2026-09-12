@@ -47,7 +47,6 @@ function makeDeps(over = {}) {
       turnTryReport: () => {},
       resetShownChars: () => { calls.resetShown += 1; },
     },
-    fallbackToQueue: (texts) => calls.fallback.push(texts),
     ...over,
   };
   return { deps, calls, pcmState };
@@ -110,7 +109,7 @@ test('ready 未声明 pcm → 旧路径：b64 攒句 + sentence_end 冲刷 playB
   assert.ok(calls.playBlob[0].size > 0);
 });
 
-test('error 降级：剩余 say 未播句转投 HTTP 队列，通道本会话弃用', async () => {
+test('error 降级：当轮剩余 say 静默丢弃（文字由 final 上屏），通道弃用待下轮重试', async () => {
   const { deps, calls } = makeDeps();
   const live = createTtsLive(deps);
   const ws = await openPcmSession(live);
@@ -118,8 +117,12 @@ test('error 降级：剩余 say 未播句转投 HTTP 队列，通道本会话弃
   live.ttsLiveSay('第二句。');
   ws.serverJson({ type: 'error', detail: 'upstream 429' });
   assert.equal(live.state.failed, true);
-  assert.deepEqual(calls.fallback, [['第一句。', '第二句。']]);
+  assert.deepEqual(live.state.pending, [], '剩余 say 丢弃');
+  assert.deepEqual(live.state.pendingTexts, [], '字幕队列丢弃（不转投 HTTP，二选一语义）');
   assert.equal(calls.debug.some((m) => m.includes('upstream 429')), true);
+  // 下一轮开拍：beginTurn 重置降级标志 → 自动重试探路
+  live.ttsLiveBeginTurn();
+  assert.equal(live.state.failed, false);
 });
 
 test('连接代次守卫：废弃连接的在途帧一律作废（防串音根因）', async () => {

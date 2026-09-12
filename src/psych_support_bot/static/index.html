@@ -3173,17 +3173,12 @@
     }
 
     // ---- LLM→TTS 句子级流式（/respond/stream SSE）----
-    const TTS_QUEUE = { items: [], playing: false, aborted: false, reviseText: null, anySpoken: false, prefetched: {} };
 
     async function sendMessageStream(message) {
-      TTS_QUEUE.items = [];
-      TTS_QUEUE.playing = false;
-      TTS_QUEUE.aborted = false;
-      TTS_QUEUE.reviseText = null;
-      TTS_QUEUE.anySpoken = false;
-      TTS_QUEUE.prefetched = {};
       LIVE_TEXT_SHOWN_CHARS = 0; // 新回合字幕预算清零
-      ttsLiveBeginTurn(); // 上一轮字幕/攒积态清零（防错位读旧句、防静默吞字幕）
+      ttsLiveBeginTurn(); // 上一轮字幕/攒积态清零（防错位读旧句、防静默吞字幕）；
+      // 同时重置 WS 降级标志——朗读唯一通道是 live WS，失败只影响当轮，
+      // 下一轮自动重试探路（不做运行时 HTTP 逐句回退，见 speakRound）。
       const sendBody = () => JSON.stringify({ user_id: USER_ID, session_id: SESSION_ID, message });
       let res = await fetch(API_BASE + '/v1/conversations/respond/stream', {
         method: 'POST',
@@ -3242,20 +3237,7 @@
       }
     }
 
-    function prefetchTts(text) {
-      // 预取当前句的合成音频（去重；失败静默，播放时现场重试）
-      if (TTS_QUEUE.prefetched[text] || !VOICE.ttsAvailable || !VOICE.ttsPref) return;
-      TTS_QUEUE.prefetched[text] = fetch(API_BASE + '/v1/voice/speak', {
-        method: 'POST',
-        headers: { ...authHeaders(), 'Content-Type': 'application/json' },
-        body: JSON.stringify({ text }),
-      }).then((res) => {
-        if (!res.ok) throw new Error('HTTP ' + res.status);
-        return res.blob();
-      });
-    }
-
-    function handleStreamRevise(text) {
+    async function handleStreamRevise(text) {
       // 全文审查与已朗读内容不一致（或投机快路径无 sentence）：
       // 停止旧轮朗读 + 用修正后文本重新开始一轮。
       stopVoicePlayback();
@@ -3267,30 +3249,8 @@
       TTS_LIVE.roundDone = null;
       TTS_LIVE.ended = false;
       TTS_LIVE.roundStarted = false;
-      // 重新朗读修正后全文
-      beginSpeaking();
-      if (VOICE.ttsAvailable && !TTS_LIVE.failed) {
-        ttsLiveRound(text)
-          .then(() => endSpeaking())
-          .catch((err) => {
-            appendDebug('tts revise fallback: ' + err.message);
-            TTS_LIVE.failed = true;
-            ttsLiveReset();
-            TTS_LIVE.failed = true;
-            reviseHttpFallback(text);
-          });
-        return;
-      }
-      reviseHttpFallback(text);
-    }
-
-    // revise 的 HTTP 句队列回退（WS 不可用时）
-    function reviseHttpFallback(text) {
-      TTS_QUEUE.items = []; TTS_QUEUE.playing = false; TTS_QUEUE.aborted = false;
-      TTS_QUEUE.anySpoken = false;
-      const sentences = splitIntoSentences(text);
-      for (const s of sentences) { TTS_QUEUE.items.push(s); prefetchTts(s); }
-      pumpTtsQueueUntilDone().then(() => endSpeaking());
+      // 重新朗读修正后全文（唯一通道：整轮 WS；失败=本轮无声，下轮重试探路）
+      await speakRound(text);
     }
 
     function handleStreamFinal(data) {
@@ -3374,7 +3334,7 @@
         postRender();
       }
       // 朗读收尾：流式轮用 ttsLiveEndRound 收束；投机/无 sentence 轮用
-      // speakReply；HTTP 回退队列用 interval 等。危机则退出对话模式。
+      // speakReply。危机则退出对话模式。
       const finish = () => {
         if (VOICE.mode === 'speaking') {
           VOICE.lastCrisis = isCrisis; // endSpeaking：危机→退出；用户暂停过→回白框；否则黄→绿
@@ -3387,101 +3347,12 @@
       } else if (TTS_LIVE.roundStarted && TTS_LIVE.ended) {
         // revise 已启动一轮（say+end），等 round_done
         TTS_LIVE.chain.then(finish);
-      } else if (TTS_QUEUE.playing || TTS_QUEUE.items.length > 0) {
-        const timer = setInterval(() => {
-          if (!TTS_QUEUE.playing && TTS_QUEUE.items.length === 0) { clearInterval(timer); finish(); }
-        }, 300);
-      } else if (!TTS_LIVE.roundStarted && !TTS_QUEUE.anySpoken && hasText) {
-        // 无 sentence/revise 事件（极端情况）：兜底整段朗读
+      } else if (!TTS_LIVE.roundStarted && hasText) {
+        // 无 sentence/revise 事件（会诊综合等单发路径）：兜底整轮朗读
         speakReply(data.reply, isCrisis);
       } else {
         finish();
       }
-    }
-
-    async function pumpTtsQueue() {
-      if (TTS_QUEUE.playing || TTS_QUEUE.aborted) return;
-      const text = TTS_QUEUE.items.shift();
-      if (!text) return;
-      TTS_QUEUE.playing = true;
-      TTS_QUEUE.anySpoken = true;
-      try {
-        await speakSentenceStream(text);
-      } catch (err) {
-        appendDebug('tts queue skip: ' + err.message); // 单句失败不阻塞后续句
-      }
-      TTS_QUEUE.playing = false;
-      pumpTtsQueue();
-    }
-
-    async function speakSentenceStream(text) {
-      // 优先用预取的合成音频（句子到达时已开始合成，播放零等待）；
-      // 无预取（兜底/revise 场景）则现场调流式端点。resolve 于播放结束。
-      return new Promise((resolve, reject) => {
-        beginSpeaking(); // 暂停白框中的排队句也会拉起黄框，并记住播完回暂停
-        const blobPromise = TTS_QUEUE.prefetched[text]
-          ? TTS_QUEUE.prefetched[text].catch(() => null)
-          : null;
-        const play = (blob) => {
-          const url = URL.createObjectURL(blob);
-          const audio = new Audio(url);
-          // iOS 打断（来电/Siri/切后台）可能让 onended 与 onerror 都不触发：
-          // 超时看护强制推进队列，杜绝整条朗读链死锁。
-          const watchdog = setTimeout(() => {
-            try { audio.pause(); } catch (err) { /* 已停止 */ }
-            URL.revokeObjectURL(url);
-            if (VOICE.audioEl === audio) VOICE.audioEl = null;
-            resolve();
-          }, 4000 + text.length * 400);
-          const finish = () => {
-            clearTimeout(watchdog);
-            URL.revokeObjectURL(url);
-            if (VOICE.audioEl === audio) VOICE.audioEl = null;
-            resolve();
-          };
-          audio.onended = finish;
-          audio.onerror = () => { clearTimeout(watchdog); URL.revokeObjectURL(url); reject(new Error('audio error')); };
-          VOICE.audioEl = audio;
-          audio.play().then(() => { turnMark('firstAudio'); turnTryReport(); liveTextAppend(text, 0, Math.max(700, blob.size * 0.125)); })
-            .catch((e) => { clearTimeout(watchdog); URL.revokeObjectURL(url); reject(e); });
-        };
-        if (blobPromise) {
-          blobPromise.then((blob) => {
-            delete TTS_QUEUE.prefetched[text];
-            if (blob && blob.size > 1000) { play(blob); return; }
-            // 预取失败 → 现场调流式端点
-            return fetch(API_BASE + '/v1/voice/speak/stream', {
-              method: 'POST',
-              headers: { ...authHeaders(), 'Content-Type': 'application/json' },
-              body: JSON.stringify({ text }),
-            }).then((res) => {
-              if (!res.ok || !res.body) throw new Error('HTTP ' + res.status);
-              return res.blob();
-            }).then(play);
-          }).catch(reject);
-          return;
-        }
-        fetch(API_BASE + '/v1/voice/speak/stream', {
-          method: 'POST',
-          headers: { ...authHeaders(), 'Content-Type': 'application/json' },
-          body: JSON.stringify({ text }),
-        }).then((res) => {
-          if (!res.ok || !res.body) throw new Error('HTTP ' + res.status);
-          return res.blob();
-        }).then((blob) => {
-          const url = URL.createObjectURL(blob);
-          const audio = new Audio(url);
-          audio.onended = () => {
-            URL.revokeObjectURL(url);
-            if (VOICE.audioEl === audio) VOICE.audioEl = null;
-            resolve();
-          };
-          audio.onerror = () => { URL.revokeObjectURL(url); reject(new Error('audio error')); };
-          VOICE.audioEl = audio;
-          audio.play().then(() => { turnMark('firstAudio'); turnTryReport(); liveTextAppend(text, 0, Math.max(700, blob.size * 0.125)); })
-            .catch((e) => { URL.revokeObjectURL(url); reject(e); });
-        }).catch(reject);
-      });
     }
 
     async function sendMessageFallback(message) {
@@ -3900,9 +3771,10 @@
 
     // ===== 语音 I/O（GPT Voice 式陪伴的语音层）=====
     // STT：MediaRecorder 录音 → /v1/voice/transcribe → 文本自动发送（转写文本
-    // 就是普通聊天消息，完整走对话管线与风险筛查）。TTS：回复到达后拼接
-    // messages 走 /v1/voice/speak，未配置降级浏览器 SpeechSynthesis；新一轮
-    // 发送/录音即中断播放。隐私：音频即转即弃，不落任何存储。
+    // 就是普通聊天消息，完整走对话管线与风险筛查）。TTS：唯一通道是整轮
+    // 单会话 WS（/v1/voice/tts/live，PCM 首块即播）；失败=本轮无声、下轮
+    // 重试，未配置服务端 TTS 降级浏览器 SpeechSynthesis。新一轮发送/录音
+    // 即中断播放。隐私：音频即转即弃，不落任何存储。
     const VOICE = {
       sttAvailable: false,
       ttsAvailable: false,
@@ -4270,12 +4142,10 @@
       document.getElementById('micHint').textContent = '免提对话中：直接说话即可；点输入框暂停转写；点键盘或 ESC 退出';
     }
 
-    // 彻底停掉一轮朗读：当前音频 + 句级队列 + 整轮 WS 会话（打断路径用，
-    // stopVoicePlayback 只掐当前句，队列/串播链会继续推下一句）
+    // 彻底停掉一轮朗读：当前音频 + 整轮 WS 会话（打断路径用，
+    // stopVoicePlayback 只掐当前句，串播链会继续推下一句）
     function abortAllPlayback() {
       stopVoicePlayback();
-      TTS_QUEUE.aborted = true;
-      TTS_QUEUE.items = [];
       if (TTS_LIVE.ws) { ttsLiveSend({ type: 'abort' }); killLiveWs(TTS_LIVE.ws); }
       pcmStopAll(); // PCM 队列即刻噤声（旧路径靠 stopVoicePlayback 掐元素，这里掐 source 队列）
       pcmStopAll();
@@ -4727,9 +4597,8 @@
     let pcmEnsureCtx = () => null;
     let pcmStopAll = () => {};
     let pcmDrained = () => Promise.resolve();
-    let splitIntoSentences = (text) => (text.trim() ? [text.trim()] : []);
     import('/static/js/voice/pcm.js')
-      .then((m) => import('/static/js/voice/live.js').then((lm) => import('/static/js/voice/sentences.js').then((sm) => {
+      .then((m) => import('/static/js/voice/live.js').then((lm) => {
         const pcm = m.createPcm({
           createContext: () => { try { const AC = window.AudioContext || window.webkitAudioContext; return AC ? new AC() : null; } catch (err) { return null; } },
           getSpeed: () => { const v = parseFloat(localStorage.getItem('np_tts_speed') || ''); return v >= 0.8 && v <= 1.4 ? v : 1.0; },
@@ -4753,20 +4622,12 @@
             turnTryReport,
             resetShownChars: () => { LIVE_TEXT_SHOWN_CHARS = 0; },
           },
-          fallbackToQueue: (texts) => {
-            const rest = texts.filter(Boolean);
-            if (rest.length && !TTS_QUEUE.aborted) {
-              TTS_QUEUE.items = TTS_QUEUE.items.concat(rest);
-              pumpTtsQueue();
-            }
-          },
         });
         TTS_LIVE = live.state;
         ttsLiveReset = live.ttsLiveReset; ttsLiveBeginTurn = live.ttsLiveBeginTurn;
         ttsLiveRound = live.ttsLiveRound; ttsLiveSay = live.ttsLiveSay;
         ttsLiveSend = live.ttsLiveSend; ttsLiveEndRound = live.ttsLiveEndRound; killLiveWs = live.killLiveWs;
-        splitIntoSentences = sm.splitIntoSentences;
-      })))
+      }))
       .catch((err) => appendDebug('voice modules load failed: ' + err.message));
 
     // 播一句（blob），resolve 于播放结束；带 iOS 打断超时看护。
@@ -4795,6 +4656,26 @@
       });
     }
 
+    // 对话朗读唯一通道：整轮单会话 WS。失败=本轮无声（文字照常上屏）+
+    // 显式日志，下一轮 sendMessageStream 的 ttsLiveBeginTurn 重置降级标志
+    // 自动重试探路。不做运行时 HTTP 逐句回退——单句失败静默跳过是不可
+    // 观测的劣化（20260912 实证：三分句回复只读出最后一句）。
+    async function speakRound(text) {
+      beginSpeaking();
+      if (!VOICE.ttsAvailable) {
+        // 未配置服务端 TTS 的部署：浏览器合成是仅有的朗读手段
+        speakWithBrowser(text);
+        return;
+      }
+      try {
+        await ttsLiveRound(text);
+        endSpeaking();
+      } catch (err) {
+        appendDebug('tts live 本轮失败（本轮无声，下轮重试）: ' + err.message);
+        endSpeaking();
+      }
+    }
+
     async function speakReply(reply, isCrisis) {
       VOICE.lastCrisis = !!isCrisis;
       // 静音闸门（成本开关）：静音时零 TTS 请求；危机回复例外（强制照读）
@@ -4804,57 +4685,7 @@
         : [(reply && reply.text) || ''];
       const text = parts.join(' ').trim();
       if (!text) { scheduleResumeListening(); return; }
-      beginSpeaking();
-      if (VOICE.ttsAvailable) {
-        if (!TTS_LIVE.failed) {
-          // P1 主路径：整轮单会话 WS（合成与播放重叠，句间零往返）
-          try {
-            await ttsLiveRound(text);
-            endSpeaking();
-            return;
-          } catch (err) {
-            appendDebug('tts live fallback: ' + err.message);
-          }
-          ttsLiveReset();
-          TTS_LIVE.failed = true; // 本页会话内不再重试 WS（回退句级 HTTP 队列）
-        }
-        // 回退：客户端分句 → 句级 HTTP 队列（预取流水线）
-        TTS_QUEUE.items = [];
-        TTS_QUEUE.playing = false;
-        TTS_QUEUE.aborted = false;
-        TTS_QUEUE.anySpoken = false;
-        const sentences = splitIntoSentences(text);
-        for (const sent of sentences) {
-          TTS_QUEUE.items.push(sent);
-          prefetchTts(sent);
-        }
-        pumpTtsQueueUntilDone().then(() => endSpeaking());
-        return;
-      }
-      // 未配置服务端 TTS 的部署：浏览器合成是仅有的朗读手段
-      speakWithBrowser(text);
-    }
-
-    // 队列顺序播完（speakReply 专用）：不依赖免提状态机——打字轮（idle 态）
-    // 也要能完整朗读；会话态收尾由调用方的 endSpeaking 处理
-    function pumpTtsQueueUntilDone() {
-      return new Promise((resolve) => {
-        const step = () => {
-          if (TTS_QUEUE.aborted) { resolve(); return; }
-          const text = TTS_QUEUE.items.shift();
-          if (!text) { resolve(); return; }
-          TTS_QUEUE.playing = true;
-          TTS_QUEUE.anySpoken = true;
-          speakSentenceStream(text)
-            .catch((err) => appendDebug('tts skip: ' + err.message)) // 单句失败不阻塞
-            .then(() => {
-              TTS_QUEUE.playing = false;
-              if (TTS_QUEUE.items.length && !TTS_QUEUE.aborted) setTimeout(step, 120); // 句间小喘息，自然感
-              else resolve();
-            });
-        };
-        step();
-      });
+      await speakRound(text);
     }
 
     function speakWithBrowser(text) {

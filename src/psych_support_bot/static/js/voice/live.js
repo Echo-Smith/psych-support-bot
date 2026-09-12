@@ -1,9 +1,10 @@
 // TTS live 全双工会话状态机（/v1/voice/tts/live）：LLM 流式句直灌（say），
-// 服务端 PCM 帧直推 + sentence_end/round_end 控制面；WS 不可用回退句级 HTTP
-// 队列（预取流水线，由注入的 fallbackToQueue 承接）。协议权威定义见
+// 服务端 PCM 帧直推 + sentence_end/round_end 控制面。对话朗读的唯一通道
+// （二选一决策，见 docs/technical/VOICE_DECISIONS.md D6）：失败=当轮无声、
+// 每轮开拍重试探路，不做 HTTP 逐句回退。协议权威定义见
 // src/psych_support_bot/infra/voice/protocol.py（前端镜像 js/voice/protocol.js）。
-// 从 index.html 原样迁出（行为不变）；WS 地址/PCM 播放/字幕回调/定时器全部
-// 注入，node --test 用假 WebSocket 钉住状态机迁移行为。
+// 从 index.html 原样迁出；WS 地址/PCM 播放/字幕回调/定时器全部注入，
+// node --test 用假 WebSocket 钉住状态机行为。
 
 // round 收束硬上限——MiMo 免费期上游偶发挂死会让服务器 round_end 迟到两
 // 分钟，黄框假死期间麦克风一直被挂起（第二次说话录不进的根因链）。取值
@@ -13,7 +14,7 @@
 export const ROUND_TIMEOUT_MS = 25000;
 
 export function createTtsLive(deps) {
-  const { wsUrl, debug, pcm, playBlob, ui, fallbackToQueue } = deps;
+  const { wsUrl, debug, pcm, playBlob, ui } = deps;
   const timers = deps.timers || {
     setTimeout: (...a) => setTimeout(...a),
     clearTimeout: (...a) => clearTimeout(...a),
@@ -45,12 +46,15 @@ export function createTtsLive(deps) {
     pcm.stopAll(); // 全量复位语义包含掐掉在排播的 PCM 队列
   }
 
-  // 流式轮开拍：清上一轮残留的字幕/攒积态。只清「内容」不清通道——ws/failed
-  // 由各自失败路径管理。残留危害（20260912 实证）：
+  // 流式轮开拍：清上一轮残留的字幕/攒积态与降级标志。残留危害（20260912
+  // 实证）：
   // - finalTakeover 残留 true → 下一轮 sentence_end 全部静默，字幕不逐句
   //   上屏，final 到达时多条信息一次性蹦出；
-  // - pendingTexts 残留 → 下一轮字幕整体错位，音频读到「还没上屏的句子」。
+  // - pendingTexts 残留 → 下一轮字幕整体错位，音频读到「还没上屏的句子」；
+  // - failed 残留 → 上一轮 WS 失败会让后续所有轮静默无朗读。二选一语义下
+  //   朗读唯一通道是 live WS：失败只影响当轮，每轮开拍重试探路。
   function ttsLiveBeginTurn() {
+    TTS_LIVE.failed = false;
     TTS_LIVE.pending = [];
     TTS_LIVE.curBytes = []; TTS_LIVE.curChars = 0;
     TTS_LIVE.pendingTexts = [];
@@ -153,12 +157,13 @@ export function createTtsLive(deps) {
         }
       } else if (ev.type === 'error') {
         debug('tts live: ' + (ev.detail || 'error'));
-        // 上游会话中断（配额/风控等）：剩余未获句尾事件的句子转投 HTTP 句
-        // 队列续读，后半段不再静默消失；本页 WS 通道本会话弃用。
-        // aborted 判定与过滤在接线侧（TTS_QUEUE 所有权不进本模块）。
+        // 上游会话中断（配额/风控等）：本轮剩余 say 不再朗读（文字照常由
+        // final 上屏），WS 通道弃用；下一轮 ttsLiveBeginTurn 重置降级标志
+        // 自动重试探路。不做运行时 HTTP 逐句回退——单句失败静默跳过是不可
+        // 观测的劣化（20260912 实证：只读到最后一句）。
         TTS_LIVE.failed = true;
-        const rest = TTS_LIVE.pending.splice(0).concat(TTS_LIVE.pendingTexts.splice(0));
-        fallbackToQueue(rest);
+        TTS_LIVE.pending = [];
+        TTS_LIVE.pendingTexts = [];
       }
     };
     ws.onclose = () => {

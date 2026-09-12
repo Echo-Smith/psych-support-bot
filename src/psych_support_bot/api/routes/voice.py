@@ -2,10 +2,9 @@
 
 - POST /transcribe：multipart 音频 → 转写文本。音频即转即弃（不落库、
   不写日志）；转写文本作为普通聊天消息的输入由前端走既有 /respond。
-- POST /speak：文本 → audio/mpeg。未配置 503，前端降级浏览器朗读。
-  危机回复照读（热线号码读出来更可达）。
-- POST /speak/stream：同上但 chunked 流式返回（边合成边转），前端 MSE
-  边下边播，感知延迟 ≈ 上游首块（实测 ~0.5s vs 整段 ~2s）。
+- POST /speak、/speak/stream：**已废弃**（对话朗读二选一收敛到 WS
+  /tts/live，前端句队列已删除——运行时双路径的静默逐句跳过是不可观测
+  的劣化，20260912 实证）。端点保留一个版本供旧前端兼容，勿新增调用。
 - GET /status：前端探测（是否配置 STT/TTS），决定麦克风按钮显隐与朗读开关。
 
 阻塞的上游调用走 asyncio.to_thread：适配层是同步 httpx / asyncio.run 包裹
@@ -191,7 +190,10 @@ async def turn_metrics(request: Request, payload: dict[str, Any], _sub: str = De
 
 
 @router.post("/speak")
+@router.post("/speak", deprecated=True)
 async def speak_text(request: Request, payload: dict[str, Any], _sub: str = Depends(require_auth)) -> Response:
+    """文本 → audio（已废弃）：对话朗读已收敛到 WS /tts/live（二选一，
+    见 VOICE_DECISIONS.md D6）。仅为旧前端保留一个版本，勿新增调用。"""
     text = str(payload.get("text") or "").strip()
     if not text:
         raise HTTPException(status_code=422, detail="Empty text")
@@ -208,8 +210,9 @@ async def speak_text(request: Request, payload: dict[str, Any], _sub: str = Depe
 
 
 @router.post("/speak/stream")
+@router.post("/speak/stream", deprecated=True)
 async def speak_stream(request: Request, payload: dict[str, Any], _sub: str = Depends(require_auth)):
-    """文本 → mp3 流（chunked）：上游音频块即产即转，前端边下边播。
+    """文本 → mp3 流（chunked）（已废弃）：同 /speak，仅为旧前端保留。
 
     感知延迟 ≈ 上游首块到达时间（MiniMax 实测 ~0.5s），远低于整段合成。
     首个字节前的配置/校验错误仍返回 JSON 错误码；流出后中途失败只能
