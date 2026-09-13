@@ -281,6 +281,7 @@ def save_conversation_result(
     response: ConversationResponse,
     user_message: str,
     user_id: str,
+    slice_id: str = "",  # Phase 3: 切片ID（可选）
 ) -> None:
     ensure_user(session, user_id)
     session.merge(
@@ -295,6 +296,7 @@ def save_conversation_result(
     session.add(
         Message(
             session_id=response.session_id,
+            slice_id=slice_id or None,  # Phase 3: 关联切片
             role="user",
             content=user_message,
             safety_flag=response.risk.needs_crisis_mode,
@@ -303,6 +305,7 @@ def save_conversation_result(
     session.add(
         Message(
             session_id=response.session_id,
+            slice_id=slice_id or None,  # Phase 3: 关联切片
             role="assistant",
             content=response.reply.text,
             safety_flag=response.risk.needs_crisis_mode,

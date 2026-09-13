@@ -48,3 +48,14 @@ def _no_langfuse_export(monkeypatch):
     from psych_support_bot.infra.telemetry import tracing
 
     tracing._langfuse_client = None
+
+
+@pytest.fixture
+def db_session():
+    """Provide a database session for tests."""
+    from psych_support_bot.infra.db.session import get_db_session
+
+    session = next(get_db_session())
+    yield session
+    session.rollback()
+    session.close()

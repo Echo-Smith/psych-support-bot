@@ -27,6 +27,7 @@ from psych_support_bot.ai.schemas.state import GraphState
 from psych_support_bot.ai.tools.exercises import detect_completed_exercise
 from psych_support_bot.domain.assessments.service import classify_disengage
 from psych_support_bot.domain.consents import DISCLAIMER_VERSION
+from psych_support_bot.infra.config.settings import get_settings
 from psych_support_bot.infra.db.exercise_repositories import save_exercise_record
 from psych_support_bot.infra.db.practice_repositories import (
     complete_practice_session,
@@ -49,6 +50,7 @@ from psych_support_bot.infra.db.repositories import (
 )
 from psych_support_bot.infra.telemetry.tracing import trace_span, update_span_output
 from psych_support_bot.services.questionnaire_flow import QuestionnaireFlow
+from psych_support_bot.services.slice_manager import SliceManager, build_slice_context
 from psych_support_bot.services.support import _days_since, _detect_expected_language
 
 # How long a screening result with needs_safety_followup keeps enforcing the
@@ -272,6 +274,32 @@ class ConversationService:
             if msg.role in {"user", "assistant"} and (msg.content or "").strip()
         ]
 
+        # ===== Context Slicing (Phase 3) =====
+        # 如果启用切片系统，构建切片上下文；否则使用 recent_history
+        settings = get_settings()
+        if settings.enable_context_slicing:
+            slice_manager = SliceManager()
+            current_slice = slice_manager.get_or_create_slice(session, payload.user_id, session_id, payload.message)
+            slice_context = build_slice_context(session, current_slice.id, max_turns=20)
+            slice_metadata = {
+                "is_new_slice": current_slice.turn_count == 0,
+                "boundary_reason": current_slice.boundary_reason,
+                "boundary_confidence": current_slice.boundary_confidence,
+                "primary_topic": current_slice.primary_topic,
+            }
+            slice_id = current_slice.id
+            logger.info(
+                f"Context slicing enabled: slice_id={slice_id}, "
+                f"is_new_slice={slice_metadata['is_new_slice']}, "
+                f"reason={slice_metadata['boundary_reason']}"
+            )
+        else:
+            # 禁用时使用空值（保留 recent_history）
+            slice_context = []
+            slice_metadata = {}
+            slice_id = ""
+            logger.debug("Context slicing disabled, using recent_history")
+
         # 结构化风险通道：近 7 天最近一次 high/critical RiskEvent（跨轮升级主来源）。
         # 取序前移：画像层的动态预算与 D7 优先渲染需要它作为轮次上下文。
         recent_risk_level = get_recent_risk_level(session, payload.user_id)
@@ -358,6 +386,10 @@ class ConversationService:
             "practice_action": "",
             # LLM→TTS 句子级流式开关（默认关；respond_stream 置真）。
             "stream_tokens": False,
+            # ===== Context Slicing (Phase 3) =====
+            "slice_id": slice_id,
+            "slice_context": slice_context,
+            "slice_metadata": slice_metadata,
         }
         return state, session_id, expected_language
 
@@ -440,6 +472,7 @@ class ConversationService:
                     response=fallback_response,
                     user_message=payload.message,
                     user_id=payload.user_id,
+                    slice_id=state.get("slice_id", ""),  # Phase 3: fallback 也关联切片
                 )
                 return fallback_response
             done_state: GraphState = cast(GraphState, raw_result)
@@ -568,6 +601,7 @@ class ConversationService:
             response=response,
             user_message=payload.message,
             user_id=payload.user_id,
+            slice_id=result.get("slice_id", ""),  # Phase 3: 传递切片ID
         )
         # M3 对话图联动：对话中完成练习时自动落库（exercise_history 之前只
         # 存在于图状态的内存字段，现在持久化）。识别不到不记，宁漏不误。

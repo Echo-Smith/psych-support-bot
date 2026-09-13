@@ -61,6 +61,9 @@ class Settings(BaseSettings):
     # 提取（D1 图内 topics + D4 练习效果信号），无额外 LLM 调用。fail-open：
     # 提取异常只记统计不阻断对话；危机轮零提取（高危内容不入画像层）。
     profile_extraction_enabled: bool = Field(default=True, alias="PROFILE_EXTRACTION_ENABLED")
+    # ===== Context Slicing (Phase 3) =====
+    # 上下文切片系统：自动按话题切分对话，避免上下文污染
+    enable_context_slicing: bool = Field(default=False, alias="ENABLE_CONTEXT_SLICING")
     # JWT 认证：默认关闭（面板登录 UI 尚未上线，开启即拦截全部 /v1 数据端点）。
     # 商业化部署置 AUTH_ENABLED=true 并显式配置 JWT_SECRET_KEY。
     auth_enabled: bool = Field(default=False, alias="AUTH_ENABLED")

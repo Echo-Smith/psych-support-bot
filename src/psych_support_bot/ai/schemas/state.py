@@ -89,3 +89,11 @@ class GraphState(TypedDict):
     # get_stream_writer 逐块吐 token，供 /respond/stream SSE 消费。
     # 仅影响是否推流式事件，不改变最终 state 文本（safety_reviewer/持久化不变）。
     stream_tokens: bool
+    # ===== Context Slicing (Phase 3) =====
+    # 当前对话切片 ID（conversation_slices 表主键）
+    slice_id: str
+    # 切片上下文：当前切片内的完整对话历史（替代 recent_history 作为主上下文）
+    # 格式：[{"role": "user"|"assistant", "content": str}]，时间正序
+    slice_context: list[dict[str, str]]
+    # 切片元信息：{"is_new_slice": bool, "boundary_reason": str, "primary_topic": str}
+    slice_metadata: dict[str, Any]

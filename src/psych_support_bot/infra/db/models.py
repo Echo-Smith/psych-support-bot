@@ -61,6 +61,7 @@ class Message(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     session_id: Mapped[str] = mapped_column(String(64), index=True)
+    slice_id: Mapped[str | None] = mapped_column(String(64), index=True, nullable=True)
     role: Mapped[str] = mapped_column(String(32))
     content: Mapped[str] = mapped_column(Text)
     safety_flag: Mapped[bool] = mapped_column(Boolean, default=False)
@@ -335,3 +336,61 @@ class ProfileInterventionEvent(Base):
     intervention_kind: Mapped[str] = mapped_column(String(32))
     detail_json: Mapped[str] = mapped_column(Text, default="{}")
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, index=True)
+
+
+# === Context Slicing Models (Phase 1) ===
+
+
+class ConversationSlice(Base):
+    """Conversation slice: a complete conversation within a session."""
+
+    __tablename__ = "conversation_slices"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    session_id: Mapped[str] = mapped_column(String(64), index=True)
+    user_id: Mapped[str] = mapped_column(String(64), index=True)
+    start_message_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    end_message_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    primary_topic: Mapped[str] = mapped_column(String(64), default="")
+    topic_vector: Mapped[str] = mapped_column(Text, default="{}")
+    boundary_reason: Mapped[str] = mapped_column(String(32), default="first_message")
+    boundary_confidence: Mapped[float] = mapped_column(Float, default=1.0)
+    turn_count: Mapped[int] = mapped_column(Integer, default=0)
+    status: Mapped[str] = mapped_column(String(16), default="active")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, onupdate=utcnow)
+
+
+class SliceSummary(Base):
+    """Slice summary: generated summary for each completed slice."""
+
+    __tablename__ = "slice_summaries"
+
+    slice_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    user_id: Mapped[str] = mapped_column(String(64), index=True)
+    summary_text: Mapped[str] = mapped_column(Text, default="")
+    key_points: Mapped[str] = mapped_column(Text, default="[]")
+    topics: Mapped[str] = mapped_column(Text, default="[]")
+    relevance_score: Mapped[float] = mapped_column(Float, default=1.0)
+    summary_embedding: Mapped[str] = mapped_column(Text, default="[]")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, index=True)
+
+
+class UserTimeProfile(Base):
+    """User time behavior profile for adaptive slice thresholds."""
+
+    __tablename__ = "user_time_profiles"
+
+    user_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    avg_gap_minutes: Mapped[float] = mapped_column(Float, default=0.0)
+    median_gap_minutes: Mapped[float] = mapped_column(Float, default=0.0)
+    p25_gap_minutes: Mapped[float] = mapped_column(Float, default=0.0)
+    p75_gap_minutes: Mapped[float] = mapped_column(Float, default=0.0)
+    sleep_start_hour: Mapped[int] = mapped_column(Integer, default=23)
+    sleep_end_hour: Mapped[int] = mapped_column(Integer, default=7)
+    active_windows: Mapped[str] = mapped_column(Text, default="[]")
+    frequency_tier: Mapped[str] = mapped_column(String(16), default="unknown")
+    short_gap_threshold_minutes: Mapped[float] = mapped_column(Float, default=60.0)
+    long_gap_threshold_minutes: Mapped[float] = mapped_column(Float, default=720.0)
+    total_sessions: Mapped[int] = mapped_column(Integer, default=0)
+    last_updated: Mapped[datetime] = mapped_column(DateTime, default=utcnow, onupdate=utcnow)

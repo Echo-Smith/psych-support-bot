@@ -140,7 +140,8 @@ def _generate_normal_reply(state: GraphState, risk_level: str, no_question_mode:
                 loop_hint="Prioritize safety, validation, and gentle redirection to support resources.",
                 expected_language=state.get("expected_language", ""),
                 emotional_state=state.get("emotional_state", ""),
-                history=[dict(turn) for turn in (state.get("recent_history") or [])],
+                # Phase 3: 使用切片上下文或 recent_history
+                history=[dict(turn) for turn in (state.get("slice_context") or state.get("recent_history") or [])],
             )
             state["consultation_opinions"] = []
         except Exception:
@@ -176,6 +177,24 @@ def _generate_normal_reply(state: GraphState, risk_level: str, no_question_mode:
             )
             state["consultation_opinions"] = opinions
         else:
+            # Phase 3: 如果是新切片，在 loop_hint 中添加边界提示
+            base_loop_hint = state.get("loop_hint", "Start broad, reflect, then narrow.")
+            slice_metadata = state.get("slice_metadata", {})
+            if slice_metadata.get("is_new_slice"):
+                boundary_reason = slice_metadata.get("boundary_reason", "")
+                if boundary_reason == "explicit_switch":
+                    slice_hint = "Note: User just switched topics explicitly. Focus on the new topic and don't reference the previous conversation unless the user asks."
+                elif boundary_reason == "sleep_boundary":
+                    slice_hint = "Note: This is a new conversation after sleep. Start fresh; treat it as a new session."
+                elif boundary_reason.startswith("time_gap"):
+                    slice_hint = "Note: User returned after a time gap. Acknowledge continuity if needed, but focus on the current message."
+                else:
+                    slice_hint = ""
+
+                loop_hint_with_slice = f"{slice_hint}\n\n{base_loop_hint}" if slice_hint else base_loop_hint
+            else:
+                loop_hint_with_slice = base_loop_hint
+
             gen_kwargs = {
                 "user_message": state["user_message"],
                 "mode": state["mode"],
@@ -188,14 +207,15 @@ def _generate_normal_reply(state: GraphState, risk_level: str, no_question_mode:
                 "interview_stage": state.get("interview_stage", "engagement"),
                 "question_strategy": state.get("question_strategy", "open"),
                 "challenge_allowed": bool(state.get("challenge_allowed", False)),
-                "loop_hint": state.get("loop_hint", "Start broad, reflect, then narrow."),
+                "loop_hint": loop_hint_with_slice,  # Phase 3: 注入切片提示
                 "expected_language": state.get("expected_language", ""),
                 "no_question_mode": no_question_mode,
                 # 复读事故（Langfuse 2026-09-02 c4fd09cc）的第二道防线：
                 # 生成时就明确告知上一轮已交付过内容，不要复述。
                 "anti_repeat_note": _anti_repeat_note(),
                 "emotional_state": state.get("emotional_state", ""),
-                "history": [dict(turn) for turn in (state.get("recent_history") or [])],
+                # Phase 3: 优先使用切片上下文（更完整的话题边界）
+                "history": [dict(turn) for turn in (state.get("slice_context") or state.get("recent_history") or [])],
             }
             if state.get("stream_tokens"):
                 # 句子级流式：普通 LLM 路径逐块经 get_stream_writer 推 token，
