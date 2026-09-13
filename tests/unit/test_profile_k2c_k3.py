@@ -225,6 +225,22 @@ def test_unanswered_injection_blocks_reinjection_then_verdict_reopens() -> None:
         assert len(injected) == 2
 
 
+def test_panel_d4_single_worked_feedback_shows() -> None:
+    """调参 C 回归：用户亲口一次 worked（0.55 起步）即达面板水位。"""
+    user_id = _uid()
+    _seed(
+        user_id,
+        key="dbt_tipp",
+        dimension="D4",
+        confidence=0.55,
+        value={"tag": "dbt_tipp", "effect": "worked"},
+    )
+    with SessionLocal() as session:
+        panel = build_profile_panel(session, user_id)
+    d4 = next(s for s in panel["sections"] if s["dimension"] == "D4")
+    assert d4["items"][0]["detail"] == "用起来有帮助"
+
+
 def test_question_candidates_threshold_still_holds() -> None:
     user_id = _uid()
     _seed(user_id, key="sleep", dimension="D1", confidence=0.75)

@@ -42,10 +42,10 @@ def _item_for(belief, language: str) -> dict | None:
     """单条 belief → 面板条目；None = 该条不出面板（逐条裁决）。"""
     if belief.dimension == "D3" and belief.source != "user_confirmed":
         return None
-    if belief.layer == "L4" and (belief.dimension != "D1" or belief.confidence < L4_RENDER_THRESHOLD):
-        # L4 一律不出面板，唯一例外是 D1 主题且过渲染水位（≥0.55 ≈ 两次
-        # 跨轮证据）：主题是低风险观察，"反复出现的话题"值得让用户看见，
-        # 否则 K1 阶段面板会长期空白。机制/动机类 L4 仍然不出。
+    if belief.layer == "L4" and (belief.dimension not in ("D1", "D4") or belief.confidence < L4_RENDER_THRESHOLD):
+        # L4 的面板豁免：D1 主题（≥0.55 ≈ 两次跨轮证据，"反复出现的话题"
+        # 值得让用户看见）与 D4 效果反馈（调参 C：用户亲口 worked/aversive
+        # 单次即 0.55——直接反馈是最有权的信号）。机制/动机类 L4 仍不出面板。
         return None
     label = friendly_label(belief.key, language)
     if belief.dimension == "D4":
