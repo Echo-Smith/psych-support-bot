@@ -17,12 +17,18 @@
 - L4 候选仅 confidence ≥ L4_RENDER_THRESHOLD（≈2 次跨轮证据）才渲染；
 - 任何条目 label 查词典查无（friendly_label 返回 None）即整条跳过——
   把存储层 key 透出到 prompt 等于术语泄漏。
+
+排序规则（信息增益调度）：
+- 条目按活性（``belief_activity``）装箱：置信度 × 时间衰减（60 天半衰期）
+  × 确认强度（L1/L2=1.0，L4=0.7）。活性只影响排序，**不影响门控**——
+  旧信念不会因衰减被隐藏，只是在预算竞争中自然下沉。
 """
 
 from __future__ import annotations
 
 import json
 import logging
+from datetime import UTC, datetime
 
 from sqlalchemy.orm import Session
 
@@ -47,7 +53,36 @@ MAX_KNOWLEDGE_PROXY = 3  # 主题命中数封顶（与 detect_topics 返回上�
 MAX_D8_ITEMS = 5  # D8 负记忆条数上限（保证固定首槽自身有界）
 L4_RENDER_THRESHOLD = 0.55  # L4 渲染水位（0.4 起步 + 一次 SUPPORT_GAIN）
 
+# ── 活性排序（信息增益调度）────────────────────────────────────────────
+# 活性 = 置信度 × 时间衰减 × 确认强度，只决定装箱排序，不参与红线门控
+# （L4 水位 / D3 未认领门控仍看原始字段，避免旧信念被衰减"偷偷隐藏"）。
+ACTIVITY_HALF_LIFE_DAYS = 60.0  # 证据半衰期：60 天无新证据活性减半
+_CONFIRMED_LAYER_ACTIVITY = 1.0  # L1/L2 用户已认领：活性不打折
+_HYPOTHESIS_LAYER_ACTIVITY = 0.7  # L4 待验证假设：天然弱于已认领
+
 _RISK_AWARE_LEVELS = {"elevated", "high", "critical"}
+
+
+def belief_activity(belief, *, now: datetime | None = None, half_life_days: float = ACTIVITY_HALF_LIFE_DAYS) -> float:
+    """单条 belief 的当前活性（纯函数）。
+
+    - 时间衰减：``0.5 ** (age_days / half_life)``，last_evidence_at 是
+      模型注释中"90 天降权"承诺的兑现（不删除，只降排序）；
+    - 确认强度：L1/L2 系数 1.0，L4 系数 0.7——同等置信度下已认领信念
+      优先于候选假设；
+    - 输出 [0,1] 量级（confidence ≤0.95），同输入同输出。
+    """
+    current = now or datetime.now(UTC)
+    last = belief.last_evidence_at
+    if last is None:
+        return 0.0
+    if last.tzinfo is None:
+        # SQLite 经 SQLAlchemy 取回的 naive datetime 按 UTC 解释。
+        last = last.replace(tzinfo=UTC)
+    age_days = max((current - last).total_seconds() / 86400.0, 0.0)
+    decay = 0.5 ** (age_days / max(half_life_days, 1e-6))
+    layer_factor = _CONFIRMED_LAYER_ACTIVITY if belief.layer in {"L1", "L2"} else _HYPOTHESIS_LAYER_ACTIVITY
+    return round(float(belief.confidence) * decay * layer_factor, 6)
 
 
 def _is_en(language: str) -> bool:
@@ -143,12 +178,15 @@ def render_profile_block(
         items.append(d8)
 
     risk_boost = recent_risk_level in _RISK_AWARE_LEVELS
+    render_now = datetime.now(UTC)
 
     def _sort_key(belief):
         topic_match = 1 if belief.dimension == "D1" and belief.key in topics else 0
         d7_boost = 1 if risk_boost and belief.dimension == "D7" else 0
-        layer_bonus = 1 if belief.layer in {"L1", "L2"} else 0
-        return (topic_match, d7_boost, layer_bonus, belief.last_evidence_at)
+        # 活性取代旧的（layer_bonus, last_evidence_at）二元组：置信度 ×
+        # 时间衰减 × 确认强度的连续排序，旧信念自然下沉；时近仍作同分时的
+        # 确定性末位 tiebreak，保证渲染可复现。
+        return (topic_match, d7_boost, belief_activity(belief, now=render_now), belief.last_evidence_at)
 
     candidates = sorted(list_active_beliefs(session, user_id), key=_sort_key, reverse=True)
     for belief in candidates:

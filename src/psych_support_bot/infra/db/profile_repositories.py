@@ -234,13 +234,73 @@ def list_rejected_beliefs(session: Session, user_id: str, *, limit: int = 5) -> 
 # 而主题在面板已经可见，质询的稀缺预算应该验证真正改变干预策略的
 # 机制/动机信念：跨过水位的候选先按分级、再按置信度排序。
 _QUESTION_VALUE_TIER = {"D3": 3, "D5": 2}
+# 确认率反馈的权重闭区间：静态分级 × 学习权重。
+# [0.6, 1.4] 的设计意图——只在同优先级带内调整，不推翻"机制类(D3)整体
+# 优先于主题类(D1)"的 ADR：D3 最差 3×0.6=1.8 仍高于 D1 最好 1×1.4=1.4；
+# 但确认率低的 D3（1.8）会被确认率高的 D5（2×1.4=2.8）反超，把提问
+# 预算让给该用户身上"问得准"的维度。
+QUESTION_TIER_WEIGHT_MIN = 0.6
+QUESTION_TIER_WEIGHT_MAX = 1.4
+
+
+def _question_confirm_rate_weight(rate: float) -> float:
+    """确认率 [0,1] → 权重 [MIN, MAX] 的线性映射；rate=0.5 时恰为 1.0。"""
+    clamped = min(max(rate, 0.0), 1.0)
+    weight = QUESTION_TIER_WEIGHT_MIN + (QUESTION_TIER_WEIGHT_MAX - QUESTION_TIER_WEIGHT_MIN) * clamped
+    return round(weight, 4)
+
+
+def _dimension_question_weights(session: Session, user_id: str) -> dict[str, float]:
+    """各维度的质询价值学习权重（按该用户历史质询结局计算）。
+
+    数据源：``question_answered`` 事件 detail={verdict, belief_key}——
+    confirm 计成功，deny/unclear 均计失败（unclear 同样花掉了一次提问
+    预算）。belief_key → dimension 经 profile_beliefs 表现存关联解析，
+    解析不出（极端边界）的事件跳过。
+
+    小样本用 Beta(1,1) 收缩：``rate = (confirms+1)/(n+2)``，n=0 → 0.5
+    → 权重 1.0（静态分级原样生效），n 越大反馈越强。
+    """
+    answered = list(
+        session.scalars(
+            select(ProfileInterventionEvent).where(
+                ProfileInterventionEvent.user_id == user_id,
+                ProfileInterventionEvent.intervention_kind == "question_answered",
+            )
+        )
+    )
+    if not answered:
+        return {}
+
+    key_to_dim = dict(
+        session.execute(select(ProfileBelief.key, ProfileBelief.dimension).where(ProfileBelief.user_id == user_id))
+        .all()
+    )
+    stats: dict[str, list[int]] = {}
+    for event in answered:
+        try:
+            detail = json.loads(event.detail_json or "{}")
+        except (TypeError, ValueError):
+            continue
+        dimension = key_to_dim.get(str(detail.get("belief_key") or ""))
+        if not dimension:
+            continue
+        slot = stats.setdefault(dimension, [0, 0])
+        slot[1] += 1
+        if detail.get("verdict") == "confirm":
+            slot[0] += 1
+    return {
+        dimension: _question_confirm_rate_weight((confirms + 1) / (total + 2))
+        for dimension, (confirms, total) in stats.items()
+    }
 
 
 def list_question_candidates(session: Session, user_id: str, *, limit: int = 1) -> list[ProfileBelief]:
     """质询候选：L4 且 confidence ≥ 水位的待验证假设（K2 质询闭环数据源）。
 
     只在确定性水位之上才值得花一次提问预算；升级 L2 仍需用户确认。
-    排序 = （干预价值分级，置信度，时近）降序——机制类优先占用提问预算。
+    排序 = （干预价值分级 × 该维度确认率学习权重，置信度，时近）降序。
+    无质询历史时权重全为 1.0，回退为静态分级（D3>D5>其余）。
     """
     conditions = (
         ProfileBelief.user_id == user_id,
@@ -249,8 +309,13 @@ def list_question_candidates(session: Session, user_id: str, *, limit: int = 1) 
     )
     rows = list(session.scalars(select(ProfileBelief).where(*conditions)))
     pending = [b for b in rows if b.confidence >= L4_QUESTION_THRESHOLD]
+    weights = _dimension_question_weights(session, user_id)
     pending.sort(
-        key=lambda b: (_QUESTION_VALUE_TIER.get(b.dimension, 1), b.confidence, b.last_evidence_at),
+        key=lambda b: (
+            _QUESTION_VALUE_TIER.get(b.dimension, 1) * weights.get(b.dimension, 1.0),
+            b.confidence,
+            b.last_evidence_at,
+        ),
         reverse=True,
     )
     return pending[:limit]
