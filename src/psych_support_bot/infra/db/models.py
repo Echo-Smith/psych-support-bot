@@ -264,6 +264,9 @@ class ProfileBelief(Base):
     source: Mapped[str] = mapped_column(String(32), default="extracted")
     evidence_json: Mapped[str] = mapped_column(Text, default="[]")
     origin_stats_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    # P4 提取溯源：本条 belief 首次证据来源的对话切片（nullable——
+    # 切片功能关闭时每轮提取无来源切片）。删除画像不影响切片本体。
+    origin_slice_id: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
     origin_session_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
     last_evidence_session_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
     first_seen_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)

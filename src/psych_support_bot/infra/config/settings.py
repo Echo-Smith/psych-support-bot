@@ -64,6 +64,12 @@ class Settings(BaseSettings):
     # ===== Context Slicing (Phase 3) =====
     # 上下文切片系统：自动按话题切分对话，避免上下文污染
     enable_context_slicing: bool = Field(default=False, alias="ENABLE_CONTEXT_SLICING")
+    # P4 切片完成联动：关闭切片时生成摘要（LLM，fail-open 降级确定性）+
+    # primary_topic 继承 + 提取溯源 origin_slice_id。依赖 P3 切片开启。
+    enable_slice_based_extraction: bool = Field(default=False, alias="ENABLE_SLICE_BASED_EXTRACTION")
+    # P5 画像驱动检索：完成切片的摘要按 0.5 时间/0.3 主题/0.2 练习效果
+    # 加权检索，作为【相关历史】背景块注入 memory_summary。依赖 P4 产出。
+    enable_profile_slice_retrieval: bool = Field(default=False, alias="ENABLE_PROFILE_SLICE_RETRIEVAL")
     # JWT 认证：默认关闭（面板登录 UI 尚未上线，开启即拦截全部 /v1 数据端点）。
     # 商业化部署置 AUTH_ENABLED=true 并显式配置 JWT_SECRET_KEY。
     auth_enabled: bool = Field(default=False, alias="AUTH_ENABLED")

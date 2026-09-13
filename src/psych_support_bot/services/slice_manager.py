@@ -229,8 +229,8 @@ class SliceManager:
                 # end_message_id 在消息保存后更新
                 session.commit()
 
-                # TODO: 异步生成摘要
-                # schedule_summary_generation(last_slice.id)
+                # P4 切片完成钩子：摘要生成 + 主题继承（fail-open，绝不阻塞新切片创建）。
+                self._finalize_completed_slice(session, last_slice)
 
             # 创建新切片
             new_slice = ConversationSlice(
@@ -257,3 +257,43 @@ class SliceManager:
             session.commit()
             logger.debug(f"Reusing slice {last_slice.id} for user {user_id}, turn_count={last_slice.turn_count}")
             return last_slice
+
+    @staticmethod
+    def _finalize_completed_slice(session: Session, completed: ConversationSlice) -> None:
+        """切片完成后的收尾钩子（P4）。fail-open：任何失败只记日志。
+
+        开关 ENABLE_SLICE_BASED_EXTRACTION 独立于切片本体（摘要是一次额外
+        LLM 调用，单独灰度）。做两件事：
+        1. 生成切片摘要（SliceSummary 行 + 不覆盖式补齐 primary_topic）；
+        2. end_message_id 回填——此刻切片内消息已全部落库（本轮 user/assistant
+           在 save_conversation_result 保存，切片关闭发生在下一轮到达时），
+           取最后一条关联消息的 id。
+
+        同步执行的取舍：切片关闭本就挂在用户下一轮请求路径上（延迟预算
+        ~百毫秒级），LLM 摘要在生成侧自带降级（失败 → 确定性拼接），最坏
+        情形退化为一次词典扫描。
+        """
+        from psych_support_bot.infra.config.settings import get_settings
+
+        if not get_settings().enable_slice_based_extraction:
+            return
+        try:
+            from psych_support_bot.services.slice_summary import generate_slice_summary
+
+            generate_slice_summary(session, completed.id)
+        except Exception:
+            logger.warning(
+                "Slice summary hook failed for slice %s; slice lifecycle unaffected.",
+                completed.id,
+                exc_info=True,
+            )
+            session.rollback()
+        try:
+            last_msg = session.query(Message).filter_by(slice_id=completed.id).order_by(Message.id.desc()).first()
+            if last_msg is not None:
+                completed.end_message_id = last_msg.id
+                first_msg = session.query(Message).filter_by(slice_id=completed.id).order_by(Message.id.asc()).first()
+                if first_msg is not None:
+                    completed.start_message_id = first_msg.id
+        except Exception:
+            logger.warning("Slice boundary message backfill failed for %s.", completed.id, exc_info=True)

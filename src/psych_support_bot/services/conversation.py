@@ -51,6 +51,7 @@ from psych_support_bot.infra.db.repositories import (
 from psych_support_bot.infra.telemetry.tracing import trace_span, update_span_output
 from psych_support_bot.services.questionnaire_flow import QuestionnaireFlow
 from psych_support_bot.services.slice_manager import SliceManager, build_slice_context
+from psych_support_bot.services.slice_retrieval import render_slice_history_block, retrieve_relevant_slices
 from psych_support_bot.services.support import _days_since, _detect_expected_language
 
 # How long a screening result with needs_safety_followup keeps enforcing the
@@ -318,6 +319,23 @@ class ConversationService:
         )
         # 情绪扫描专用通道：用户原话 + 会话摘要，不含记录层渲染文本。
         user_history_text = payload.memory_summary or build_user_history_text(session, payload.user_id)
+
+        # ===== P5: 画像驱动相关历史检索 =====
+        # 完成切片的摘要作为【相关历史】背景块并入 memory_summary（与
+        # slice_context 的"本次对话"逐字区分工）。不进 user_history_text
+        # 情绪扫描通道——摘要文本不是用户当前情绪表达。fail-open：检索
+        # 层内部已兜底，这里只额外挡住渲染异常。
+        if settings.enable_context_slicing and settings.enable_profile_slice_retrieval and slice_id:
+            try:
+                relevant = retrieve_relevant_slices(
+                    session, payload.user_id, payload.message, exclude_slice_id=slice_id
+                )
+                history_block = render_slice_history_block(relevant, language=expected_language)
+                if history_block:
+                    memory_summary = f"{memory_summary}\n\n{history_block}" if memory_summary else history_block
+                    slice_metadata["relevant_slice_ids"] = [s.slice_id for s in relevant]
+            except Exception:
+                logger.warning("Slice history retrieval failed; continuing without relevant history.", exc_info=True)
 
         state: GraphState = {
             "user_id": payload.user_id,
@@ -622,6 +640,7 @@ class ConversationService:
                 or (PRACTICE_TAG if str(result.get("practice_action") or "") == "complete" else None),
                 valence_text=payload.message,
                 turn_count=int(result.get("turn_count") or 0),
+                slice_id=str(result.get("slice_id") or ""),  # P4: 提取溯源至切片
             )
         except Exception:  # pragma: no cover - run_turn_extraction 内部已兜底
             logger.exception("Profile extraction hook raised; conversation response unaffected.")

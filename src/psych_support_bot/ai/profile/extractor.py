@@ -223,6 +223,7 @@ def run_turn_extraction(
     exercise_tag: str | None,
     valence_text: str,
     turn_count: int = 0,
+    slice_id: str = "",
 ) -> None:
     """每轮收尾提取入口（_finalize 挂载点）。fail-open，绝不抛出。
 
@@ -261,6 +262,7 @@ def run_turn_extraction(
                 session_id=session_id,
                 evidence_message_ids=claim.evidence_message_ids or ([message_id] if message_id else []),
                 stats_id=stats.id,
+                origin_slice_id=(slice_id or None),
             )
             # 效果值更新：neutral→worked/aversive 的转变是 D4 的学习信号；
             # belief 行的 value_json 不随 support 自动覆盖，需显式更新。
@@ -313,6 +315,7 @@ def run_turn_extraction(
             turn_count=turn_count,
             risk_level=risk_level,
             practice_event=bool(exercise_tag),
+            slice_id=slice_id,
         )
 
 

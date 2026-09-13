@@ -475,6 +475,7 @@ def run_semantic_extraction(
     risk_level: str,
     practice_event: bool,
     message_id: int | None = None,
+    slice_id: str = "",
 ) -> None:
     """LLM 语义提取入口（由 run_turn_extraction 在确定性提取之后调用）。
 
@@ -531,6 +532,7 @@ def run_semantic_extraction(
                 session_id=session_id,
                 evidence_message_ids=[message_id] if message_id else [],
                 stats_id=stats.id,
+                origin_slice_id=(slice_id or None),
             )
         stats.claims_out = len(claims)
         session.commit()

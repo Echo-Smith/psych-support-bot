@@ -23,12 +23,15 @@
 
 ## 快速启动（3步）
 
-### 1. 启用切片系统
+### 1. 启用切片系统（.env，三级灰度）
 
-编辑 `.env` 文件：
 ```bash
-ENABLE_CONTEXT_SLICING=true
+ENABLE_CONTEXT_SLICING=true           # P3 切片本体：话题边界 + 上下文隔离
+ENABLE_SLICE_BASED_EXTRACTION=true    # P4 切片完成联动：摘要 + 主题继承 + 提取溯源
+ENABLE_PROFILE_SLICE_RETRIEVAL=true   # P5 画像驱动检索：【相关历史】背景块注入
 ```
+三者默认全关；P4/P5 依次依赖上一层（只开 P5 而无 P4 摘要产出时静默跳过）。
+P4 在每次话题边界轮多一次摘要 LLM 调用（fail-open，LLM 不可用时降级确定性拼接）。
 
 ### 2. 重启服务
 
@@ -122,6 +125,9 @@ grep "boundary_reason" logs/app.log
 
 # 时间画像更新
 grep "calculate_time_profile" logs/app.log
+
+# P5 检索命中（画像驱动相关历史）
+grep "Slice retrieval" logs/app.log
 ```
 
 ---
@@ -191,6 +197,12 @@ python scripts/demo_context_slicing.py
   - 旧切片 status: completed
 ```
 
+P4/P5 联动端到端演示（溯源 → 摘要 → 检索注入，离线确定性路径）：
+
+```bash
+python scripts/demo_slice_profile_linkage.py
+```
+
 ---
 
 ## 下一步
@@ -208,6 +220,7 @@ python scripts/demo_context_slicing.py
 - [完整设计方案](./context-management-design.md)
 - [Phase 1 总结](./context-slicing-phase1-summary.md)
 - [Phase 3 总结](./context-slicing-phase3-summary.md)
+- [Phase 4/5 总结（切片×画像双向联动）](./context-slicing-phase45-summary.md)
 - [画像联动设计](./profile-slice-integration.md)
 
 ---

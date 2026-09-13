@@ -144,6 +144,7 @@ def record_claim(
     session_id: str | None = None,
     evidence_message_ids: list[int] | None = None,
     stats_id: int | None = None,
+    origin_slice_id: str | None = None,
 ) -> tuple[ProfileBelief | None, str]:
     """写入一条 claim，按合并策略落到 created / supported / contradicted /
     downgraded；命中否决守卫返回 (None, "resurrection_guard")。
@@ -184,6 +185,7 @@ def record_claim(
             source=source,
             evidence_json=json.dumps(evidence[-MAX_EVIDENCE_REFS:]),
             origin_stats_id=stats_id,
+            origin_slice_id=origin_slice_id,
             origin_session_id=session_id,
             last_evidence_session_id=session_id,
         )
