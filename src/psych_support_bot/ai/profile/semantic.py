@@ -440,9 +440,7 @@ def _should_llm_extract(
         mechanism_keys=mechanism_keys,
         active_beliefs=active,
     )
-    novel_mechanism = [
-        key for key in mechanism_keys if existing_conf.get(key, 0.0) < _SIGNAL_MATURE_CONFIDENCE
-    ]
+    novel_mechanism = [key for key in mechanism_keys if existing_conf.get(key, 0.0) < _SIGNAL_MATURE_CONFIDENCE]
     topics_mature_covered = bool(topics) and all(
         existing_conf.get(key, 0.0) >= _SIGNAL_MATURE_CONFIDENCE for key in topics
     )

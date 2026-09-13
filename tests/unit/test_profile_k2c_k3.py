@@ -199,9 +199,15 @@ def test_unanswered_injection_blocks_reinjection_then_verdict_reopens() -> None:
     with SessionLocal() as session:
         for _ in range(2):  # 两轮都有候选：第一轮注入，第二轮未回应 → 不得重复
             record_turn_interventions(
-                session, user_id=user_id, session_id="s1", practice_action="",
-                exercise_tag=None, question_candidates=["睡不好、睡不安稳"],
-                no_question_mode=False, mode="support", risk_level="low",
+                session,
+                user_id=user_id,
+                session_id="s1",
+                practice_action="",
+                exercise_tag=None,
+                question_candidates=["睡不好、睡不安稳"],
+                no_question_mode=False,
+                mode="support",
+                risk_level="low",
             )
         session.commit()
         injected = [e for e in _events_for(session, user_id) if e.intervention_kind == "question_injected"]
@@ -212,13 +218,22 @@ def test_unanswered_injection_blocks_reinjection_then_verdict_reopens() -> None:
         belief = get_belief(session, user_id, "sleep")
         confirm_belief(session, user_id, belief.id)
         record_intervention_event(
-            session, user_id, session_id="s1", kind="question_answered",
+            session,
+            user_id,
+            session_id="s1",
+            kind="question_answered",
             detail={"verdict": "confirm", "belief_key": belief.key},
         )
         record_turn_interventions(
-            session, user_id=user_id, session_id="s1", practice_action="",
-            exercise_tag=None, question_candidates=["睡不好、睡不安稳"],
-            no_question_mode=False, mode="support", risk_level="low",
+            session,
+            user_id=user_id,
+            session_id="s1",
+            practice_action="",
+            exercise_tag=None,
+            question_candidates=["睡不好、睡不安稳"],
+            no_question_mode=False,
+            mode="support",
+            risk_level="low",
         )
         session.commit()
         injected = [e for e in _events_for(session, user_id) if e.intervention_kind == "question_injected"]

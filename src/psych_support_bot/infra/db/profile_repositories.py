@@ -273,8 +273,9 @@ def _dimension_question_weights(session: Session, user_id: str) -> dict[str, flo
         return {}
 
     key_to_dim = dict(
-        session.execute(select(ProfileBelief.key, ProfileBelief.dimension).where(ProfileBelief.user_id == user_id))
-        .all()
+        session.execute(
+            select(ProfileBelief.key, ProfileBelief.dimension).where(ProfileBelief.user_id == user_id)
+        ).all()
     )
     stats: dict[str, list[int]] = {}
     for event in answered:

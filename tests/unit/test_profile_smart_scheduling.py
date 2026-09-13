@@ -57,25 +57,21 @@ def test_extraction_value_components() -> None:
     # 新用户 + 单主题：新颖度 0.45 + 维度稀缺 0.25 = 0.70（中间带，交节流裁决）
     assert compute_extraction_value(topic_keys=["sleep"], mechanism_keys=[], active_beliefs=[]) == 0.70
     # dict 入参：维度稀缺按 0 计；主题已成熟覆盖 → 价值归零（抑制区）
-    assert (
-        compute_extraction_value(topic_keys=["sleep"], mechanism_keys=[], active_beliefs={"sleep": 0.9})
-        == 0.0
-    )
+    assert compute_extraction_value(topic_keys=["sleep"], mechanism_keys=[], active_beliefs={"sleep": 0.9}) == 0.0
     # 新用户 + 新颖机制信号：稀缺 0.25 + 机制 0.30 = 0.55
-    val = compute_extraction_value(
-        topic_keys=[], mechanism_keys=["rumination_loop"], active_beliefs=[]
-    )
+    val = compute_extraction_value(topic_keys=[], mechanism_keys=["rumination_loop"], active_beliefs=[])
     assert val == 0.55
     # 机制信念已成熟 → 机制分量归零
-    assert compute_extraction_value(
-        topic_keys=[],
-        mechanism_keys=["rumination_loop"],
-        active_beliefs={"rumination_loop": 0.8},
-    ) == 0.0
-    # 部分新颖：两个主题只覆盖一个 → 新颖度折半
-    val = compute_extraction_value(
-        topic_keys=["sleep", "anxiety"], mechanism_keys=[], active_beliefs={"sleep": 0.9}
+    assert (
+        compute_extraction_value(
+            topic_keys=[],
+            mechanism_keys=["rumination_loop"],
+            active_beliefs={"rumination_loop": 0.8},
+        )
+        == 0.0
     )
+    # 部分新颖：两个主题只覆盖一个 → 新颖度折半
+    val = compute_extraction_value(topic_keys=["sleep", "anxiety"], mechanism_keys=[], active_beliefs={"sleep": 0.9})
     assert val == round(0.45 * 0.5, 4)
 
 
@@ -132,12 +128,8 @@ def test_gate_cold_start_single_topic_follows_cadence() -> None:
     """新用户单主题、无机制：走基础节流——turn 2 不提，turn 3 提。"""
     user_id = _uid()
     with SessionLocal() as session:
-        assert not _should_llm_extract(
-            "有点焦虑", practice_event=False, turn_count=2, session=session, user_id=user_id
-        )
-        assert _should_llm_extract(
-            "有点焦虑", practice_event=False, turn_count=3, session=session, user_id=user_id
-        )
+        assert not _should_llm_extract("有点焦虑", practice_event=False, turn_count=2, session=session, user_id=user_id)
+        assert _should_llm_extract("有点焦虑", practice_event=False, turn_count=3, session=session, user_id=user_id)
 
 
 def test_gate_without_session_keeps_legacy_rules() -> None:
@@ -168,9 +160,7 @@ def test_belief_activity_decay_and_layer_factors() -> None:
     fresh_l2 = _belief("L2", 0.9, 0.0)
     assert belief_activity(fresh_l2, now=now) == 0.9
     # 已认领的中等置信信念（0.6）活性高于待验证的 0.7
-    assert belief_activity(_belief("L2", 0.6, 0.0), now=now) > belief_activity(
-        _belief("L4", 0.7, 0.0), now=now
-    )
+    assert belief_activity(_belief("L2", 0.6, 0.0), now=now) > belief_activity(_belief("L4", 0.7, 0.0), now=now)
 
 
 def test_renderer_fresh_belief_ranks_before_stale() -> None:
