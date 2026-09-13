@@ -13,10 +13,14 @@ import pytest
 
 from psych_support_bot.ai.profile.extractor import run_turn_extraction
 from psych_support_bot.infra.config.settings import get_settings
+from psych_support_bot.infra.db.me_repositories import delete_user_account
 from psych_support_bot.infra.db.models import (
+    ConversationSession,
     ConversationSlice,
     Message,
     SliceSummary,
+    User,
+    UserTimeProfile,
     utcnow,
 )
 from psych_support_bot.infra.db.profile_repositories import get_belief, record_claim
@@ -329,3 +333,44 @@ class TestProfileDrivenRetrieval:
     def test_retrieve_fail_open(self, db_session):
         """异常输入（无摘要用户）返回空表，不抛出。"""
         assert retrieve_relevant_slices(db_session, _unique("user"), "hi") == []
+
+
+class TestAccountDeletionCascade:
+    """隐私红线：注销必须级联删除切片三表（摘要=用户原话派生，不得残留）。"""
+
+    def test_delete_account_removes_slice_tables(self, db_session):
+        user_id = _unique("user")
+        session_id = _unique("session")
+        slice_id = _unique("slice")
+
+        db_session.add(User(id=user_id))
+        db_session.add(ConversationSession(id=session_id, user_id=user_id, mode="support", risk_level="low"))
+        db_session.add(
+            ConversationSlice(
+                id=slice_id,
+                session_id=session_id,
+                user_id=user_id,
+                boundary_reason="first_message",
+                primary_topic="sleep",
+            )
+        )
+        db_session.add(
+            SliceSummary(
+                slice_id=slice_id,
+                user_id=user_id,
+                summary_text="聊了失眠",
+                topics=json.dumps(["sleep"]),
+            )
+        )
+        db_session.add(UserTimeProfile(user_id=user_id, frequency_tier="high"))
+        db_session.commit()
+
+        counts = delete_user_account(db_session, user_id)
+        db_session.commit()
+
+        assert counts["conversation_slices"] == 1
+        assert counts["slice_summaries"] == 1
+        assert counts["user_time_profiles"] == 1
+        assert db_session.get(ConversationSlice, slice_id) is None
+        assert db_session.get(SliceSummary, slice_id) is None
+        assert db_session.get(UserTimeProfile, user_id) is None

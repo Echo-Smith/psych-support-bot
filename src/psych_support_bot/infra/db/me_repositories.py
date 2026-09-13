@@ -17,15 +17,18 @@ from psych_support_bot.infra.db.models import (
     AssessmentRecord,
     CheckinRecord,
     ConversationSession,
+    ConversationSlice,
     ExerciseRecord,
     Message,
     PlanEnrollment,
     QuestionnaireSessionRecord,
     RiskEvent,
+    SliceSummary,
     UsageEvent,
     User,
     UserCredential,
     UserProfile,
+    UserTimeProfile,
     WeeklyReportRecord,
 )
 from psych_support_bot.infra.db.profile_repositories import delete_user_profile_beliefs
@@ -284,6 +287,17 @@ def delete_user_account(session: Session, user_id: str) -> dict[str, int]:
     )
     counts["usage_events"] = int(
         session.query(UsageEvent).filter(UsageEvent.user_id == user_id).delete(synchronize_session=False)
+    )
+    # 切片三表（P3-P5）：切片与摘要由用户对话派生（摘要文本=原话改写，
+    # 时间画像是行为统计），归属同 messages——注销后不得残留。
+    counts["conversation_slices"] = int(
+        session.query(ConversationSlice).filter(ConversationSlice.user_id == user_id).delete(synchronize_session=False)
+    )
+    counts["slice_summaries"] = int(
+        session.query(SliceSummary).filter(SliceSummary.user_id == user_id).delete(synchronize_session=False)
+    )
+    counts["user_time_profiles"] = int(
+        session.query(UserTimeProfile).filter(UserTimeProfile.user_id == user_id).delete(synchronize_session=False)
     )
     counts.update(delete_user_profile_beliefs(session, user_id))
     counts["user_profiles"] = int(
