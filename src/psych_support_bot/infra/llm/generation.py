@@ -672,6 +672,26 @@ def generate_clinically_bounded_reply_stream_sync(
         update_span_output(gen_obs, "".join(collected)[:300])
 
 
+def generate_profile_extraction(
+    *,
+    system_prompt: str,
+    payload_text: str,
+    fallback: Callable[[], str] | None = None,
+) -> str:
+    """画像语义提取（K2）：从用户话术提取 belief 候选，输出严格 JSON。
+
+    经 `_invoke` 咽喉层（重试 + fallback + Langfuse span）。语言锁对
+    JSON 安全：只拦"整段错语"，zh 值 JSON 可通过。
+    """
+    return _invoke(
+        system_prompt,
+        payload_text,
+        "zh",
+        mode="support",
+        fallback=fallback,
+    )
+
+
 def generate_assessment_history_analysis(
     *,
     history_text: str,

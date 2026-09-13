@@ -14,6 +14,8 @@ from psych_support_bot.ai.practice_flow import (
     PRACTICE_PAUSE_CHIP,
     PRACTICE_TAG,
 )
+from psych_support_bot.ai.profile.display_dict import friendly_label
+from psych_support_bot.ai.profile.extractor import record_turn_interventions, run_turn_extraction
 from psych_support_bot.ai.schemas.messages import (
     ConversationMode,
     ConversationRequest,
@@ -35,6 +37,7 @@ from psych_support_bot.infra.db.practice_repositories import (
     record_practice_step,
     reset_practice_session,
 )
+from psych_support_bot.infra.db.profile_repositories import list_question_candidates
 from psych_support_bot.infra.db.repositories import (
     build_memory_snapshot,
     build_user_history_text,
@@ -269,13 +272,24 @@ class ConversationService:
             if msg.role in {"user", "assistant"} and (msg.content or "").strip()
         ]
 
+        # 结构化风险通道：近 7 天最近一次 high/critical RiskEvent（跨轮升级主来源）。
+        # 取序前移：画像层的动态预算与 D7 优先渲染需要它作为轮次上下文。
+        recent_risk_level = get_recent_risk_level(session, payload.user_id)
+        # K2 质询闭环：待验证画像假设（图内不持 DB 会话，图启动前载入）。
+        profile_question_candidates = [
+            label
+            for belief in list_question_candidates(session, payload.user_id)
+            if (label := friendly_label(belief.key)) is not None
+        ]
         memory_summary = payload.memory_summary or build_memory_snapshot(
-            session, payload.user_id, language=expected_language
+            session,
+            payload.user_id,
+            language=expected_language,
+            user_message=payload.message,
+            recent_risk_level=recent_risk_level,
         )
         # 情绪扫描专用通道：用户原话 + 会话摘要，不含记录层渲染文本。
         user_history_text = payload.memory_summary or build_user_history_text(session, payload.user_id)
-        # 结构化风险通道：近 7 天最近一次 high/critical RiskEvent（跨轮升级主来源）。
-        recent_risk_level = get_recent_risk_level(session, payload.user_id)
 
         state: GraphState = {
             "user_id": payload.user_id,
@@ -284,6 +298,7 @@ class ConversationService:
             "memory_summary": memory_summary,
             "user_history_text": user_history_text,
             "recent_risk_level": recent_risk_level,
+            "profile_question_candidates": profile_question_candidates,
             "knowledge_context": "",
             "mode": "support",
             "risk_result": RiskResult(
@@ -559,6 +574,39 @@ class ConversationService:
         completed_tag = detect_completed_exercise(payload.message)
         if completed_tag:
             save_exercise_record(session, payload.user_id, completed_tag, source="chat")
+        # K1b 画像提取（fail-open）：D1 复用图内 topics，D4 吃练习完成信号；
+        # 危机轮零提取；全量统计落 profile_extraction_stats。异常只记日志，
+        # 绝不影响本轮响应（与记忆模块 fail-open 同约定）。
+        try:
+            run_turn_extraction(
+                session,
+                user_id=payload.user_id,
+                session_id=session_id,
+                topics=list(result.get("topics") or []),
+                risk_level=str(result["risk_result"].risk_level),
+                exercise_tag=completed_tag
+                or (PRACTICE_TAG if str(result.get("practice_action") or "") == "complete" else None),
+                valence_text=payload.message,
+                turn_count=int(result.get("turn_count") or 0),
+            )
+        except Exception:  # pragma: no cover - run_turn_extraction 内部已兜底
+            logger.exception("Profile extraction hook raised; conversation response unaffected.")
+        # K2c 干预→反应事件（动作元数据 only，fail-open）。
+        try:
+            record_turn_interventions(
+                session,
+                user_id=payload.user_id,
+                session_id=session_id,
+                practice_action=str(result.get("practice_action") or ""),
+                exercise_tag=completed_tag
+                or (PRACTICE_TAG if str(result.get("practice_action") or "") == "complete" else None),
+                question_candidates=list(result.get("profile_question_candidates") or []),
+                no_question_mode=bool(result.get("no_question_mode")),
+                mode=str(result["mode"]),
+                risk_level=str(result["risk_result"].risk_level),
+            )
+        except Exception:  # pragma: no cover - record_turn_interventions 内部已兜底
+            logger.exception("Intervention event hook raised; conversation response unaffected.")
         return response
 
 

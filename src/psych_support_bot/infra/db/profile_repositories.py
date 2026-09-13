@@ -23,6 +23,7 @@ from psych_support_bot.infra.db.models import (
     ProfileBelief,
     ProfileBeliefEvent,
     ProfileExtractionStats,
+    ProfileInterventionEvent,
 )
 
 logger = logging.getLogger(__name__)
@@ -221,6 +222,184 @@ def record_claim(
     return existing, event_type
 
 
+def list_rejected_beliefs(session: Session, user_id: str, *, limit: int = 5) -> list[ProfileBelief]:
+    """D8 负记忆：被否决信念，按时近取最近 N 条（渲染为应回避清单）。"""
+    conditions = (ProfileBelief.user_id == user_id, ProfileBelief.status == "rejected")
+    stmt = select(ProfileBelief).where(*conditions).order_by(desc(ProfileBelief.updated_at)).limit(limit)
+    return list(session.scalars(stmt))
+
+
+# 质询候选的干预价值分级（调参 A，2026-09-13 线上实测驱动）：D1 主题的
+# LLM 置信度天然高（0.95+），纯置信度排序会让提问预算永远花在主题上——
+# 而主题在面板已经可见，质询的稀缺预算应该验证真正改变干预策略的
+# 机制/动机信念：跨过水位的候选先按分级、再按置信度排序。
+_QUESTION_VALUE_TIER = {"D3": 3, "D5": 2}
+
+
+def list_question_candidates(session: Session, user_id: str, *, limit: int = 1) -> list[ProfileBelief]:
+    """质询候选：L4 且 confidence ≥ 水位的待验证假设（K2 质询闭环数据源）。
+
+    只在确定性水位之上才值得花一次提问预算；升级 L2 仍需用户确认。
+    排序 = （干预价值分级，置信度，时近）降序——机制类优先占用提问预算。
+    """
+    conditions = (
+        ProfileBelief.user_id == user_id,
+        ProfileBelief.status == "active",
+        ProfileBelief.layer == "L4",
+    )
+    rows = list(session.scalars(select(ProfileBelief).where(*conditions)))
+    pending = [b for b in rows if b.confidence >= L4_QUESTION_THRESHOLD]
+    pending.sort(
+        key=lambda b: (_QUESTION_VALUE_TIER.get(b.dimension, 1), b.confidence, b.last_evidence_at),
+        reverse=True,
+    )
+    return pending[:limit]
+
+
+def record_intervention_event(
+    session: Session,
+    user_id: str,
+    *,
+    session_id: str,
+    kind: str,
+    detail: dict | None = None,
+) -> ProfileInterventionEvent:
+    """干预→反应事件（K2c）：只记动作元数据，不记对话内容。"""
+    row = ProfileInterventionEvent(
+        user_id=user_id,
+        session_id=session_id,
+        intervention_kind=kind,
+        detail_json=json.dumps(detail or {}, ensure_ascii=False),
+    )
+    session.add(row)
+    session.flush()
+    return row
+
+
+def record_protective_belief(
+    session: Session,
+    user_id: str,
+    key: str,
+    *,
+    value: dict | None = None,
+    claim_text: str = "",
+    consented: bool,
+    session_id: str | None = None,
+) -> ProfileBelief | None:
+    """D7 保护因子写入（K3）：知情同意是结构性门控，未经同意直接拒绝。
+
+    仅接受 protective.* 命名空间且在展示词典中登记的 key；用户在安全
+    计划流程中的亲口提供 = user_stated / L1。未同意时返回 None 且
+    不留任何行（同 distortion 红线：结构上不给入口）。
+    """
+    if not consented:
+        return None
+    if not key.startswith("protective."):
+        raise ValueError(f"protective beliefs must use the protective. namespace: {key!r}")
+    return record_claim(
+        session,
+        user_id,
+        dimension="D7",
+        key=key,
+        claim_text=claim_text or f"用户在知情同意下提供了保护因子：{key}",
+        value=value,
+        confidence=0.9,
+        layer="L1",
+        source="user_stated",
+        session_id=session_id,
+    )[0]
+
+
+def get_pending_verification(
+    session: Session,
+    user_id: str,
+    session_id: str,
+) -> ProfileInterventionEvent | None:
+    """回半环数据源：未回应的质询注入，且用户已至少回复一次（窗口 ≤3 轮）。
+
+    同会话约束不变；1-3 轮内允许迟到判定（用户可能绕一下再回来表态），
+    超过 3 轮视为话题已走，作废不再追溯（质询的时机性是体验的一部分）。
+    """
+    from psych_support_bot.infra.db.models import Message
+
+    conditions = (
+        ProfileInterventionEvent.user_id == user_id,
+        ProfileInterventionEvent.session_id == session_id,
+        ProfileInterventionEvent.intervention_kind == "question_injected",
+    )
+    injection = session.scalar(
+        select(ProfileInterventionEvent).where(*conditions).order_by(desc(ProfileInterventionEvent.id)).limit(1)
+    )
+    if injection is None:
+        return None
+    later_user_msgs = (
+        session.query(Message.id)
+        .filter(
+            Message.session_id == session_id,
+            Message.role == "user",
+            Message.created_at > injection.created_at,
+        )
+        .count()
+    )
+    return injection if 1 <= later_user_msgs <= 3 else None
+
+
+def has_unanswered_injection(session: Session, user_id: str) -> bool:
+    """是否存在尚未被判定的质询注入（回半环去重依据）。
+
+    同一时间只允许一个悬而未决的假设：上一条 question_injected 之后
+    还没有 question_answered 时，不再注入新质询——否则当前轮的新注入
+    会遮蔽上一轮的注入，回半环（"注入后恰好一条用户消息"）永远无法命中。
+    """
+    conditions = (
+        ProfileInterventionEvent.user_id == user_id,
+        ProfileInterventionEvent.intervention_kind == "question_injected",
+    )
+    last_injected = session.scalar(
+        select(ProfileInterventionEvent).where(*conditions).order_by(desc(ProfileInterventionEvent.id)).limit(1)
+    )
+    if last_injected is None:
+        return False
+    answer_conditions = (
+        ProfileInterventionEvent.user_id == user_id,
+        ProfileInterventionEvent.intervention_kind == "question_answered",
+    )
+    last_answered = session.scalar(
+        select(ProfileInterventionEvent).where(*answer_conditions).order_by(desc(ProfileInterventionEvent.id)).limit(1)
+    )
+    return last_answered is None or last_answered.id < last_injected.id
+
+
+def update_belief_value(
+    session: Session,
+    user_id: str,
+    key: str,
+    value: dict,
+    *,
+    stats_id: int | None = None,
+    evidence: list[int] | None = None,
+) -> ProfileBelief | None:
+    """更新信念的结构化取值（value_json），原值留痕于事件表。
+
+    support 合并不覆盖 value（D4 的 neutral→worked 转变等学习信号
+    靠本原语显式更新，旧值可从事件流追溯）。
+    """
+    belief = get_belief(session, user_id, key)
+    if belief is None or belief.status != "active":
+        return None
+    previous = belief.value_json
+    belief.value_json = json.dumps(value, ensure_ascii=False)
+    _append_event(
+        session,
+        belief,
+        "value_updated",
+        evidence=evidence or [],
+        detail={"previous_value": previous, "value": value},
+        stats_id=stats_id,
+    )
+    return belief
+
+
 def confirm_belief(session: Session, user_id: str, belief_id: int) -> ProfileBelief | None:
     """用户确认：L4 → L2（质询闭环的升级原语，只认本人行）。"""
     belief = session.get(ProfileBelief, belief_id)
@@ -259,8 +438,14 @@ def delete_user_profile_beliefs(session: Session, user_id: str) -> dict[str, int
         .filter(ProfileExtractionStats.user_id == user_id)
         .delete(synchronize_session=False)
     )
+    interventions_deleted = (
+        session.query(ProfileInterventionEvent)
+        .filter(ProfileInterventionEvent.user_id == user_id)
+        .delete(synchronize_session=False)
+    )
     return {
         "profile_beliefs": int(beliefs_deleted),
         "profile_belief_events": int(events_deleted),
         "profile_extraction_stats": int(stats_deleted),
+        "profile_intervention_events": int(interventions_deleted),
     }

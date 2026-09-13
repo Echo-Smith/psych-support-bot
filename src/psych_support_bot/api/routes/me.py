@@ -16,6 +16,7 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
+from psych_support_bot.ai.profile.panel import build_profile_panel
 from psych_support_bot.api.auth import request_user_id
 from psych_support_bot.infra.config.settings import get_settings
 from psych_support_bot.infra.db.me_repositories import (
@@ -97,6 +98,22 @@ def get_me_summary(
     user_id = request_user_id(request, user_id)
     summary = me_summary(session, user_id)
     return MeSummaryResponse(**summary)
+
+
+@router.get("/profile-panel")
+def get_profile_panel(
+    request: Request,
+    language: str = Query("zh"),
+    user_id: str = Query(""),
+    session: Session = Depends(get_db_session),
+) -> dict:
+    """「画像」面板（K3b）：拟人形象状态 + 友善分类点。
+
+    P3 决策的 API 侧实现：展示词典唯一渲染通道（术语不出存储层）、
+    D2 默认隐藏、D3 未认领不出、L4 待验证假设不出面板。
+    """
+    uid = request_user_id(request, user_id)
+    return build_profile_panel(session, uid, language=language)
 
 
 @router.get("/export")

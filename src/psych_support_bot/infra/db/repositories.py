@@ -221,16 +221,17 @@ def get_user_assessments(session: Session, user_id: str, *, limit: int = 50) -> 
     return list(session.execute(stmt).scalars())
 
 
-def build_memory_snapshot(session: Session, user_id: str, *, language: str = "") -> str:
+def build_memory_snapshot(
+    session: Session,
+    user_id: str,
+    *,
+    language: str = "",
+    user_message: str = "",
+    recent_risk_level: str = "",
+) -> str:
     latest_summary = get_latest_summary(session, user_id)
     recent_messages = get_recent_messages(session, user_id)
     profile = get_user_profile(session, user_id)
-
-    # 记录层（评估/打卡/练习）改为热插拔模块渲染（ai/memory_modules.py），
-    # 单层失败只跳过该层；MEMORY_MODULE_* 开关关闭时该层不出现在 prompt。
-    from psych_support_bot.ai.memory_modules import render_record_layers
-
-    record_layers = render_record_layers(session, user_id, language)
 
     # Last five turns with speaker labels — thin excerpts were the root cause
     # of the bot forgetting events like "we just finished a breathing exercise"
@@ -248,6 +249,20 @@ def build_memory_snapshot(session: Session, user_id: str, *, language: str = "")
             ]
             if piece
         )
+
+    # 记录层（评估/打卡/练习/画像）热插拔模块渲染（ai/memory_modules.py），
+    # 单层失败只跳过该层；MEMORY_MODULE_* 开关关闭时该层不出现在 prompt。
+    # 画像层需要本轮上下文（用户消息 → 主题相关性 + 动态预算；近端风险 →
+    # D7 优先），tail_load 是画像动态预算的供给侧输入，故先算再渲染。
+    from psych_support_bot.ai.memory_modules import render_record_layers
+
+    turn_context = {
+        "user_message": user_message,
+        "recent_risk_level": recent_risk_level,
+        "tail_load": len(latest_summary) + len(recent_excerpt) + len(profile_summary),
+    }
+    record_layers = render_record_layers(session, user_id, language, turn_context=turn_context)
+
     pieces = [
         piece
         for piece in [

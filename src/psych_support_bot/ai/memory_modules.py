@@ -19,6 +19,7 @@ from typing import ClassVar, Protocol
 
 from sqlalchemy.orm import Session
 
+from psych_support_bot.ai.profile.renderer import render_profile_block
 from psych_support_bot.ai.tools.exercises import get_exercise_by_tag
 from psych_support_bot.domain.assessments.service import questionnaire_guide
 from psych_support_bot.infra.config.settings import get_settings
@@ -189,18 +190,59 @@ class ExerciseMemoryModule:
         return _clip(label + joiner.join(entries), char_budget)
 
 
+class ProfileMemoryModule:
+    """画像 belief 流（ai/profile/renderer.py 动态预算渲染）。
+
+    不沿用记录层 DEFAULT_MODULE_BUDGET：预算按供给侧压力逐轮动态调节
+    （PROFILE_RENDER_BASE/FLOOR/CAP，知识提炼 §6），char_budget 入参仅为
+    兼容模块协议，实际不使用。needs turn_context（本轮用户消息 + 近端
+    风险 + 历史负载），由 render_record_layers 分流注入。
+    """
+
+    name = "profile"
+    wants_turn_context = True
+
+    def render(  # type: ignore[override] - 协议兼容：额外接收 turn_context
+        self,
+        session: Session,
+        user_id: str,
+        *,
+        language: str,
+        char_budget: int,
+        turn_context: dict | None = None,
+    ) -> str | None:
+        context = turn_context or {}
+        return render_profile_block(
+            session,
+            user_id,
+            language=language,
+            user_message=str(context.get("user_message") or ""),
+            recent_risk_level=str(context.get("recent_risk_level") or ""),
+            tail_load=int(context.get("tail_load") or 0),
+        )
+
+
 _MEMORY_MODULES: list[MemoryModule] = [
     AssessmentMemoryModule(),
     CheckinMemoryModule(),
     ExerciseMemoryModule(),
+    ProfileMemoryModule(),
 ]
 
 
-def render_record_layers(session: Session, user_id: str, language: str = "") -> str:
+def render_record_layers(
+    session: Session,
+    user_id: str,
+    language: str = "",
+    *,
+    turn_context: dict | None = None,
+) -> str:
     """渲染全部启用的记录层模块，按 MEMORY_MODULE_<NAME> 开关热插拔。
 
     单模块渲染失败只跳过该层，绝不阻断对话（fail-open）；返回串以
     "\\n" 连接，由 build_memory_snapshot 作为独立片段并入快照。
+    声明 wants_turn_context 的模块（画像层）额外接收本轮上下文，
+    其余模块保持原签名不受影响。
     """
     settings = get_settings()
     parts: list[str] = []
@@ -208,7 +250,16 @@ def render_record_layers(session: Session, user_id: str, language: str = "") -> 
         if not getattr(settings, f"memory_module_{module.name}", True):
             continue
         try:
-            rendered = module.render(session, user_id, language=language, char_budget=DEFAULT_MODULE_BUDGET)
+            if getattr(module, "wants_turn_context", False):
+                rendered = module.render(
+                    session,
+                    user_id,
+                    language=language,
+                    char_budget=DEFAULT_MODULE_BUDGET,
+                    turn_context=turn_context or {},
+                )
+            else:
+                rendered = module.render(session, user_id, language=language, char_budget=DEFAULT_MODULE_BUDGET)
         except Exception:
             logger.warning("Memory module %r failed to render; skipping layer.", module.name, exc_info=True)
             continue

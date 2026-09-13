@@ -57,6 +57,11 @@ class GraphState(TypedDict):
     # 裁决仍 ≤ elevated 时 response_generator 直接采用，跳过自己的 LLM 调用；
     # 升级 high/critical 则丢弃走危机路径。投机失败为 None。
     speculative_reply: str | None
+    # K2 质询闭环：待验证画像假设（L4 且 confidence ≥ 质询水位）的友善标签，
+    # 图启动前由服务层从 DB 载入（图谱内不持 DB 会话）。consultation_planner
+    # 在 no_question_mode 关闭且非危机时，把至多一条经 loop_hint 注入，
+    # 让本轮提问自然完成一次 belief 验证。空列表 = 本轮无质询候选。
+    profile_question_candidates: list[str]
     # LLM 语义层输出的情绪读数（一句话，用户此刻的情绪状态；""=不可用）。
     # 生成端经 build_boundary_prompt 注入，让回复直接镜像当前情绪而非只看
     # risk_level 代理值。关键词层无此通道。

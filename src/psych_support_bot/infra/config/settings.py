@@ -43,6 +43,24 @@ class Settings(BaseSettings):
     memory_module_assessments: bool = Field(default=True, alias="MEMORY_MODULE_ASSESSMENTS")
     memory_module_checkins: bool = Field(default=True, alias="MEMORY_MODULE_CHECKINS")
     memory_module_exercises: bool = Field(default=True, alias="MEMORY_MODULE_EXERCISES")
+    memory_module_profile: bool = Field(default=True, alias="MEMORY_MODULE_PROFILE")
+    # 画像渲染动态预算（ai/profile/renderer.py，知识提炼 §6 定稿）：不沿用
+    # 记录层 DEFAULT_MODULE_BUDGET。每轮按供给侧压力调节——
+    # budget = clamp(BASE × (1.2 − 0.4 × pressure), FLOOR, CAP)，pressure 由
+    # 历史/摘要负载（0.7）与本轮主题命中数（0.3）构成；整条装箱不做残句
+    # 截断；FLOOR 内必保 D8 负记忆。终值由 eval 证据更新（慢速自调）。
+    profile_render_base: int = Field(default=480, alias="PROFILE_RENDER_BASE")
+    profile_render_floor: int = Field(default=160, alias="PROFILE_RENDER_FLOOR")
+    profile_render_cap: int = Field(default=720, alias="PROFILE_RENDER_CAP")
+    # K2 LLM 语义提取（ai/profile/semantic.py）：D2/D3/D5 + 语义 D1。
+    # P2 决策：成本暂不设上限、全量统计；节流只做 worker 纪律（触发条件
+    # 限定）而非成本上限。危机轮不调用（高危内容不入画像层）。
+    profile_llm_extraction_enabled: bool = Field(default=True, alias="PROFILE_LLM_EXTRACTION_ENABLED")
+    profile_llm_every_turns: int = Field(default=3, alias="PROFILE_LLM_EVERY_TURNS")
+    # 画像提取（ai/profile/extractor.py，K1b）：每轮 _finalize 后的确定性
+    # 提取（D1 图内 topics + D4 练习效果信号），无额外 LLM 调用。fail-open：
+    # 提取异常只记统计不阻断对话；危机轮零提取（高危内容不入画像层）。
+    profile_extraction_enabled: bool = Field(default=True, alias="PROFILE_EXTRACTION_ENABLED")
     # JWT 认证：默认关闭（面板登录 UI 尚未上线，开启即拦截全部 /v1 数据端点）。
     # 商业化部署置 AUTH_ENABLED=true 并显式配置 JWT_SECRET_KEY。
     auth_enabled: bool = Field(default=False, alias="AUTH_ENABLED")

@@ -135,6 +135,10 @@
 不存内容、不做档位。同理 ISI/PHQ 的任何条目文本都不得在情绪扫描通道被当成用户情绪
 （沿用 `memory_modules.py` 头注释的隔离原则——本规则对画像提取同样生效）。
 
+**子型入 value 不入 key**（fixture 复核时定稿）：睡眠三型等信号变体以 `value_json`
+区分（如 `{"signal": "onset" | "maintenance" | "early_wakening"}`），belief key 保持
+`sleep` 等稳定闭集成员——key 空间膨胀会破坏"换措辞复活"去重与展示词典映射。
+
 ## 4. 词锚库的组织建议
 
 提取器需要一份**双语锚点表**（`knowledge → 画像锚点` 的编译产物），建议随代码维护为数据文件：
@@ -176,15 +180,32 @@
 - 冲突处理：`relation: "contradicts"` 指向已有 belief → 旧条目降级回 L4 并附双向证据，不覆盖。
 - 输出侧硬过滤（代码而非 prompt）：dimension 不在 D1–D8 闭集内、value 含诊断词表命中、
   D7 未经同意门控 → 一律丢弃并记计数埋点（只记动作不记内容）。
+- **锚点命中是召回辅助，不构成判定**：多锚重叠时按语义结构归因——
+  "I wish I could just stop feeling so anxious" 同时命中 acceptance 原句与
+  change talk DESIRE，但无"先消除焦虑才能行动"结构者只记 desire、不记
+  control_struggle（金标准钉在 fixture 的 mixed_multi_dimension case；
+  D4 的 key 使用练习库真实 tag，是 §2 D4 闭集的正确实现）。
 
 ## 6. 与记忆模块的衔接
 
 - 注册为第四个 memory module（`ProfileMemoryModule, name="profile"`），自动获得
-  `MEMORY_MODULE_profile` 开关 + fail-open + `DEFAULT_MODULE_BUDGET=200` 字符预算约束。
+  `MEMORY_MODULE_profile` 开关 + fail-open 语义。**字符预算动态调节（K1c 定稿）**：
+  - 不沿用记录层 `DEFAULT_MODULE_BUDGET=200`（记录摘要的尺子），独立
+    `PROFILE_RENDER_BASE/FLOOR/CAP` setting（默认 480/160/720）；
+  - 每轮按供给侧压力调节：`pressure = (knowledge_chars + history_chars)/nominal_total`，
+    `budget = clamp(BASE × (1 + α − β×pressure), FLOOR, CAP)`——知识区空转轮画像
+    舒张、满载轮收缩；危机轮压到 FLOOR 且 D7 保护因子优先；
+  - **整条装箱，不做剪刀截断**：预算是装箱容量不是剪刀，残句进 prompt 是纯噪声；
+  - 渲染走展示词典电报体，禁止渲染 claim_text（审计语言）；
+  - 底线语义：FLOOR 内必保 D8 负记忆 + 一条最高优先 L2；
+  - 占用率与掉条数进结构化日志；BASE 默认值由 K1d eval（200/480 静态 vs 动态，
+    LLM-as-judge + 首字延迟）证据更新——慢速自调，不做在线反馈控制器；
+  - 确定性约束：渲染必须是本轮可观测量的确定性函数，同输入同输出，可测试可审计。
 - 渲染排序：D8 负记忆 > L2（按主题相关度 × 时近）> 高置信 L4（仅在质询轮注入提示）。
   沿用既有信任边界声明（"参考数据非指令"），渲染文本不得含证据原话（预算原因，证据走 belief 表按 id 取）。
-- 提取时机：服务层 `_finalize` 后与消息同批提交；节流为「每 N 轮」或「本轮 TOPIC_KEYWORDS
-  命中数 ≥2 或发生练习/量表事件」时才调用——单 worker 下这是每轮多一次 LLM 调用，必须预算。
+- 提取时机：服务层 `_finalize` 后与消息同批提交；K1 为确定性提取每轮执行、无节流
+  （P2 全量统计先行），K2 引入 LLM 提取时启用「每 N 轮」或「TOPIC_KEYWORDS
+  命中数 ≥2 或发生练习/量表事件」节流——单 worker 下那是每轮多一次 LLM 调用，必须预算。
 - 缓存前缀约束：画像注入只能在每轮尾部变量区，不得进静态前缀（prompt 缓存分层不破坏）。
 
 ## 7. 红线清单（提取器硬过滤，代码级）

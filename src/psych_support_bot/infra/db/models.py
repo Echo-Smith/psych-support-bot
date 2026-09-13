@@ -275,7 +275,7 @@ class ProfileBeliefEvent(Base):
     """信念事件日志（append-only）。
 
     event_type: created / supported / contradicted / downgraded /
-    confirmed / rejected / user_edited。只插入不更新——审计与
+    confirmed / rejected / user_edited / value_updated。只插入不更新——审计与
     "每条被确认信念的成本"归因（origin_stats_id → 提取调用统计）都靠它。
     """
 
@@ -313,4 +313,25 @@ class ProfileExtractionStats(Base):
     claims_out: Mapped[int] = mapped_column(Integer, default=0)
     status: Mapped[str] = mapped_column(String(24), default="ok")
     error: Mapped[str] = mapped_column(Text, default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, index=True)
+
+
+class ProfileInterventionEvent(Base):
+    """干预→反应事件（K2c：干预即实验的记录半边）。
+
+    只记动作元数据（练习 tag / 注入的画像假设标签），绝不记对话内容
+    （UsageEvent 伦理边界同源）。结果变量由事件序列派生而非另存：
+    - practice_offer 之后同 tag 的 start/complete = 接受；
+    - question_injected 之后对应 belief 的 confirmed/rejected 事件 = 质询结局。
+    intervention_kind: practice_offer / practice_start / practice_complete /
+    question_injected。
+    """
+
+    __tablename__ = "profile_intervention_events"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    user_id: Mapped[str] = mapped_column(String(64), index=True)
+    session_id: Mapped[str] = mapped_column(String(64), index=True)
+    intervention_kind: Mapped[str] = mapped_column(String(32))
+    detail_json: Mapped[str] = mapped_column(Text, default="{}")
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, index=True)

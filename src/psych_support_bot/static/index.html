@@ -2537,6 +2537,22 @@
         transition-duration: 0.01ms !important;
       }
     }
+    /* ========== Profile panel (K3b) ========== */
+    .profile-hero { display: flex; align-items: center; gap: 14px; margin-bottom: 14px; }
+    .profile-avatar { width: 64px; height: 64px; border-radius: 50%; flex: none; position: relative;
+      background: radial-gradient(circle at 35% 35%, #cfe3d8, #9ec7b4);
+      box-shadow: inset 0 -6px 0 rgba(0,0,0,.06); }
+    .profile-avatar::before, .profile-avatar::after { content: ''; position: absolute; top: 26px; width: 8px; height: 8px; border-radius: 50%; background: #3d5a4c; }
+    .profile-avatar::before { left: 18px; }
+    .profile-avatar::after { right: 18px; }
+    .profile-avatar.f2 { background: radial-gradient(circle at 35% 35%, #ffe3c9, #f0bd93); }
+    .profile-avatar.f3 { background: radial-gradient(circle at 35% 35%, #ffd6d6, #eda3a3); }
+    .profile-hero-text h2 { margin: 0 0 4px; font-size: 18px; }
+    .profile-hero-text p { margin: 0; font-size: 13px; color: #6b7f75; }
+    .profile-card { background: #fff; border: 1px solid #e4ece7; border-radius: 12px; padding: 12px 14px; margin-bottom: 10px; }
+    .profile-card h3 { margin: 0 0 8px; font-size: 14px; color: #3d5a4c; }
+    .profile-chip { display: inline-block; background: #eef5f1; border-radius: 999px; padding: 4px 12px; margin: 0 6px 6px 0; font-size: 13px; }
+    .profile-note { font-size: 12px; color: #8aa094; margin-top: 10px; }
   </style>
 </head>
 
@@ -2785,6 +2801,7 @@
     </section>
 
     <!-- ========== ME PANEL (个人信息 + 历史 + 数据管理) ========== -->
+    <!-- ========== PROFILE PANEL (K3b，并入「我」页资料卡下方) ========== -->
     <section class="panel" id="panel-me">
       <p class="section-subtitle">这里只属于你：你的记录、你的数据。随时可以导出，也随时可以抹去。</p>
 
@@ -2793,6 +2810,18 @@
         <div id="meProfileBody">
           <div class="empty-history">加载中…</div>
         </div>
+      </div>
+
+      <div class="record-section" style="margin-top:12px;">
+        <div class="profile-hero">
+          <div class="profile-avatar" id="profileAvatar" aria-hidden="true"></div>
+          <div class="profile-hero-text">
+            <h2>系统对你的了解</h2>
+            <p id="profileAvatarCaption">它来自我们对话的点滴，只反映系统对你的了解程度。</p>
+          </div>
+        </div>
+        <div id="profileSections"></div>
+        <p class="profile-note">这里只呈现系统有把握的部分；你想纠正或搁置任何一条，直接在对话里告诉我就可以。</p>
       </div>
 
       <div class="stat-grid" id="meStatGrid" style="margin-top:12px;">
@@ -3113,9 +3142,33 @@
           document.getElementById('panel-' + tab.dataset.tab).classList.add('active');
           if (tab.dataset.tab === 'checkin') renderCheckinStatus();
           if (tab.dataset.tab === 'tools') { loadExerciseRecords(); loadAssessHistory(); }
-          if (tab.dataset.tab === 'me') loadMePage();
+          if (tab.dataset.tab === 'me') { loadMePage(); loadProfilePanel(); }
         });
       });
+    }
+
+    // ========== Profile panel (K3b) ==========
+    async function loadProfilePanel() {
+      const wrap = document.getElementById('profileSections');
+      const avatar = document.getElementById('profileAvatar');
+      try {
+        const resp = await fetch(API_BASE + '/v1/me/profile-panel?language=zh&user_id=' + encodeURIComponent(USER_ID), { headers: authHeaders() });
+        if (!resp.ok) throw new Error('http ' + resp.status);
+        const data = await resp.json();
+        const familiarity = (data.avatar && data.avatar.familiarity) || 0;
+        avatar.className = 'profile-avatar' + (familiarity >= 3 ? ' f3' : familiarity === 2 ? ' f2' : '');
+        document.getElementById('profileAvatarCaption').textContent = familiarity === 0
+          ? '它还在慢慢认识你——多聊聊，下面的拼图会一块块亮起来。'
+          : '它已经从我们的对话里拼出了 ' + familiarity + ' 块拼图。';
+        const cards = (data.sections || []).map(sec =>
+          '<div class="profile-card"><h3>' + sec.header + '</h3>' +
+          sec.items.map(it => '<span class="profile-chip">' + it.label + (it.detail ? ' · ' + it.detail : '') + '</span>').join('') +
+          '</div>'
+        ).join('');
+        wrap.innerHTML = cards || '<div class="profile-card"><h3>还在起步</h3><span class="profile-chip">多聊聊，画像会慢慢长出来</span></div>';
+      } catch (e) {
+        wrap.innerHTML = '<div class="profile-card"><h3>暂时加载不了</h3><span class="profile-chip">稍后再试试</span></div>';
+      }
     }
 
     // 工具页内分段切换：练习 / 评估（各自保留列表与记录，互不混排）
