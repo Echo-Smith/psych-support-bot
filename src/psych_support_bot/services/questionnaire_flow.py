@@ -38,7 +38,6 @@ from psych_support_bot.domain.assessments.service import (
 from psych_support_bot.infra.db.repositories import (
     append_questionnaire_answer,
     complete_questionnaire_session,
-    create_questionnaire_session,
     get_active_questionnaire_session,
     get_latest_assessment,
     get_paused_questionnaire_session,
@@ -582,34 +581,26 @@ class QuestionnaireFlow:
                     },
                 )
 
-        record = create_questionnaire_session(session, payload.user_id, requested)
-        view = build_questionnaire_session_view(
-            session_id=record.id,
-            user_id=record.user_id,
-            assessment_type=requested,
-            answers=[],
-            status=record.status,
-            language=expected_language,
+        # 聊天入口只发引导卡，不在对话里建会话/出题——会话由评估页确认须知后
+        # 创建（shadcn 式分页作答）。聊天侧保留的是：暂停会话续答、情绪倾诉
+        # 暂停、危机升级、退出确认这些已有会话的状态机路径。
+        tip = (
+            f"好的，{guide.title}一共 {len(guide.items)} 题（{guide.timeframe}）。"
+            "点下面的按钮打开评估页，确认须知后逐题点选，一次提交就能看到结果。"
+            if zh
+            else (
+                f"Sure — the {guide.title} has {len(guide.items)} questions ({guide.timeframe}). "
+                "Open the assessment page below, confirm the notice, and answer at your own pace — "
+                "submit once to see your result."
+            )
         )
         return self._build_response(
-            session_id=record.id,
+            session_id=payload.session_id or str(uuid4()),
             mode="assessment",
-            reply_text=build_progress_prefix(guide.title, 1, view.total_items, expected_language)
-            + _questionnaire_reply(
-                user_message=payload.message,
-                expected_language=expected_language,
-                guide=guide,
-                phase="start",
-                current_index=1,
-                total_items=view.total_items,
-                next_question=(view.next_item.text if view.next_item is not None else None),
-                options=[(option.value, option.label) for option in (view.next_item.options if view.next_item else [])],
-                answers_so_far=[],
-            ),
-            summary=f"Started questionnaire {requested}.",
-            question_options=_options_payload(view.next_item.options if view.next_item else []),
+            reply_text=tip,
+            summary=f"{requested} questionnaire card offered (session deferred to panel).",
             debug={
-                "source": "assessment_start",
+                "source": "assessment_card",
                 "llm_used": False,
                 "fallback_used": False,
                 "assessment_type": requested,

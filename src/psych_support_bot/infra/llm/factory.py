@@ -47,14 +47,17 @@ MODE_LIMITS: dict[str, "ModelCallLimits"] = {
     "support": ModelCallLimits(max_tokens=1024, timeout=30.0),
     "planning": ModelCallLimits(max_tokens=1024, timeout=30.0),
     "intervention": ModelCallLimits(max_tokens=1024, timeout=30.0),
-    # 1024 而非更小的"JSON 只需 ~150 token"直觉值：dots 网关是 reasoning
-    # 模型且已实测忽略所有关闭思考的参数（reasoning_effort / thinking /
-    # enable_thinking，2026-09-06 探测），reasoning_content 与 JSON 共享
-    # 这份预算——320 曾被思考烧穿，产出空正文或半截 JSON，语义通道
-    # （topics/emotional_state）静默丢失。fail-safe 会维持规则判定，但
-    # 预算不足等于语义兜底通道常态性失效。max_tokens 是上限不产生费用，
-    # 留足思考空间是当前唯一稳定手段。
-    "risk_classification": ModelCallLimits(max_tokens=1024, timeout=15.0),
+    # 风险分类两级（2026-09-09）：risk_screen 关思考快筛（~1s，高危用例
+    # 6/6 正确识别且规则通道独立兜底）；risk_classification 思考开二次确认
+    # （安全关键分级依赖思维链，evals 基线对照：关思考 routing 大面积滑向
+    # support/低危）。快筛判 low 直接采纳，非 low 升级确认。
+    # max_tokens 2048 + timeout 25s（20260912）：思考开时思维链与正文共享
+    # token 预算，1024 下思考挤爆预算 → 正文返回空 → 咽喉层空内容重试
+    # （退避 0.5/1.0s）把单轮拖到 10~25s。上调后实测空内容消失，但思考
+    # 合法变长（成功样本 10.6s），15s 超时成为新瓶颈 → 同步放宽到 25s，
+    # 让多数调用首发成功而非「15s 掐断 → 重试堆叠」。分级语义不变。
+    "risk_screen": ModelCallLimits(max_tokens=512, timeout=10.0),
+    "risk_classification": ModelCallLimits(max_tokens=2048, timeout=25.0),
 }
 
 
@@ -75,6 +78,13 @@ def build_chat_model(
     settings = get_settings()
     key = SecretStr(settings.openai_api_key) if settings.openai_api_key else None
     limits = MODE_LIMITS.get(mode)
+    # 思考开关按调用类型分流（2026-09-09 evals 基线对照结论）：
+    # - 关思考（快 4-8 倍）：机械性任务——STT 转写、结构化小输出。回复生成
+    #   invoke 6.1s→0.74s、首 token 1.68s→0.15s，质量实测无损。
+    # - 保持思考：risk_classification（mode="risk_classification"）。关思考后
+    #   routing 大面积滑向 support/低危（11 失败 vs 基线 4），分级判定依赖
+    #   思维链，安全关键不允许为延迟牺牲。
+    disable_thinking = mode != "risk_classification"
     return ChatOpenAI(
         model=settings.openai_model,
         api_key=key,
@@ -84,4 +94,11 @@ def build_chat_model(
         timeout=timeout if timeout is not None else (limits.timeout if limits else 30.0),
         max_tokens=max_tokens if max_tokens is not None else (limits.max_tokens if limits else 1024),
         default_headers={"api-key": settings.openai_api_key},
+        # dots 网关关思考姿势（实测生效）：reasoning_effort 落请求顶层，
+        # chat_template_kwargs 经 extra_body 合并进请求体顶层。
+        **(
+            {"reasoning_effort": "none", "extra_body": {"chat_template_kwargs": {"enable_thinking": False}}}
+            if disable_thinking
+            else {}
+        ),
     )

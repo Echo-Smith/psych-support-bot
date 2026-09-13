@@ -73,6 +73,16 @@ class QuestionnaireSessionAnswerRequest(BaseModel):
     value: int = Field(..., ge=0, le=4)
 
 
+class QuestionnaireSessionBulkRequest(BaseModel):
+    """面板批量作答（shadcn 式逐题分页在客户端持有作答状态）：整卷一次提交。
+
+    长度与取值范围由 score_from_answers 按量表全量校验（422），
+    pydantic 只做粗粒度防呆（非空、上限防滥用）。
+    """
+
+    answers: list[int] = Field(..., min_length=1, max_length=50)
+
+
 class QuestionnaireSessionView(BaseModel):
     session_id: str
     user_id: str

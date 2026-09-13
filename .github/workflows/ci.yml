@@ -53,6 +53,22 @@ jobs:
         env:
           DATABASE_URL: sqlite:///./data/test.db
 
+  frontend:
+    name: Frontend Module Tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      # 语音前端模块（static/js/voice/）的特征测试：协议常量↔服务端 schema
+      # 交叉校验、PCM 排程、live 状态机、分句双端 fixture 一致性。
+      - name: Run frontend module tests
+        run: node --test tests/frontend/*.test.mjs
+
   check-secrets:
     name: Secret Availability
     runs-on: ubuntu-latest

@@ -8,7 +8,12 @@
 
 from dataclasses import dataclass
 
+from psych_support_bot.ai.knowledge.act import ACT_EXERCISES
+from psych_support_bot.ai.knowledge.cbt import CBT_EXERCISES
+from psych_support_bot.ai.knowledge.dbt import DBT_EXERCISES
 from psych_support_bot.ai.knowledge.index import (
+    EXERCISE_TOPIC_MAP,
+    TOPIC_KEYWORDS,
     render_entry,
     render_knowledge_sections,
 )
@@ -103,3 +108,25 @@ def test_clip_context_truncates_long_output() -> None:
 def test_render_entry_includes_action_hint() -> None:
     rendered = render_entry("id1", "Title", "sum", "hint")
     assert "id1" in rendered and "hint" in rendered
+
+
+# --- 练习主题映射治理 ---
+
+
+def test_cbt_exercise_dict_keys_match_exercise_ids() -> None:
+    # 防回归：曾出现键 " downward_arrow" 带前导空格，主题映射按干净键查找
+    # 落空，条目主题退化为默认 stress。
+    for key, exercise in CBT_EXERCISES.items():
+        assert key == exercise.exercise_id
+
+
+def test_exercise_topic_map_covers_all_library_exercises() -> None:
+    library_ids = set(CBT_EXERCISES) | set(ACT_EXERCISES) | set(DBT_EXERCISES)
+    assert set(EXERCISE_TOPIC_MAP) >= library_ids
+
+
+def test_exercise_topic_map_topics_in_closed_vocabulary() -> None:
+    # 主题必须是 TOPIC_KEYWORDS 闭集成员，否则 detect_topics 永远检不出
+    # 该条目，映射等于写死了一条死键。
+    for topics in EXERCISE_TOPIC_MAP.values():
+        assert set(topics) <= set(TOPIC_KEYWORDS)

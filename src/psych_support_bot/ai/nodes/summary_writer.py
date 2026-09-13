@@ -16,6 +16,27 @@ def write_summary(state: GraphState) -> GraphState:
         # 唯一进入上下文的原文通道；保留回复长度以便追踪长答/短答模式。
         topics = state.get("topics")
         user_msg = state["user_message"]
+
+        # 图内练习轮：摘要只留练习进度标记，不写步骤回答内容——五感回答
+        # （用户眼前的东西）不属于跨轮记忆该携带的信息，且练习状态本身
+        # 由 practice_sessions 表承载，摘要重复记反而污染记忆区。
+        practice_route = str(state.get("practice_route") or "")
+        if practice_route:
+            practice = state.get("active_practice") or {}
+            step = practice.get("step")
+            try:
+                step_num = int(step) + 1 if step is not None else 0  # type: ignore[arg-type]
+            except (TypeError, ValueError):
+                step_num = 0
+            summary = (
+                f"User (mode=intervention, risk={risk}, practice=54321 "
+                f"route={practice_route}, step={step_num}/5): {user_msg[:60]}. "
+                "Bot guided the grounding practice."
+            )
+            state["session_summary"] = summary
+            update_span_output(obs, {"session_summary": summary[:200]})
+            return state
+
         consultation_required = state.get("consultation_required", False)
         consultation_agents = state.get("consultation_agents", [])
         consultation_opinions = state.get("consultation_opinions", [])

@@ -48,6 +48,31 @@ class Settings(BaseSettings):
     auth_enabled: bool = Field(default=False, alias="AUTH_ENABLED")
     jwt_secret_key: str = Field(default="", alias="JWT_SECRET_KEY")
 
+    # ── 语音 I/O（与主 LLM 完全分离的供应商配置，便于独立换模型）────────
+    # STT：provider = "openai"（multipart /audio/transcriptions，OpenAI/兼容
+    # 网关）| "dots"（chat completions + audio_url 内容块，base64 data URI
+    # 内联音频，无需公网托管 URL）。base_url/key/model 独立配置；缺省
+    # 回落 OPENAI_*（行为兼容旧部署），但 dots 模式必须显式配置。
+    voice_stt_provider: str = Field(default="", alias="VOICE_STT_PROVIDER")
+    voice_stt_base_url: str = Field(default="", alias="VOICE_STT_BASE_URL")
+    voice_stt_api_key: str = Field(default="", alias="VOICE_STT_API_KEY")
+    voice_stt_model: str = Field(default="", alias="VOICE_STT_MODEL")
+    voice_stt_language: str = Field(default="", alias="VOICE_STT_LANGUAGE")
+    # STT 上下文提示词表：偏向领域高频词（正念/恐慌/心悸…），提升专名识别。
+    # 缺省用适配层内置词表（按语种选中/英版）；显式配置则覆盖；置为 off 禁用。
+    voice_stt_prompt: str = Field(default="", alias="VOICE_STT_PROMPT")
+    # TTS：provider = "minimax"（wss /ws/v1/t2a_v2_bidi 双向流式，用户指定）
+    # | "openai"（POST /audio/speech，OpenAI 兼容）。api_key/model/voice
+    # 两家共用；minimax 另需 ws_url。provider 缺省时按 base_url 是否配置
+    # 回落 openai（旧行为兼容）；dots 平台无 TTS 端点。
+    voice_tts_provider: str = Field(default="", alias="VOICE_TTS_PROVIDER")
+    voice_tts_ws_url: str = Field(default="", alias="VOICE_TTS_WS_URL")
+    voice_tts_language_boost: str = Field(default="Chinese", alias="VOICE_TTS_LANGUAGE_BOOST")
+    voice_tts_base_url: str = Field(default="", alias="VOICE_TTS_BASE_URL")
+    voice_tts_api_key: str = Field(default="", alias="VOICE_TTS_API_KEY")
+    voice_tts_model: str = Field(default="", alias="VOICE_TTS_MODEL")
+    voice_tts_voice: str = Field(default="", alias="VOICE_TTS_VOICE")
+
     @model_validator(mode="after")
     def apply_dashscope_fallbacks(self) -> "Settings":
         if not self.openai_api_key:

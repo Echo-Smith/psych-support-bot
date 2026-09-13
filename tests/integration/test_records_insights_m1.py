@@ -20,6 +20,7 @@ from psych_support_bot.api.routes import assessments as assessments_routes
 from psych_support_bot.app import app
 from psych_support_bot.infra.db.init_db import init_db
 from psych_support_bot.infra.db.models import UsageEvent
+from psych_support_bot.infra.db.repositories import create_questionnaire_session
 from psych_support_bot.infra.db.session import SessionLocal
 from psych_support_bot.infra.llm import generation as llm_generation
 from psych_support_bot.services.conversation import conversation_service
@@ -142,14 +143,10 @@ def test_usage_events_recorded_without_mood_content() -> None:
 
 
 def test_chat_questionnaire_completion_marks_source_chat() -> None:
-    """对话图内完成的问卷落 source=chat，与页面提交共享同一历史。"""
+    """会话存在时（页面路径预建），对话图内完成的问卷落 source=chat，与页面提交共享同一历史。"""
     user_id = f"m1-chat-src-{uuid4().hex[:8]}"
     with SessionLocal() as session:
-        start = conversation_service.respond(
-            ConversationRequest(user_id=user_id, message="我想做 GAD-7"),
-            session=session,
-        )
-        assert start.mode == "assessment"
+        create_questionnaire_session(session, user_id, "gad7")
         # 依次答完 7 题
         for value in ["2", "2", "2", "2", "2", "2", "2"]:
             conversation_service.respond(

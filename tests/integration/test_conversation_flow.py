@@ -2,10 +2,17 @@ from uuid import uuid4
 
 from psych_support_bot.ai.schemas.messages import ConversationRequest
 from psych_support_bot.infra.db.init_db import init_db
+from psych_support_bot.infra.db.repositories import create_questionnaire_session
 from psych_support_bot.infra.db.session import SessionLocal
 from psych_support_bot.services.conversation import conversation_service
 
 init_db()
+
+
+def _start_panel_session(user_id: str, assessment_type: str) -> None:
+    """页面路径预建活跃问卷会话：聊天侧续答/情绪暂停等状态机路径的前置。"""
+    with SessionLocal() as session:
+        create_questionnaire_session(session, user_id, assessment_type)
 
 
 def test_support_flow_returns_response() -> None:
@@ -67,10 +74,11 @@ def test_questionnaire_progress_reply_always_contains_question_text() -> None:
     每一题的题干+选项必须完整出现，且不得出现 LLM 幻觉的「完成总结/编造分数」。
     """
     user_id = f"assessment-deterministic-{uuid4()}"
+    _start_panel_session(user_id, "gad7")
     replies = []
     with SessionLocal() as session:
         current = conversation_service.respond(
-            ConversationRequest(user_id=user_id, message="我想做 GAD-7"),
+            ConversationRequest(user_id=user_id, message="1"),
             session=session,
         )
         replies.append(current.reply.text)
@@ -84,10 +92,13 @@ def test_questionnaire_progress_reply_always_contains_question_text() -> None:
             replies.append(current.reply.text)
 
     assert len(replies) >= 6
-    for i, text in enumerate(replies, start=1):
-        assert f"{i} / 7" in text or f"第 {i}" in text  # 进度前缀
-        # 题干+选项完整：确定性正文 = 题目文本 + （0=… 选项串）
-        assert "（0=" in text or "(0=" in text
+    # 预建会话后第一条回复已答 1 题 → 前缀从 Question 2/7（zh：第 2/7 题）起
+    for offset, text in enumerate(replies):
+        i = offset + 2
+        # 进度前缀（zh「第 i/7 题」/ en「Question i/7」；数字答案语言判定可为 en）
+        assert f"第 {i}/" in text or f"{i} / 7" in text or f"Question {i}/7" in text
+        # 题干+选项完整：确定性正文 = 题目文本 + （0 = … 选项串，zh 全角/en 半角带空格）
+        assert "（0 =" in text or "(0 =" in text
         # 幻觉完成总结的标志（编造总分/宣告完成）不得出现在进行中的轮次
         assert "总分" not in text
         assert "已完成" not in text
@@ -96,11 +107,8 @@ def test_questionnaire_progress_reply_always_contains_question_text() -> None:
 def test_questionnaire_skip_reply_is_exit_not_question() -> None:
     """中途退出：回复是告别文案，不是下一题题干。"""
     user_id = f"assessment-skip-{uuid4()}"
+    _start_panel_session(user_id, "gad7")
     with SessionLocal() as session:
-        conversation_service.respond(
-            ConversationRequest(user_id=user_id, message="我想做 GAD-7"),
-            session=session,
-        )
         conversation_service.respond(
             ConversationRequest(user_id=user_id, message="1"),
             session=session,
@@ -116,30 +124,51 @@ def test_questionnaire_skip_reply_is_exit_not_question() -> None:
     assert "（0=" not in exit_resp.reply.text
 
 
-def test_conversation_can_start_and_complete_questionnaire() -> None:
-    user_id = f"assessment-user-llm-flow-{uuid4()}"
+def test_questionnaire_request_offers_card_without_session() -> None:
+    """聊天新开问卷 = 只发引导卡，不在对话里建会话/出题。
+
+    会话由评估页确认须知后创建（shadcn 式分页作答）；聊天侧不再有
+    逐题作答入口。卡片契约：mode=assessment + assessment_card + 无 chips。
+    """
+    from psych_support_bot.infra.db.repositories import (
+        get_active_questionnaire_session,
+        get_paused_questionnaire_session,
+    )
+
+    user_id = f"assessment-card-{uuid4()}"
     with SessionLocal() as session:
         start = conversation_service.respond(
             ConversationRequest(user_id=user_id, message="I want to take GAD-7"),
             session=session,
         )
+        assert start.mode == "assessment"
+        assert start.debug["source"] == "assessment_card"
+        assert start.debug["llm_used"] is False
+        assert start.debug["assessment_type"] == "gad7"
+        # 不建会话、不带选项 chips——作答入口只保留评估页
+        assert get_active_questionnaire_session(session, user_id) is None
+        assert get_paused_questionnaire_session(session, user_id, "gad7") is None
+        assert start.question_options == []
+        # 引导文案含量表名，不携带题干/进度前缀
+        assert "GAD-7" in start.reply.text
+        assert "〔" not in start.reply.text
 
-        final = start
+
+def test_conversation_can_start_and_complete_questionnaire() -> None:
+    """会话存在时（页面路径预建），聊天数字作答仍可走完并触发 LLM 完成轮。"""
+    user_id = f"assessment-user-llm-flow-{uuid4()}"
+    _start_panel_session(user_id, "gad7")
+    with SessionLocal() as session:
+        final = None
         for _ in range(7):
             final = conversation_service.respond(
                 ConversationRequest(user_id=user_id, message="1"),
                 session=session,
             )
 
-    assert start.mode == "assessment"
-    assert start.reply.text
-    assert start.debug["source"] == "assessment_start"
-    # 题目呈现全确定性（问卷完整性不交给采样），仅 completed 轮走 LLM
-    assert start.debug["llm_used"] is False
-    assert "GAD-7" in start.reply.text or "1 / 7" in start.reply.text
-
     assert final.mode == "assessment"
     assert final.debug["source"] == "assessment_result"
+    # 题目呈现全确定性（问卷完整性不交给采样），仅 completed 轮走 LLM
     assert final.debug["llm_used"] is True
     assert final.debug["assessment_score"] == 7
     assert final.reply.text
@@ -147,11 +176,8 @@ def test_conversation_can_start_and_complete_questionnaire() -> None:
 
 def test_assessment_followup_includes_supportive_interpretation() -> None:
     user_id = f"phq-followup-llm-flow-{uuid4()}"
+    _start_panel_session(user_id, "phq9")
     with SessionLocal() as session:
-        conversation_service.respond(
-            ConversationRequest(user_id=user_id, message="I want to take PHQ-9"),
-            session=session,
-        )
         final = None
         answers = [1, 1, 1, 1, 1, 1, 1, 1, 0]
         for value in answers:
@@ -259,13 +285,13 @@ def test_non_assessment_message_during_assessment_reprompts_same_question() -> N
     反复回以「请回复一个数字」——自动暂停问卷、进度保存、转回倾听。
     """
     user_id = f"non-assessment-during-{uuid4()}"
+    _start_panel_session(user_id, "phq9")
     with SessionLocal() as session:
         start = conversation_service.respond(
-            ConversationRequest(user_id=user_id, message="我想做 PHQ-9"),
+            ConversationRequest(user_id=user_id, message="1"),
             session=session,
         )
         assert start.mode == "assessment"
-        assert start.debug["source"] == "assessment_start"
 
         # 在量表进行中倾诉情绪：必须暂停问卷、转回支持，而不是推题
         mid = conversation_service.respond(
@@ -289,16 +315,17 @@ def test_non_assessment_message_during_assessment_reprompts_same_question() -> N
 def test_help_message_during_assessment_reprompts_without_advancing() -> None:
     """活跃评估期间发送 help 意图按无效答案处理：不推进、不丢进度。"""
     user_id = f"help-during-assessment-{uuid4()}"
+    _start_panel_session(user_id, "isi")
     with SessionLocal() as session:
         start = conversation_service.respond(
-            ConversationRequest(user_id=user_id, message="我想做 ISI"),
+            ConversationRequest(user_id=user_id, message="1"),
             session=session,
         )
         assert start.mode == "assessment"
 
-        # 发送帮助消息
+        # 发送帮助消息（同为英文，保证两轮语言口径一致、选项文案可比较）
         help_resp = conversation_service.respond(
-            ConversationRequest(user_id=user_id, message="你能帮我吗"),
+            ConversationRequest(user_id=user_id, message="can you help me"),
             session=session,
         )
 
@@ -318,13 +345,13 @@ def test_numeric_answer_during_assessment_proceeds_normally() -> None:
     进而 return None 中断评估流程。此测试确保数字答案正常推进量表。
     """
     user_id = f"numeric-answer-{uuid4()}"
+    _start_panel_session(user_id, "phq9")
     with SessionLocal() as session:
         start = conversation_service.respond(
-            ConversationRequest(user_id=user_id, message="我想做 PHQ-9"),
+            ConversationRequest(user_id=user_id, message="1"),
             session=session,
         )
         assert start.mode == "assessment"
-        assert start.debug["source"] == "assessment_start"
 
         # 发送数字答案 "2"（PHQ-9 有效范围 0-3）
         step1 = conversation_service.respond(
@@ -343,11 +370,8 @@ def test_numeric_answer_during_assessment_proceeds_normally() -> None:
 def test_numeric_zero_answer_during_assessment_proceeds_normally() -> None:
     """回归测试：评估期间发送 "0"（最低分）也应正常推进。"""
     user_id = f"numeric-zero-{uuid4()}"
+    _start_panel_session(user_id, "phq9")
     with SessionLocal() as session:
-        conversation_service.respond(
-            ConversationRequest(user_id=user_id, message="PHQ-9"),
-            session=session,
-        )
         step1 = conversation_service.respond(
             ConversationRequest(user_id=user_id, message="0"),
             session=session,
@@ -361,11 +385,8 @@ def test_numeric_zero_answer_during_assessment_proceeds_normally() -> None:
 def test_verbal_option_answer_during_assessment_proceeds_normally() -> None:
     """回归测试：评估期间发送文字选项（如"没有"）也应正常推进。"""
     user_id = f"verbal-option-{uuid4()}"
+    _start_panel_session(user_id, "gad7")
     with SessionLocal() as session:
-        conversation_service.respond(
-            ConversationRequest(user_id=user_id, message="GAD-7"),
-            session=session,
-        )
         step1 = conversation_service.respond(
             ConversationRequest(user_id=user_id, message="没有"),
             session=session,

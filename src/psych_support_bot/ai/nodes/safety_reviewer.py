@@ -1,6 +1,7 @@
 import logging
 import re
 
+from psych_support_bot.ai.nodes.response_generator import _split_reply_messages
 from psych_support_bot.ai.prompts.templates import (
     build_boundary_base_prompt,
     build_boundary_state_prompt,
@@ -502,6 +503,28 @@ def _detect_redline(text: str) -> bool:
     return any(p.search(text) for p in _ALL_REDLINED_REGEX)
 
 
+def scan_sentence_speakable(text: str, *, challenge_allowed: bool = False, expected_language: str = "") -> bool:
+    """句子级安全扫描：该句能否在全文审查完成前安全朗读（流式 TTS 用）。
+
+    复用与全文审查完全同源的纯规则（LEAK_MARKERS / vendor / redline /
+    challenge / 内部标签）——逐句跑与整段跑对这些确定性子串/正则覆盖等价。
+    命中任一即返回 False（不朗读，留待全文审查后经 revise 处理）。
+    """
+    if not (text or "").strip():
+        return True
+    if any(marker in text for marker in LEAK_MARKERS):
+        return False
+    if _detect_vendor_name(text):
+        return False
+    if _detect_redline(text):
+        return False
+    if not challenge_allowed and _detect_challenge(text):
+        return False
+    # 内部临床脚手架标签（观察/形成/…）：整段会被清洗，句子含标签则不抢跑朗读
+    _, had_labels = _sanitize_internal_labels(text)
+    return not had_labels
+
+
 def review_response(state: GraphState) -> GraphState:
     with trace_span(
         "node.safety_reviewer",
@@ -591,7 +614,12 @@ def review_response(state: GraphState) -> GraphState:
                 )
             )
 
-        state["generated_reply"].text = text
+        # 不变量：messages 恒为当前 text 的切分。审查改写 text 后若沿用旧
+        # messages，前端气泡显示被审查掉的内容、而 TTS 读的是替换句——
+        # 屏显与朗读分裂（20260912 实证：追问被替换成落地句后两路文本不同）。
+        reply = state["generated_reply"]
+        reply.text = text
+        reply.messages = _split_reply_messages(text) if risk_result.risk_level in {"low", "elevated"} else []
 
         update_span_output(
             obs,

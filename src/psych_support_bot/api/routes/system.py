@@ -3,6 +3,7 @@ from fastapi.responses import HTMLResponse
 
 from psych_support_bot.infra.config.settings import get_settings
 from psych_support_bot.infra.telemetry.tracing import tracing_config
+from psych_support_bot.infra.voice.adapter import get_stt_config, get_tts_config
 
 router = APIRouter(prefix="/system", tags=["system"])
 
@@ -10,10 +11,18 @@ router = APIRouter(prefix="/system", tags=["system"])
 @router.get("/info")
 def system_info() -> dict[str, object]:
     settings = get_settings()
+    # 语音模型实况：配置了才展示（未配置语音时前端隐藏对应行）
+    stt = get_stt_config()
+    tts = get_tts_config()
     return {
         "app_name": settings.app_name,
         "environment": settings.environment,
         "default_model": settings.openai_model,
+        "models": {
+            "llm": settings.openai_model,
+            "stt": f"{stt.model} ({stt.provider})" if stt else "",
+            "tts": f"{tts.model} ({tts.provider})" if tts else "",
+        },
         "workflow": settings.default_conversation_mode,
         "tracing": tracing_config(),
     }

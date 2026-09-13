@@ -12,6 +12,7 @@ from psych_support_bot.domain.assessments.schemas import (
     AssessmentType,
     QuestionnaireGuide,
     QuestionnaireSessionAnswerRequest,
+    QuestionnaireSessionBulkRequest,
     QuestionnaireSessionResult,
     QuestionnaireSessionStartRequest,
     QuestionnaireSessionView,
@@ -25,6 +26,7 @@ from psych_support_bot.domain.assessments.service import (
 )
 from psych_support_bot.infra.db.repositories import (
     append_questionnaire_answer,
+    bulk_submit_questionnaire_answers,
     complete_questionnaire_session,
     create_questionnaire_session,
     get_questionnaire_session,
@@ -321,6 +323,48 @@ def complete_questionnaire_session_route(
         answers=AssessmentAnswerSet(answers=answers),
         language="zh",
     )
+    save_assessment(session, completed.user_id, result, source="panel")
+    return QuestionnaireSessionResult(session=session_view, result=result)
+
+
+@router.post("/sessions/{session_id}/bulk", response_model=QuestionnaireSessionResult)
+def bulk_submit_questionnaire_session(
+    session_id: str,
+    payload: QuestionnaireSessionBulkRequest,
+    request: Request,
+    user_id: str = "",
+    session: Session = Depends(get_db_session),
+) -> QuestionnaireSessionResult:
+    """面板整卷提交（shadcn 式逐题分页：作答状态在客户端持有，最后一击送达）。
+
+    服务端是唯一评分权威：长度与取值范围按量表全量校验（422），
+    通过即整卷覆盖 → 完成会话 → 确定性评分落库，一次往返出结果。
+    完成轮不含 LLM——解读文案全部来自 build_assessment_result 的确定性输出，
+    趋势解读仍由 /analysis 端点按需异步加载。
+    """
+    user_id = request_user_id(request, user_id)
+    record = get_questionnaire_session(session, session_id)
+    if record is None:
+        raise HTTPException(status_code=404, detail="Questionnaire session not found")
+    if record.user_id != user_id:
+        raise HTTPException(status_code=403, detail="Not authorized to access this session")
+    if record.status == "completed":
+        raise HTTPException(status_code=409, detail="Questionnaire session already completed")
+
+    assessment_type = record.assessment_type  # type: ignore[assignment]
+    answer_set = AssessmentAnswerSet(answers=payload.answers)
+    # 422 守门：先全量校验，通过前不落库——半卷数据不会污染会话。
+    score_from_answers(assessment_type, answer_set)
+    bulk_submit_questionnaire_answers(session, record, payload.answers)
+    completed = complete_questionnaire_session(session, record)
+    session_view = build_questionnaire_session_view(
+        session_id=completed.id,
+        user_id=completed.user_id,
+        assessment_type=assessment_type,
+        answers=payload.answers,
+        status=completed.status,
+    )
+    result = build_assessment_result(assessment_type, answers=answer_set, language="zh")
     save_assessment(session, completed.user_id, result, source="panel")
     return QuestionnaireSessionResult(session=session_view, result=result)
 
