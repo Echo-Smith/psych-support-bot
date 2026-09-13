@@ -313,13 +313,158 @@ def run_verification_judgment(
         return True
 
 
-def _should_llm_extract(user_text: str, *, practice_event: bool, turn_count: int) -> bool:
-    """节流 = worker 纪律（设计文档 §6），不是成本上限（P2 决策）。"""
-    topic_hits = len(detect_topics(user_text or ""))
+# ── 价值驱动提取（信息增益调度）─────────────────────────────────────────
+# 信号成熟水位：现有 active 信念置信度 ≥ 此值视为"已覆盖"，重复出现的
+# 同信号边际增益低（复用渲染水位 0.55 ≈ 两次跨轮证据）。
+_SIGNAL_MATURE_CONFIDENCE = 0.55
+# 边际价值高/低门：高门允许打破均匀节流提前提取，低门抑制成熟信号重复提取。
+EXTRACT_VALUE_HIGH = 0.55
+EXTRACT_VALUE_LOW = 0.20
+# 价值分量权重：新颖度 0.45 + 维度稀缺 0.25 + 机制信号 0.30。
+W_NOVELTY = 0.45
+W_SCARCITY = 0.25
+W_MECHANISM = 0.30
+_SCARCITY_DIMS = ("D2", "D3", "D5")
+# 英文词锚最短长度（"I can"/"I did" 类短标记误命中过高，只用于召回不用于触发）。
+_EN_MECHANISM_MIN_LEN = 7
+
+
+def detect_mechanism_keys(user_text: str) -> list[str]:
+    """确定性机制/动机词锚命中（D3/D5，排除 identify_only 的 distortion.*）。
+
+    锚点命中只决定"本轮值不值得花一次 LLM 提取"，最终判定仍由提取 LLM
+    给出（锚点召回 ≠ 信念沉淀）。
+    """
+    text = (user_text or "").lower()
+    if not text:
+        return []
+    hits: list[str] = []
+    for anchor in all_anchors():
+        if anchor.identify_only or anchor.dimension not in {"D3", "D5"}:
+            continue
+        for phrase in anchor.zh_phrases:
+            if phrase and phrase.lower() in text:
+                hits.append(anchor.key)
+                break
+        else:
+            for phrase in anchor.en_phrases:
+                if len(phrase) >= _EN_MECHANISM_MIN_LEN and phrase.lower() in text:
+                    hits.append(anchor.key)
+                    break
+    return hits
+
+
+def compute_extraction_value(
+    *,
+    topic_keys: list[str] | set[str],
+    mechanism_keys: list[str],
+    active_beliefs: list | dict,
+) -> float:
+    """本轮 LLM 语义提取的边际信息增益（纯函数，[0,1]）。
+
+    三个分量：
+    - 新颖度（0.45）：本轮主题信号中未被现有 active 信念覆盖的比例；
+    - 维度稀缺（0.25）：用户画像在 D2/D3/D5 上越稀薄越值得提取；
+    - 机制优先（0.30）：命中机制/动机锚点且对应信念尚未成熟。
+
+    ``active_beliefs`` 接受 belief 对象列表（读 .key/.confidence/.dimension）
+    或 ``{key: confidence}`` 字典（此时维度稀缺按 0 计）。
+    """
+    topics = list(topic_keys)
+    if isinstance(active_beliefs, dict):
+        existing_conf: dict[str, float] = dict(active_beliefs)
+        dim_counts: dict[str, int] | None = None
+    else:
+        existing_conf = {b.key: float(b.confidence) for b in active_beliefs}
+        dim_counts = {}
+        for b in active_beliefs:
+            dim_counts[b.dimension] = dim_counts.get(b.dimension, 0) + 1
+
+    # 新颖度：未覆盖主题占比；0 主题时该分量为 0（由机制分量决定价值）。
+    novelty = (
+        sum(1 for key in topics if existing_conf.get(key, 0.0) < _SIGNAL_MATURE_CONFIDENCE) / len(topics)
+        if topics
+        else 0.0
+    )
+    # 维度稀缺：三个语义维度的 1/(n+1) 均值，新用户=1，饱和→0。
+    # dict 入参没有维度信息，该分量按 0 计（见函数 docstring）。
+    scarcity = (
+        0.0
+        if dim_counts is None
+        else sum(1.0 / (dim_counts.get(dim, 0) + 1) for dim in _SCARCITY_DIMS) / len(_SCARCITY_DIMS)
+    )
+    # 机制信号：至少一个命中锚点对应的信念尚未成熟才计分。
+    novel_mechanism = any(existing_conf.get(key, 0.0) < _SIGNAL_MATURE_CONFIDENCE for key in mechanism_keys)
+    mechanism_score = 1.0 if novel_mechanism else 0.0
+
+    return round(W_NOVELTY * novelty + W_SCARCITY * scarcity + W_MECHANISM * mechanism_score, 4)
+
+
+def _should_llm_extract(
+    user_text: str,
+    *,
+    practice_event: bool,
+    turn_count: int,
+    session: Session | None = None,
+    user_id: str = "",
+) -> bool:
+    """节流 = worker 纪律（设计文档 §6）+ 价值驱动增益（信息增益调度）。
+
+    基础规则（无 session 时的完整行为，冷路径/单测保持不变）：
+    练习事件 / 主题命中≥2 / 每 N 轮且有主题。
+
+    传入 session（生产路径）时叠加两道价值门（先于基础规则）：
+    - 出现**新颖机制/动机信号**（D3/D5 词锚命中且对应信念尚未成熟）→
+      允许打破均匀节流提前提取：机制信念比主题更改变干预策略，且最稀缺；
+    - 本轮主题**全部已被成熟信念覆盖**且无新颖机制 → 抑制本轮调用，
+      把提取预算留给高增益轮次（标量边际价值 ≤ EXTRACT_VALUE_LOW）；
+    - 其余情形沿用基础规则。``compute_extraction_value`` 的标量值同时
+      写日志，供 P2"每条被确认信念的成本"分析后回阈值。
+    """
+    topics = detect_topics(user_text or "")
+    topic_hits = len(topics)
     if practice_event or topic_hits >= 2:
+        base = True
+    else:
+        every = max(1, get_settings().profile_llm_every_turns)
+        base = topic_hits >= 1 and turn_count % every == 0
+
+    if session is None or not user_id:
+        return base
+
+    mechanism_keys = detect_mechanism_keys(user_text or "")
+    active = list_active_beliefs(session, user_id)
+    existing_conf = {b.key: float(b.confidence) for b in active}
+    value = compute_extraction_value(
+        topic_keys=topics,
+        mechanism_keys=mechanism_keys,
+        active_beliefs=active,
+    )
+    novel_mechanism = [
+        key for key in mechanism_keys if existing_conf.get(key, 0.0) < _SIGNAL_MATURE_CONFIDENCE
+    ]
+    topics_mature_covered = bool(topics) and all(
+        existing_conf.get(key, 0.0) >= _SIGNAL_MATURE_CONFIDENCE for key in topics
+    )
+    logger.info(
+        "profile extraction gate: value=%.2f topics=%d mechanism=%s novel_mechanism=%s "
+        "covered=%s base=%s user=%s turn=%s",
+        value,
+        topic_hits,
+        mechanism_keys,
+        novel_mechanism,
+        topics_mature_covered,
+        base,
+        user_id,
+        turn_count,
+    )
+    # 高价值门：新颖机制信号优先，与画像成熟度无关（新机制永远值得提取）。
+    if novel_mechanism:
         return True
-    every = max(1, get_settings().profile_llm_every_turns)
-    return topic_hits >= 1 and turn_count % every == 0
+    # 低价值门：主题全是成熟信念、又没有新机制 → 抑制（标量值同步落低区间）。
+    if topics_mature_covered and value <= EXTRACT_VALUE_LOW + W_SCARCITY:
+        return False
+    return base
 
 
 def run_semantic_extraction(
@@ -342,7 +487,13 @@ def run_semantic_extraction(
         return
     if risk_level in {"high", "critical"}:
         return  # 危机轮不调用：高危内容不入画像层
-    if not _should_llm_extract(user_text, practice_event=practice_event, turn_count=turn_count):
+    if not _should_llm_extract(
+        user_text,
+        practice_event=practice_event,
+        turn_count=turn_count,
+        session=session,
+        user_id=user_id,
+    ):
         return
 
     from psych_support_bot.infra.llm.generation import LLMUnavailableError
