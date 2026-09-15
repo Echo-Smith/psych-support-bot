@@ -755,6 +755,33 @@ def _source_doc_key(entry_id: str) -> str:
     return ":".join(parts[:2]) if len(parts) >= 2 else entry_id
 
 
+# D3 机制→学派映射：D3 信念对应的首选学派知识来源。
+_D3_SCHOOL_MAP: dict[str, tuple[str, ...]] = {
+    "control_struggle": ("act_exercise", "act_guide"),
+    "cognitive_fusion": ("act_exercise", "act_guide"),
+    "fused_self_concept": ("act_exercise", "act_guide"),
+    "rumination_loop": ("cbt_exercise", "cbt_guide"),
+    "avoidance_maintenance.social": ("cbt_exercise", "cbt_guide"),
+    "behavioral_withdrawal": ("cbt_exercise", "cbt_guide"),
+    "safety_behavior": ("cbt_exercise", "cbt_guide"),
+    "emotional_suppression": ("dbt_exercise", "dbt_guide"),
+}
+
+
+def _d3_school_boost(entry: KnowledgeEntry, beliefs: list) -> int:
+    """D3 信念→学派匹配加分（+3/匹配，最高+6）。"""
+    boost = 0
+    for b in beliefs:
+        if b.dimension != "D3" or b.confidence < 0.4:
+            continue
+        sources = _D3_SCHOOL_MAP.get(b.key, ())
+        if any(entry.source.startswith(s) for s in sources):
+            boost += 3
+            if boost >= 6:
+                break
+    return boost
+
+
 def retrieve_knowledge_entries(
     user_message: str,
     mode: str,
@@ -762,6 +789,8 @@ def retrieve_knowledge_entries(
     *,
     limit: int = 4,
     extra_topics: list[str] | None = None,
+    profile_topics: list[str] | None = None,
+    profile_beliefs: list | None = None,
 ) -> list[KnowledgeEntry]:
     # LLM 语义 topics 排前（闭集校验过，精度更高），关键词 topics 兜底在后。
     topics = list(dict.fromkeys([*(extra_topics or []), *detect_topics(user_message)]))
@@ -820,6 +849,18 @@ def retrieve_knowledge_entries(
         topic_hits = sum(1 for topic in entry.topics if topic in topics)
         score += topic_hits * 5
         topical_relevance += topic_hits
+
+        # 通路5：画像信念话题加权——历史确认的话题低于当轮实时信号（+5），
+        # 但高于关键词命中（+1），反映画像对知识检索的持续影响。
+        profile_boost = sum(2 for topic in entry.topics if topic in (profile_topics or []))
+        score += profile_boost
+        topical_relevance += profile_boost
+
+        # 第二层接出：D3 机制→学派匹配——D3 信念对应学派的知识内容获得加权。
+        if profile_beliefs:
+            school_boost = _d3_school_boost(entry, profile_beliefs)
+            score += school_boost
+            topical_relevance += school_boost
 
         keyword_hits = sum(
             1 for keyword in entry.keywords if keyword and _contains_keyword(normalized, compact, keyword)

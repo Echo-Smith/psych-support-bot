@@ -115,6 +115,43 @@ def _d8_line(rejected_keys: list[str], language: str) -> str | None:
     return f"应回避（用户已明确搁置）：{joiner.join(labels)}"
 
 
+def _time_ago_label(belief, language: str = "") -> str:
+    """紧凑时间标注：基于 last_evidence_at 输出"3天前"/"2周前"等。
+
+    7天内输出"活跃"（高频信号无需精确天数）；超过90天不标注（已衰减到
+    低优先级，标注反而占预算）。返回空串表示不标注。
+    """
+    ts = getattr(belief, "last_evidence_at", None)
+    if ts is None:
+        return ""
+    now = datetime.now(UTC)
+    if ts.tzinfo is None:
+        ts = ts.replace(tzinfo=UTC)
+    days = max(0, (now - ts).days)
+    if days > 90:
+        return ""
+    is_en = _is_en(language)
+    if days <= 7:
+        return "active" if is_en else "活跃"
+    if days <= 30:
+        weeks = max(1, days // 7)
+        return f"{weeks}w ago" if is_en else f"{weeks}周前"
+    months = max(1, days // 30)
+    return f"{months}mo ago" if is_en else f"{months}月前"
+
+
+def _context_tags_suffix(belief, language: str = "") -> str:
+    """从 value_json 提取 context_tags，输出紧凑后缀（"·工作·关系"）。"""
+    try:
+        val = json.loads(belief.value_json or "{}")
+    except (TypeError, ValueError):
+        return ""
+    tags = val.get("context_tags", [])
+    if not tags:
+        return ""
+    return "".join(f"·{t}" for t in tags[:3])  # 最多显示3个标签
+
+
 def _belief_item(belief, language: str) -> str | None:
     """单条 belief → 电报体短语；返回 None = 该条不渲染（逐条裁决）。"""
     # P3：机制信念未经用户认领，不进任何渲染（面板与 prompt 同规）。
@@ -125,27 +162,275 @@ def _belief_item(belief, language: str) -> str | None:
         return None
 
     label = friendly_label(belief.key, language)
+    time_tag = _time_ago_label(belief, language)
+
     if belief.dimension == "D1":
         # 主题 key 无标签即跳过：绝不把裸 key 透进 prompt。
         if not label:
             return None
-        return f"{label} ({'recurring topic'})" if _is_en(language) else f"{label}（反复出现的话题）"
+        if time_tag:
+            return f"{label}（反复话题·{time_tag}）" if not _is_en(language) else f"{label} (recurring·{time_tag})"
+        return f"{label}（反复出现的话题）" if not _is_en(language) else f"{label} (recurring topic)"
+
+    if belief.dimension == "D2" and belief.key.startswith("severity."):
+        # D2 严重度信念：紧凑格式带分数、等级和时间。
+        try:
+            val = json.loads(belief.value_json or "{}")
+        except (TypeError, ValueError):
+            val = {}
+        score = val.get("score")
+        severity = val.get("severity", "")
+        if label and score is not None:
+            sev_label = (
+                {
+                    "minimal": "极低",
+                    "none": "无",
+                    "mild": "轻度",
+                    "subthreshold": "亚临床",
+                    "moderate": "中度",
+                    "moderately_severe": "中重度",
+                    "severe": "重度",
+                }.get(severity, severity)
+                if not _is_en(language)
+                else severity
+            )
+            parts = [f"{label}·{sev_label}{score}分" if not _is_en(language) else f"{label}·{sev_label}{score}"]
+            if time_tag:
+                parts.append(time_tag)
+            return "·".join(parts)
+        return label
+
+    if belief.dimension == "D3":
+        # 通路3：有 cycle 且已用用户情境填充时，渲染结构化摘要。
+        try:
+            val = json.loads(belief.value_json or "{}")
+        except (TypeError, ValueError):
+            val = {}
+        cycle = val.get("cycle") if isinstance(val.get("cycle"), dict) else None
+        if cycle and val.get("user_specific"):
+            is_en = _is_en(language)
+            trigger = cycle.get("trigger", "")
+            behavior = cycle.get("behavior", "")
+            maintains = cycle.get("maintains", "")
+            if trigger and behavior:
+                if is_en:
+                    return f"In {trigger}, you tend to {behavior}" + (f" — {maintains}" if maintains else "")
+                return f"在{trigger}时，你倾向于{behavior}" + (f"（{maintains}）" if maintains else "")
+        # 无 cycle 时走词典标签（需 user_confirmed，已在上方门控）。
+        return label
 
     if belief.dimension == "D4":
         # 练习名走 exercises 库既有展示名，效果值走词典；任一缺省即跳过。
         exercise = get_exercise_by_tag(belief.key, language="en" if _is_en(language) else "zh")
         name = str(exercise.get("name")) if exercise and exercise.get("name") else None
         try:
-            effect = str(json.loads(belief.value_json or "{}").get("effect") or "")
+            val = json.loads(belief.value_json or "{}")
         except (TypeError, ValueError):
-            effect = ""
+            val = {}
+        effect = str(val.get("effect") or "")
         effect_label = friendly_label(effect, language) if effect else None
         if not name or not effect_label:
             return None
-        return f"{name} — {effect_label}" if _is_en(language) else f"{name}，{effect_label}"
+        # 通路2：有 target_symptom 时渲染更丰富的信息。
+        target = str(val.get("target_symptom") or "")
+        target_label = friendly_label(target, language) if target else None
+        if target_label and effect == "worked":
+            base = f"{name}—对{target_label}有帮助" if not _is_en(language) else f"{name}—helped with {target_label}"
+        elif _is_en(language):
+            base = f"{name}—{effect_label}"
+        else:
+            base = f"{name}—{effect_label}"
+        if time_tag:
+            return f"{base}·{time_tag}"
+        return base
+
+    # D5 目标：从 value_json 读取目标文本，不依赖词典。
+    if belief.dimension == "D5" and belief.key.startswith("goal."):
+        try:
+            val = json.loads(belief.value_json or "{}")
+        except (TypeError, ValueError):
+            val = {}
+        goal_text = str(val.get("goal") or "")
+        if not goal_text:
+            return None
+        base = f"Goal: {goal_text}" if _is_en(language) else f"目标：{goal_text}"
+        if time_tag:
+            return f"{base}·{time_tag}"
+        return base
 
     # D2/D5/D7 等锚 key：词典直出（含 protective.*，K3 数据到位即生效）。
-    return label
+    if not label:
+        return None
+    ctx = _context_tags_suffix(belief, language)
+    return f"{label}{ctx}" if ctx else label
+
+
+# ── MI 改变谈话梯度 → D5 位置摘要 ──────────────────────────────────────
+_MI_GRADIENT: dict[str, int] = {
+    "change_talk.desire": 1,
+    "change_talk.ability": 2,
+    "change_talk.reason": 3,
+    "change_talk.need": 4,
+    "change_talk.commitment": 5,
+    "change_talk.activation": 6,
+    "change_talk.taking_steps": 7,
+}
+
+_D5_POSITION_ZH: dict[str, str] = {
+    "low": "你表达了想要改变的愿望，我们可以一起探索方向。",
+    "mid": "你已经有了改变的理由，接下来可以看看具体的步骤。",
+    "high": "你已经准备好行动了，我们可以一起制定计划。",
+    "active": "你已经在行动中了，我们可以一起回顾进展。",
+}
+_D5_POSITION_EN: dict[str, str] = {
+    "low": "You have expressed a desire to change — we can explore directions together.",
+    "mid": "You have clear reasons to change — next we can look at concrete steps.",
+    "high": "You are ready to act — we can make a plan together.",
+    "active": "You are already taking steps — we can review your progress together.",
+}
+
+
+def _d5_position_summary(session: Session, user_id: str, language: str = "") -> str | None:
+    """MI 改变连续谱位置摘要：取最高层级的 D5 活跃信念，输出一句话。"""
+    beliefs = list_active_beliefs(session, user_id, dimensions=("D5",), limit=10)
+    if not beliefs:
+        return None
+    best_tier = 0
+    has_sustain = False
+    for b in beliefs:
+        if b.key == "sustain_talk" and b.confidence >= 0.4:
+            has_sustain = True
+            continue
+        tier = _MI_GRADIENT.get(b.key, 0)
+        if tier > best_tier and b.confidence >= 0.4:
+            best_tier = tier
+    if best_tier == 0:
+        return None
+    if best_tier <= 2:
+        bucket = "low"
+    elif best_tier <= 4:
+        bucket = "mid"
+    elif best_tier <= 6:
+        bucket = "high"
+    else:
+        bucket = "active"
+    is_en = _is_en(language)
+    summary = _D5_POSITION_EN[bucket] if is_en else _D5_POSITION_ZH[bucket]
+    if has_sustain:
+        summary += (
+            " At the same time, you have some hesitation — that is perfectly normal."
+            if is_en
+            else "同时你也有一些犹豫，这很正常。"
+        )
+    return summary
+
+
+# ── D6 语气指令 ──────────────────────────────────────────────────────
+_D6_TONE_DIRECTIVES: dict[str, tuple[str, str]] = {
+    "prefers_brief": ("Keep your response short and direct.", "回复简短直接，不展开。"),
+    "prefers_deep": ("Explore the topic in depth with the user.", "帮用户深入探索，把事情弄清楚。"),
+    "dislikes_questions": ("Minimize questions; use observations and reflections instead.", "少提问，多用观察和反射。"),
+    "prefers_listening": ("Prioritize reflective listening over advice-giving.", "以倾听和反射为主，不急着给建议。"),
+    "prefers_action": ("Offer practical, actionable suggestions.", "给出具体可操作的建议。"),
+}
+
+
+def d6_tone_directives(session: Session, user_id: str, language: str = "") -> str:
+    """从 D6 活跃信念中生成语气指令（追加到 loop_hint）。"""
+    beliefs = list_active_beliefs(session, user_id, dimensions=("D6",), limit=5)
+    if not beliefs:
+        return ""
+    is_en = _is_en(language)
+    directives: list[str] = []
+    for b in beliefs:
+        if b.confidence < 0.35:
+            continue
+        zh, en = _D6_TONE_DIRECTIVES.get(b.key, ("", ""))
+        directives.append(en if is_en else zh)
+    return " ".join(directives)
+
+
+# ── 好奇心注入：不确定时自然提问 ──────────────────────────────────────
+
+CURIOSITY_SIGNALS_ZH = {
+    "needs_clarification": "我注意到之前有些理解可能不太准确，找个合适的时候我想和你确认一下。",
+    "new_topic": "这个话题你之前没怎么提过，愿意多说一点吗？",
+    "low_confidence_pattern": "我隐约感觉到一些模式，但还不太确定，你愿意帮我想想看吗？",
+}
+CURIOSITY_SIGNALS_EN = {
+    "needs_clarification": "I noticed something I'm not sure I understood correctly — I'd like to check in with you when it feels right.",
+    "new_topic": "You haven't mentioned this before — would you like to share more?",
+    "low_confidence_pattern": "I'm sensing a pattern but I'm not sure yet — would you help me think about it?",
+}
+
+
+def curiosity_signal(session: Session, user_id: str, language: str = "") -> str | None:
+    """检测不确定信号，返回一个温和的好奇提问（最多一个，不重复）。"""
+    beliefs = list_active_beliefs(session, user_id, limit=20)
+    if not beliefs:
+        return None
+    is_en = _is_en(language)
+    signals = CURIOSITY_SIGNALS_EN if is_en else CURIOSITY_SIGNALS_ZH
+
+    # 1. 有 needs_clarification 标记的信念（矛盾待澄清）
+    for b in beliefs:
+        try:
+            val = json.loads(b.value_json or "{}")
+        except (TypeError, ValueError):
+            continue
+        if val.get("clarification_status") == "needs_clarification" and b.confidence >= 0.4:
+            return signals["needs_clarification"]
+
+    # 2. 有低置信度但接近阈值的模式信念（D3/D5，隐约感知到但不确定）
+    for b in beliefs:
+        if b.dimension in ("D3", "D5") and 0.35 <= b.confidence < 0.5 and b.layer == "L4":
+            return signals["low_confidence_pattern"]
+
+    return None
+
+
+MAX_LIFE_EVENTS = 3
+
+
+def _render_life_events(session: Session, user_id: str, language: str, now: datetime) -> str | None:
+    """渲染最近的非过期生活事件，最多 MAX_LIFE_EVENTS 条。"""
+    from psych_support_bot.infra.db.profile_repositories import list_active_beliefs
+
+    beliefs = list_active_beliefs(session, user_id, dimensions=("D1",), limit=20)
+    events: list[str] = []
+    is_en = _is_en(language)
+    for b in beliefs:
+        if len(events) >= MAX_LIFE_EVENTS:
+            break
+        try:
+            val = json.loads(b.value_json or "{}")
+        except (TypeError, ValueError):
+            continue
+        if val.get("event_type") != "life_event":
+            continue
+        # 过期检查
+        expires = val.get("expires_at")
+        if expires:
+            try:
+                exp_dt = datetime.fromisoformat(expires)
+                if exp_dt.tzinfo is None:
+                    exp_dt = exp_dt.replace(tzinfo=UTC)
+                if exp_dt < now:
+                    continue
+            except (ValueError, TypeError):
+                pass
+        summary = str(val.get("summary") or "")
+        if not summary:
+            continue
+        time_tag = _time_ago_label(b, language)
+        if is_en:
+            events.append(f"{summary}" + (f" ({time_tag})" if time_tag else ""))
+        else:
+            events.append(f"{summary}" + (f"（{time_tag}）" if time_tag else ""))
+    if not events:
+        return None
+    header = "Recent events" if is_en else "近期事件"
+    return f"{header}：{('；' if not is_en else '; ').join(events)}"
 
 
 def render_profile_block(
@@ -183,6 +468,16 @@ def render_profile_block(
 
     risk_boost = recent_risk_level in _RISK_AWARE_LEVELS
     render_now = datetime.now(UTC)
+
+    # D5 位置摘要：MI 改变连续谱的当前位置，固定次槽不参与装箱竞争。
+    d5_pos = _d5_position_summary(session, user_id, language)
+    if d5_pos:
+        items.append(d5_pos)
+
+    # Part C：生活事件窗口——最近的非过期事件，固定第三槽。
+    life_events = _render_life_events(session, user_id, language, render_now)
+    if life_events:
+        items.append(life_events)
 
     def _sort_key(belief):
         topic_match = 1 if belief.dimension == "D1" and belief.key in topics else 0

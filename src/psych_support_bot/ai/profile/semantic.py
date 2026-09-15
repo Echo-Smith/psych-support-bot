@@ -39,19 +39,30 @@ logger = logging.getLogger(__name__)
 # dimension → allowed belief keys（闭集）。D3 只收非 distortion 锚
 # （identify_only 红线在 allowed list 层就不给入口）。
 _ALLOWED_D1: frozenset[str] = frozenset(TOPIC_KEYWORDS)
-_ALLOWED_ANCHOR_DIMS = ("D2", "D3", "D5")
+_ALLOWED_ANCHOR_DIMS = ("D2", "D3", "D5", "D6")
 ALLOWED_KEYS: dict[str, frozenset[str]] = {
     "D1": _ALLOWED_D1,
     "D2": frozenset(a.key for a in all_anchors() if a.dimension == "D2"),
     "D3": frozenset(a.key for a in all_anchors() if a.dimension == "D3" and not a.identify_only),
     "D5": frozenset(a.key for a in all_anchors() if a.dimension == "D5"),
+    "D6": frozenset(a.key for a in all_anchors() if a.dimension == "D6"),
+    "D7": frozenset(
+        {
+            "protective.warning_signs",
+            "protective.coping_strategies",
+            "protective.support_people",
+            "protective.professional_contacts",
+            "protective.environment_safety",
+            "protective.reasons_for_living",
+        }
+    ),
 }
 
 _SYSTEM_PROMPT = (
     "You are the profile-extraction module of a psych-support bot: a quiet, "
     "cautious observer maintaining a belief stream about the user. Output "
     'STRICT JSON only, no prose, no code fences: {"claims": [{"dimension": '
-    '"D1"|"D2"|"D3"|"D5", "key": "<from the allowed list>", "claim_zh": '
+    '"D1"|"D2"|"D3"|"D5"|"D6"|"D7", "key": "<from the allowed list>", "claim_zh": '
     '"<one clinical-neutral observation sentence in Chinese>", "confidence": '
     '<0.0-1.0>, "relation": "supports|contradicts"}]}\n'
     "Rules:\n"
@@ -74,6 +85,16 @@ _SYSTEM_PROMPT = (
     "(the safety channel handles it; profile stores nothing).\n"
     "- If the user is recounting knowledge/methods ('科普说失眠要刺激控制') "
     "rather than describing their own state: empty claims.\n"
+    "- Maintenance cycle detection: when the user describes a pattern of "
+    "situation → reaction → short-term relief → long-term worsening (e.g. "
+    "'收到消息→马上回复→暂时安心→边界越来越模糊'), you MAY add a "
+    '"cycle" field to the relevant D3 claim. The cycle object must have '
+    "these keys (all strings, all derived from the user's own words or "
+    "directly inferrable — never fabricate): "
+    '{"cycle": {"trigger": "...", "interpretation": "...", "emotion": "...", '
+    '"behavior": "...", "short_outcome": "...", "long_outcome": "...", '
+    '"maintains": "..."}}. Only output cycle when at least 3 of the 7 fields '
+    "can be filled from the user's message. If fewer than 3, omit cycle.\n"
     "- Sustain talk ('都试过了，没用') is ambivalence about methods, NOT a "
     "topic statement and NOT resistance — do not invent claims for it.\n"
     "- Emotion words inside assessment context ('焦虑量表没测准') or inside "
@@ -81,6 +102,15 @@ _SYSTEM_PROMPT = (
     "statements: no D1 claims for them.\n"
     '- Use "relation": "contradicts" only when this turn genuinely conflicts '
     "with one of the listed current beliefs; otherwise supports.\n"
+    "- D6 (interaction preferences): when the user explicitly states how they "
+    "prefer to communicate (e.g. 'keep it short', 'don't ask me questions', "
+    "'just listen', 'give me practical advice'), output a D6 claim with the "
+    "matching key from the allowed list. Do NOT infer D6 from behavior — only "
+    "from explicit statements.\n"
+    "- D7 (protective factors): when the user mentions people who support them, "
+    "coping strategies that work, professional contacts, safety measures, or "
+    "reasons to keep going, output a D7 claim with the matching key. D7 claims "
+    "are positive resources — never infer from absence or difficulty.\n"
     "- claim_zh must be an observation ('用户在社交场合常想先躲开'), never an "
     "identity label ('用户是回避型人格')."
 )
@@ -169,9 +199,25 @@ def parse_extraction_json(raw: str) -> list[dict]:
                 "claim_zh": str(item.get("claim_zh") or "")[:200],
                 "confidence": confidence,
                 "relation": relation,
+                **_parse_cycle(item, dimension),
             }
         )
     return validated
+
+
+def _parse_cycle(item: dict, dimension: str) -> dict:
+    """从 LLM 输出中提取 cycle 字段（仅 D3，仅当至少 3 个子字段有值）。"""
+    if dimension != "D3":
+        return {}
+    raw = item.get("cycle")
+    if not isinstance(raw, dict):
+        return {}
+    _CYCLE_KEYS = ("trigger", "interpretation", "emotion", "behavior", "short_outcome", "long_outcome", "maintains")
+    cycle = {k: str(raw.get(k) or "").strip()[:120] for k in _CYCLE_KEYS}
+    filled = sum(1 for v in cycle.values() if v)
+    if filled < 3:
+        return {}
+    return {"cycle": cycle}
 
 
 # ── 回半环：质询应答判定 ─────────────────────────────────────────────
@@ -264,8 +310,22 @@ def run_verification_judgment(
             trigger="llm_verification",
             model=get_settings().openai_model,
         )
+        # 通路3：cycle 假设的验证载荷包含情境化上下文。
+        cycle_context = ""
+        try:
+            bval = json.loads(belief.value_json or "{}")
+            cycle = bval.get("cycle") if isinstance(bval.get("cycle"), dict) else None
+            if cycle:
+                cycle_context = (
+                    f"\n[维持循环] 情境：{cycle.get('trigger', '?')}；"
+                    f"行为：{cycle.get('behavior', '?')}；"
+                    f"短期结果：{cycle.get('short_outcome', '?')}；"
+                    f"长期代价：{cycle.get('long_outcome', '?')}"
+                )
+        except (TypeError, ValueError):
+            pass
         payload = (
-            f"[待验证假设] {detail.get('belief_label', '')}（内部观察：{belief.claim_text}）\n"
+            f"[待验证假设] {detail.get('belief_label', '')}（内部观察：{belief.claim_text}）{cycle_context}\n"
             f"[用户本轮回应]\n{(user_text or '').strip()}"
         )
         started = time.monotonic()
@@ -524,12 +584,17 @@ def run_semantic_extraction(
 
         claims = parse_extraction_json(raw)
         for item in claims:
+            # 通路3：cycle 字段存入 value_json（D3 维持循环结构化假设）。
+            value = None
+            if "cycle" in item:
+                value = {"cycle": item["cycle"], "user_specific": False}
             record_claim(
                 session,
                 user_id,
                 dimension=item["dimension"],
                 key=item["key"],
                 claim_text=item["claim_zh"],
+                value=value,
                 relation=item["relation"],
                 confidence=item["confidence"],
                 session_id=session_id,

@@ -19,7 +19,7 @@
 import logging
 import re
 
-from psych_support_bot.ai.knowledge.index import retrieve_knowledge_entries
+from psych_support_bot.ai.knowledge.index import EXERCISE_TOPIC_MAP, retrieve_knowledge_entries
 from psych_support_bot.ai.nodes.safety_reviewer import _detect_redline
 from psych_support_bot.ai.prompts.templates import build_role_prompt
 from psych_support_bot.ai.safety.crisis import build_crisis_reply
@@ -84,19 +84,24 @@ def generate_exercise_feedback(
     step_guides: list[str],
     step_responses: list[str],
     expected_language: str,
-) -> tuple[str, str]:
+    exercise_tag: str = "",
+) -> tuple[str, str, str]:
     """完成后 AI 个人化反馈。
 
     Returns:
-        (feedback_text, generated_by)——generated_by 为 "llm" 或
+        (feedback_text, generated_by, target_symptom)——generated_by 为 "llm" 或
         "safety_pause"（风险拦截，反馈为危机安抚口径）或 "fallback"
-        （LLM 不可用，确定性鼓励语）。
+        （LLM 不可用，确定性鼓励语）。target_symptom 为练习主要帮助的症状
+        （从 EXERCISE_TOPIC_MAP 闭集中取），解析失败时用 exercise_tag 的
+        第一个关联话题兜底。
     """
     risk = _screen_risk([*step_responses])
+    fallback_symptom = (EXERCISE_TOPIC_MAP.get(exercise_tag) or ("stress",))[0]
     if risk.risk_level in {"high", "critical"} or risk.needs_crisis_mode:
         return (
             _risk_pause_reply(risk, user_message="\n".join(step_responses), expected_language=expected_language),
             "safety_pause",
+            fallback_symptom,
         )
     # elevated 也暂停常规反馈口径（内容里可能有未展开的痛苦信号），但
     # 反馈本身仍由危机模板承载（elevated 的 build_crisis_reply 是软着陆口径）。
@@ -104,6 +109,7 @@ def generate_exercise_feedback(
         return (
             _risk_pause_reply(risk, user_message="\n".join(step_responses), expected_language=expected_language),
             "safety_pause",
+            fallback_symptom,
         )
 
     pairs = []
@@ -113,6 +119,7 @@ def generate_exercise_feedback(
     answers_text = "\n".join(pairs) or "（用户未填写步骤内容）"
 
     zh = expected_language == "zh"
+    topic_closed_set = ", ".join(EXERCISE_TOPIC_MAP.get(exercise_tag, ("stress",)))
     system_prompt = "\n\n".join(
         [
             build_role_prompt(),
@@ -125,7 +132,10 @@ def generate_exercise_feedback(
                 + "，不是量表，不要打分或诊断）；\n"
                 "3. 给一步很小的下一步建议（可以是今天的一个微行动，或下次练什么）。\n"
                 "约束：全文 120 字以内、2-3 个短段；不罗列、不用小标题、不用临床术语；"
-                "不重复罗列用户的回答原文；不用'根据资料/研究表明'这类措辞。"
+                "不重复罗列用户的回答原文；不用'根据资料/研究表明'这类措辞。\n"
+                "在反馈正文之后，另起一行输出一个 JSON 对象（不要包裹在 markdown 代码块中）：\n"
+                f'{{"target_symptom": "<从以下闭集中选一个最匹配的: {topic_closed_set}>", '
+                '"specific_detail": "<用一句简短的话描述这个练习具体帮助了用户的什么问题>"}'
             ),
         ]
     )
@@ -140,7 +150,10 @@ def generate_exercise_feedback(
             "(2) one gentle non-diagnostic observation from this exercise's perspective — never score or diagnose; "
             "(3) one tiny next step (a micro-action today, or what to practice next). "
             "Keep it under 90 words, 2-3 short paragraphs, no lists, no headings, no clinical jargon, "
-            "no 'according to research' phrasing.\n\n"
+            "no 'according to research' phrasing.\n"
+            "After the feedback text, output a JSON object on a new line (not wrapped in markdown code blocks):\n"
+            f'{{"target_symptom": "<pick the best match from: {topic_closed_set}>", '
+            '"specific_detail": "<one brief sentence on what specifically this exercise helped with>"}\n\n'
             + user_content.replace("用户在练习中的回答：", "User's step answers:")
         )
 
@@ -156,14 +169,31 @@ def generate_exercise_feedback(
             "or a sibling one is here whenever you want to return."
         )
 
+    closed_set = set(EXERCISE_TOPIC_MAP.get(exercise_tag, ("stress",)))
+
+    def _parse_target_symptom(raw: str) -> str:
+        """从 LLM 输出中提取 target_symptom（闭集校验），失败返回 fallback。"""
+        import json as _json
+
+        try:
+            # 查找最后一个 JSON 对象（反馈正文之后）
+            match = re.search(r'\{[^{}]*"target_symptom"[^{}]*\}', raw)
+            if match:
+                data = _json.loads(match.group())
+                candidate = str(data.get("target_symptom", ""))
+                if candidate in closed_set:
+                    return candidate
+        except (ValueError, TypeError):
+            pass
+        return fallback_symptom
+
     try:
-        feedback = _invoke(
-            system_prompt, user_content, expected_language, mode="support", fallback=_deterministic_fallback
-        )
-        return _sanitize_output(feedback, expected_language), "llm"
+        raw = _invoke(system_prompt, user_content, expected_language, mode="support", fallback=_deterministic_fallback)
+        feedback = _sanitize_output(raw, expected_language)
+        return feedback, "llm", _parse_target_symptom(raw)
     except Exception:  # noqa: BLE001 - user-facing exercise path has a safe fallback
         logger.warning("Exercise feedback generation failed; serving deterministic fallback")
-        return _deterministic_fallback(), "fallback"
+        return _deterministic_fallback(), "fallback", fallback_symptom
 
 
 def generate_exercise_guidance(

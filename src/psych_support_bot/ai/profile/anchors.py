@@ -25,7 +25,7 @@ from psych_support_bot.domain.assessments.questionnaires import QUESTIONNAIRES
 
 # 锚点表当前覆盖的画像维度闭集。D1 走 TOPIC_KEYWORDS（见上），D4 来自
 # 结构化练习记录（practice tags），均不设词锚。
-ANCHOR_DIMENSIONS = ("D2", "D3", "D5")
+ANCHOR_DIMENSIONS = ("D2", "D3", "D5", "D6")
 
 
 @dataclass(frozen=True)
@@ -195,6 +195,71 @@ def _build_registry() -> tuple[ProfileAnchor, ...]:
         )
     )
 
+    # 通路3：CBT/DBT 维持循环锚词——覆盖失眠、焦虑、抑郁的常见维持模式。
+    anchors.append(
+        ProfileAnchor(
+            anchor_id="D3.behavioral_withdrawal",
+            dimension="D3",
+            key="behavioral_withdrawal",
+            en_phrases=(
+                "I don't feel like doing anything",
+                "I just stay in bed",
+                "I stopped going out",
+                "there is no point in trying",
+            ),
+            zh_phrases=(
+                "不想出门",
+                "什么都不想做",
+                "就躺在床上",
+                "做什么都没意思",
+                "反正也没用",
+            ),
+            source="cbt:depression_maintenance",
+        )
+    )
+    anchors.append(
+        ProfileAnchor(
+            anchor_id="D3.safety_behavior",
+            dimension="D3",
+            key="safety_behavior",
+            en_phrases=(
+                "checking for reassurance",
+                "I need to make sure everything is okay",
+                "I keep asking if they are mad at me",
+                "I prepare what I am going to say",
+            ),
+            zh_phrases=(
+                "反复检查",
+                "反复确认对方是不是生气了",
+                "提前排练要说的话",
+                "一定要确认没事才行",
+                "不停地问别人我做得对不对",
+            ),
+            source="cbt:anxiety_maintenance",
+        )
+    )
+    anchors.append(
+        ProfileAnchor(
+            anchor_id="D3.emotional_suppression",
+            dimension="D3",
+            key="emotional_suppression",
+            en_phrases=(
+                "I push my feelings down",
+                "I try not to cry",
+                "I keep myself busy to avoid feeling",
+                "I just need to stay strong",
+            ),
+            zh_phrases=(
+                "压住情绪",
+                "不让自己哭",
+                "用忙碌来逃避感受",
+                "我得坚强",
+                "不能让别人看到我脆弱",
+            ),
+            source="dbt:emotion_regulation",
+        )
+    )
+
     for type_name, (markers, zh) in _CHANGE_TALK.items():
         key = f"change_talk.{type_name.lower()}"
         anchors.append(
@@ -252,6 +317,41 @@ def _build_registry() -> tuple[ProfileAnchor, ...]:
             source="questionnaires:gad7:items[1]",
         )
     )
+
+    # D6 表达与互动偏好：用户对沟通方式的显式表达或行为推断。
+    _D6_PREFERENCES: dict[str, tuple[tuple[str, ...], tuple[str, ...]]] = {
+        "prefers_brief": (
+            ("keep it short", "I don't want a long reply", "just give me the key point"),
+            ("简短一点", "别说太多", "长话短说", "简单说就行", "别啰嗦"),
+        ),
+        "prefers_deep": (
+            ("I want to dig deeper", "give me a detailed analysis", "I want to understand why"),
+            ("我想深入聊", "帮我分析分析", "详细说说", "我想弄明白"),
+        ),
+        "dislikes_questions": (
+            ("stop asking me questions", "I don't want to be questioned", "don't quiz me"),
+            ("别问我了", "别老问问题", "不要问我", "我不想回答问题", "别追问"),
+        ),
+        "prefers_listening": (
+            ("I just need someone to listen", "I don't need advice, just listen"),
+            ("我只是想说说", "你听着就行", "不用给建议", "先听我说"),
+        ),
+        "prefers_action": (
+            ("give me something practical", "what should I actually do", "I want concrete steps"),
+            ("给点实际的建议", "我该怎么做", "别光说，给点办法", "来点具体的"),
+        ),
+    }
+    for pref_key, (en, zh) in _D6_PREFERENCES.items():
+        anchors.append(
+            ProfileAnchor(
+                anchor_id=f"D6.{pref_key}",
+                dimension="D6",
+                key=pref_key,
+                en_phrases=en,
+                zh_phrases=zh,
+                source="user_behavior:explicit_preference",
+            )
+        )
 
     return tuple(anchors)
 

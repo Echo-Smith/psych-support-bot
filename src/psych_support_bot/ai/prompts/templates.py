@@ -300,6 +300,46 @@ def build_process_state_prompt(
     )
 
 
+def build_turn_context_prompt(
+    *,
+    risk_level: str,
+    emotional_state: str = "",
+    mode: str,
+    no_question_mode: bool,
+    interview_stage: str,
+    question_strategy: str,
+    challenge_allowed: bool,
+    loop_hint: str,
+    anti_repeat_note: str = "",
+    diagnosis_refusal: str = "",
+) -> str:
+    """合并所有每轮动态上下文为一个纯文本块。
+
+    缓存优化（2026-09-15）：这些字段每轮变化，放在 SystemMessage 会截断
+    静态前缀的缓存命中。合并后作为 HumanMessage 头部，SystemMessage 只
+    保留完全稳定的静态前缀。
+    """
+    sections = [
+        "## Turn context",
+        build_boundary_state_prompt(risk_level=risk_level, emotional_state=emotional_state),
+        "## Reply shape",
+        build_mode_shape_prompt(mode, risk_level, no_question_mode=no_question_mode),
+        "## Process frame",
+        build_process_state_prompt(
+            interview_stage=interview_stage,
+            question_strategy=question_strategy,
+            challenge_allowed=challenge_allowed,
+            loop_hint=loop_hint,
+            no_question_mode=no_question_mode,
+        ),
+    ]
+    if anti_repeat_note:
+        sections.append(anti_repeat_note)
+    if diagnosis_refusal:
+        sections.append(diagnosis_refusal)
+    return "\n\n".join(sections)
+
+
 def build_static_prefix(expected_language: str) -> str:
     """全局静态前缀（仅随语言分池）：主回复、会诊 agent、会诊综合三条
     路径共用同一前缀，共享网关前缀缓存的命中池（Phase 5）。部署期才变，

@@ -80,6 +80,12 @@ _TOPIC_LABELS: dict[str, tuple[str, str]] = {
 _ANCHOR_LABELS: dict[str, dict[str, tuple[str, str]]] = {
     "D2": {
         "worry_uncontrollable": ("担心一上来，就好像有点停不下来", "Once worry starts, it feels hard to switch off"),
+        "severity.phq9": ("低落的状态", "Feeling persistently down"),
+        "severity.gad7": ("容易紧张的状态", "Feeling persistently on edge"),
+        "severity.isi": ("睡不好的状态", "Persistent trouble sleeping"),
+        "checkin_mood": ("心情持续偏低", "Mood has been persistently low"),
+        "checkin_anxiety": ("紧张感持续偏高", "Tension has been persistently elevated"),
+        "checkin_sleep": ("睡眠持续不足", "Sleep has been consistently insufficient"),
     },
     "D3": {
         "control_struggle": (
@@ -102,6 +108,18 @@ _ANCHOR_LABELS: dict[str, dict[str, tuple[str, str]]] = {
             "要见人或露面的场合，你好像常常想先躲一躲",
             "In social situations, you often seem to want to step back first",
         ),
+        "behavioral_withdrawal": (
+            "低落的时候你好像会缩回来，不太想动",
+            "When feeling down, you tend to pull back and do less",
+        ),
+        "safety_behavior": (
+            "你好像会反复确认才觉得安心",
+            "You seem to need repeated reassurance to feel okay",
+        ),
+        "emotional_suppression": (
+            "你好像习惯把情绪压下去",
+            "You tend to push your feelings down",
+        ),
     },
     "D5": {
         "waiting_for_readiness": ("你在等一个'完全准备好'的时刻", "Waiting until you feel fully ready"),
@@ -115,6 +133,28 @@ _ANCHOR_LABELS: dict[str, dict[str, tuple[str, str]]] = {
         "sustain_talk": (
             "你心里既有想变的部分，也有拿不准的部分",
             "Part of you wants change, part of you feels unsure",
+        ),
+    },
+    "D6": {
+        "prefers_brief": (
+            "你喜欢简短直接的回应",
+            "You prefer short, direct responses",
+        ),
+        "prefers_deep": (
+            "你喜欢深入聊、把事情弄清楚",
+            "You like to dig deeper and understand things fully",
+        ),
+        "dislikes_questions": (
+            "你不太喜欢被追问",
+            "You don't like being questioned",
+        ),
+        "prefers_listening": (
+            "你更希望我先听着，不用急着给建议",
+            "You'd rather I listen first without jumping to advice",
+        ),
+        "prefers_action": (
+            "你想要实际可操作的建议",
+            "You want practical, actionable suggestions",
         ),
     },
 }

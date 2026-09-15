@@ -54,6 +54,7 @@ def upsert_user_profile(
     goals: str,
     support_preferences: str,
     risk_notes: str,
+    background_json: str = "",
 ) -> UserProfile:
     ensure_user(session, user_id)
     profile = session.get(UserProfile, user_id)
@@ -66,6 +67,8 @@ def upsert_user_profile(
     profile.goals = goals
     profile.support_preferences = support_preferences
     profile.risk_notes = risk_notes
+    if background_json:
+        profile.background_json = background_json
     session.commit()
     session.refresh(profile)
     return profile
@@ -242,16 +245,24 @@ def build_memory_snapshot(
     recent_excerpt = "\n".join(_safe(msg) for msg in reversed(recent_messages[-5:])) if recent_messages else ""
     profile_summary = ""
     if profile is not None and profile_memory_enabled:
-        profile_summary = " || ".join(
-            _safe(piece)
-            for piece in [
-                profile.primary_concerns,
-                profile.goals,
-                profile.support_preferences,
-                profile.risk_notes,
-            ]
-            if piece
-        )
+        pieces = [
+            profile.primary_concerns,
+            profile.goals,
+            profile.support_preferences,
+            profile.risk_notes,
+        ]
+        # 结构化背景（11 维度）追加到 profile summary。
+        if profile.background_json and profile.background_json != "{}":
+            import json as _json
+
+            try:
+                bg = _json.loads(profile.background_json)
+                bg_parts = [f"{k}:{v}" for k, v in bg.items() if v]
+                if bg_parts:
+                    pieces.append("背景：" + "，".join(bg_parts))
+            except (TypeError, ValueError):
+                pass
+        profile_summary = " || ".join(_safe(piece) for piece in pieces if piece)
 
     # 记录层（评估/打卡/练习/画像）热插拔模块渲染（ai/memory_modules.py），
     # 单层失败只跳过该层；MEMORY_MODULE_* 开关关闭时该层不出现在 prompt。
@@ -266,10 +277,20 @@ def build_memory_snapshot(
     }
     record_layers = render_record_layers(session, user_id, language, turn_context=turn_context)
 
+    # K3 结构性理解：切片完成时综合生成，渲染到 memory snapshot。
+    understanding_text = ""
+    try:
+        from psych_support_bot.ai.profile.synthesis import render_understanding
+
+        understanding_text = render_understanding(session, user_id, language) or ""
+    except Exception:  # noqa: BLE001
+        pass
+
     pieces = [
         piece
         for piece in [
             profile_summary,
+            understanding_text,
             latest_summary,
             record_layers,
             recent_excerpt,
@@ -557,6 +578,52 @@ def save_checkin(session: Session, user_id: str, checkin: DailyCheckin) -> Check
     session.commit()
     session.refresh(record)
     return record
+
+
+def checkin_to_d2_beliefs(session: Session, user_id: str) -> None:
+    """打卡趋势→D2 画像信念：连续 3+ 天异常时创建/更新 D2 信念（fail-open）。"""
+    try:
+        from psych_support_bot.ai.profile.extractor import d2_assessment_claim
+        from psych_support_bot.infra.db.profile_repositories import record_claim
+
+        recent = get_recent_checkins(session, user_id, limit=7)
+        if len(recent) < 3:
+            return
+        # 按日期排序（最新在前）取最近 3 天
+        recent_sorted = sorted(recent, key=lambda r: r.checkin_date, reverse=True)
+        last3 = recent_sorted[:3]
+
+        # 心情持续低落（≤4 连续 3 天）
+        if all(r.mood_score <= 4 for r in last3):
+            claim = d2_assessment_claim(
+                "checkin_mood", "moderate", score=int(sum(r.mood_score for r in last3) / 3),
+            )
+            if claim:
+                record_claim(session, user_id, dimension=claim.dimension, key=claim.key,
+                             claim_text=claim.claim_text, value=claim.value,
+                             relation=claim.relation, confidence=claim.confidence)
+
+        # 焦虑持续偏高（≥7 连续 3 天）
+        if all(r.anxiety_score >= 7 for r in last3):
+            claim = d2_assessment_claim(
+                "checkin_anxiety", "moderate", score=int(sum(r.anxiety_score for r in last3) / 3),
+            )
+            if claim:
+                record_claim(session, user_id, dimension=claim.dimension, key=claim.key,
+                             claim_text=claim.claim_text, value=claim.value,
+                             relation=claim.relation, confidence=claim.confidence)
+
+        # 睡眠持续不足（≤5h 连续 3 天）
+        if all(r.sleep_hours <= 5 for r in last3):
+            claim = d2_assessment_claim(
+                "checkin_sleep", "moderate", score=int(sum(r.sleep_hours for r in last3) / 3),
+            )
+            if claim:
+                record_claim(session, user_id, dimension=claim.dimension, key=claim.key,
+                             claim_text=claim.claim_text, value=claim.value,
+                             relation=claim.relation, confidence=claim.confidence)
+    except Exception:  # noqa: BLE001 — checkin extraction must not block checkin save
+        pass
 
 
 def get_recent_checkins(session: Session, user_id: str, limit: int = 7) -> list[CheckinRecord]:

@@ -7,6 +7,7 @@ from sqlalchemy.orm import Session
 from psych_support_bot.api.auth import request_user_id
 from psych_support_bot.domain.checkins.schemas import DailyCheckin
 from psych_support_bot.infra.db.repositories import (
+    checkin_to_d2_beliefs,
     get_checkins_since,
     record_usage_event,
     save_checkin,
@@ -36,6 +37,7 @@ def create_checkin(
     if payload.checkin_date and payload.checkin_date > date.today():  # noqa: DTZ011
         raise HTTPException(status_code=400, detail="checkin_date cannot be in the future.")
     save_checkin(session, user_id, payload)
+    checkin_to_d2_beliefs(session, user_id)
     return payload
 
 

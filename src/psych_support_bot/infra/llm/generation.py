@@ -9,16 +9,14 @@ from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 
 from psych_support_bot.ai.consultation import consultation_agents
 from psych_support_bot.ai.prompts.templates import (
-    build_boundary_state_prompt,
     build_consultation_agent_prompt,
     build_consultation_synthesis_prompt,
     build_diagnosis_refusal_prompt,
     build_knowledge_block_prompt,
     build_memory_block_prompt,
-    build_mode_shape_prompt,
-    build_process_state_prompt,
     build_role_prompt,
     build_static_prefix,
+    build_turn_context_prompt,
 )
 from psych_support_bot.ai.routers.intent import DIAGNOSIS_KEYWORDS
 from psych_support_bot.ai.utils.text_matching import _contains_keyword, _normalize_text
@@ -136,6 +134,7 @@ def _usage_details(response: object) -> dict[str, int] | None:
     cache_read = int((usage.get("input_token_details") or {}).get("cache_read") or 0)
     if cache_read:
         details["input_cached"] = cache_read
+        details["cache_hit_rate"] = round(cache_read / details["input"], 3) if details["input"] else 0.0
     return details
 
 
@@ -464,49 +463,44 @@ def _build_reply_prompt(
     """主回复的 prompt 装配（同步与流式路径共用，逐字一致防行为漂移）。
 
     返回 (system_prompt, user_context, expected_language)。
+
+    缓存优化（2026-09-15）：SystemMessage 只含完全稳定的静态前缀（仅按
+    语言分池，部署期才变），确保前缀缓存 100% 命中。每轮动态上下文
+    （risk/emotion/mode/stage/hint/anti-repeat/diagnosis）合并为
+    turn_context 块，作为 HumanMessage 头部与 memory/knowledge 同层投递。
     """
     if not expected_language:
         expected_language = _expected_language(user_message)
-    # Prompt 分层装配（Phase 1/5）：静态前缀与主回复、会诊 agent、会诊综合
-    # 三条路径逐字共享（同一缓存命中池）——网关前缀缓存 512 块粒度，静态区
-    # 出现任何每轮插值都会从插值点截断缓存。
-    system_prompt = "\n\n".join(
-        [
-            # --- 静态前缀区（仅随语言分池；部署才变）---
-            build_static_prefix(expected_language),
-            # --- 每轮状态区（缓存断点之后）：结构化字段，流程驱动 ---
-            "## Turn context",
-            build_boundary_state_prompt(
-                risk_level=risk_level,
-                emotional_state=emotional_state,
-            ),
-            "## Reply shape",
-            build_mode_shape_prompt(mode, risk_level, no_question_mode=no_question_mode),
-            "## Process frame",
-            build_process_state_prompt(
-                interview_stage=interview_stage,
-                question_strategy=question_strategy,
-                challenge_allowed=challenge_allowed,
-                loop_hint=loop_hint,
-                no_question_mode=no_question_mode,
-            ),
-        ]
+
+    # --- SystemMessage：完全稳定的静态前缀（仅随语言分池）---
+    system_prompt = build_static_prefix(expected_language)
+
+    # Anti-repeat guard 和 diagnosis refusal 条件性追加到 turn context。
+    anti_repeat = anti_repeat_note or ""
+    diagnosis = ""
+    if _is_diagnosis_request(user_message):
+        diagnosis = build_diagnosis_refusal_prompt()
+
+    # --- HumanMessage 数据区：turn context + memory + knowledge ---
+    turn_ctx = build_turn_context_prompt(
+        risk_level=risk_level,
+        emotional_state=emotional_state,
+        mode=mode,
+        no_question_mode=no_question_mode,
+        interview_stage=interview_stage,
+        question_strategy=question_strategy,
+        challenge_allowed=challenge_allowed,
+        loop_hint=loop_hint,
+        anti_repeat_note=anti_repeat,
+        diagnosis_refusal=diagnosis,
     )
-    # --- 数据区（Phase 2 收尾）：memory/knowledge 作为参考数据前缀进
-    # HumanMessage，与用户本轮输入同投递——系统之声纯净，数据贴轮次。
     user_context = "\n\n".join(
         [
+            turn_ctx,
             build_memory_block_prompt(memory_summary),
             build_knowledge_block_prompt(knowledge_context),
         ]
     )
-    # Anti-repeat guard appended last so it sits closest to the output
-    # instruction (复读防线，response_generator 传入)。
-    if anti_repeat_note:
-        system_prompt = system_prompt + "\n\n" + anti_repeat_note
-    # Inject diagnosis refusal prompt if user is asking for a diagnosis
-    if _is_diagnosis_request(user_message):
-        system_prompt = system_prompt + "\n\n" + build_diagnosis_refusal_prompt()
     return system_prompt, user_context, expected_language
 
 

@@ -143,6 +143,8 @@ class UserProfile(Base):
     goals: Mapped[str] = mapped_column(Text, default="")
     support_preferences: Mapped[str] = mapped_column(Text, default="")
     risk_notes: Mapped[str] = mapped_column(Text, default="")
+    background_json: Mapped[str] = mapped_column(Text, default="{}")
+    understanding_json: Mapped[str] = mapped_column(Text, default="{}")
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, onupdate=utcnow)
 
 

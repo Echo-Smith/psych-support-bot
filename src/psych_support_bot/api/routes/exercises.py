@@ -204,7 +204,7 @@ def complete_exercise(
     risk_level = "low"
     if source == "panel":
         feedback, generated_by, risk_level = _build_exercise_feedback(
-            exercise=exercise, step_responses=step_responses, user_id=user_id
+            exercise=exercise, step_responses=step_responses, user_id=user_id, exercise_tag=exercise_tag
         )
         ai_feedback = feedback
 
@@ -231,7 +231,9 @@ def complete_exercise(
     )
 
 
-def _build_exercise_feedback(*, exercise: dict, step_responses: list[str], user_id: str) -> tuple[str, str, str]:
+def _build_exercise_feedback(
+    *, exercise: dict, step_responses: list[str], user_id: str, exercise_tag: str = ""
+) -> tuple[str, str, str]:
     """风险筛查 + AI 反馈。返回 (feedback, generated_by, risk_level)。
 
     exercise 已按语言解析（中文请求传中文元数据——生成 prompt 的练习
@@ -240,12 +242,13 @@ def _build_exercise_feedback(*, exercise: dict, step_responses: list[str], user_
     from psych_support_bot.ai.exercise_ai import generate_exercise_feedback
 
     try:
-        feedback, generated_by = generate_exercise_feedback(
+        feedback, generated_by, _target_symptom = generate_exercise_feedback(
             exercise_name=str(exercise.get("name", "")),
             exercise_description=str(exercise.get("description", "")),
             step_guides=[str(s) for s in exercise.get("steps", [])],
             step_responses=step_responses,
             expected_language="zh",
+            exercise_tag=exercise_tag,
         )
     except Exception:  # noqa: BLE001 - exercise feedback has a deterministic fallback
         logger.warning("Exercise feedback pipeline failed; deterministic fallback served")

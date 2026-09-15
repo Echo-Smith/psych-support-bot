@@ -195,6 +195,72 @@ def _generate_normal_reply(state: GraphState, risk_level: str, no_question_mode:
             else:
                 loop_hint_with_slice = base_loop_hint
 
+            # 第一层接出：D6 表达偏好→语气指令注入 turn context。
+            try:
+                from psych_support_bot.ai.profile.renderer import d6_tone_directives
+                from psych_support_bot.infra.db.session import SessionLocal
+
+                with SessionLocal() as _s:
+                    d6_hint = d6_tone_directives(_s, state["user_id"], state.get("expected_language", ""))
+                if d6_hint:
+                    loop_hint_with_slice = f"{loop_hint_with_slice}\n\nTone guidance: {d6_hint}"
+            except Exception:  # noqa: BLE001
+                pass
+
+            # 第二层接出：D2 严重度→干预强度（不告诉用户，只调整内部行为）。
+            try:
+                from psych_support_bot.infra.db.profile_repositories import list_active_beliefs
+                from psych_support_bot.infra.db.session import SessionLocal as _SL
+
+                with _SL() as _s:
+                    d2_beliefs = list_active_beliefs(_s, state["user_id"], dimensions=("D2",), limit=5)
+                high_severity = any(
+                    b.confidence >= 0.7
+                    and any(k in (b.key or "") for k in ("severity.", "checkin_mood", "checkin_anxiety"))
+                    for b in d2_beliefs
+                )
+                if high_severity:
+                    loop_hint_with_slice = (
+                        "The user's recent profile suggests elevated distress. "
+                        "Prioritize validation, support, and gentle pacing. "
+                        "Avoid direct challenges or pushing for action steps.\n\n" + loop_hint_with_slice
+                    )
+            except Exception:  # noqa: BLE001
+                pass
+
+            # 好奇心注入：不确定时自然提问 + 行为信号异常时主动关心。
+            try:
+                from psych_support_bot.ai.profile.behavioral import detect_behavioral_signals
+                from psych_support_bot.ai.profile.renderer import curiosity_signal
+                from psych_support_bot.infra.db.session import SessionLocal as _CS
+
+                with _CS() as _s:
+                    cue = curiosity_signal(_s, state["user_id"], state.get("expected_language", ""))
+
+                # 行为信号检测（从 graph state 中提取时间戳）。
+                bot_ts = state.get("bot_message_timestamp")
+                user_ts = state.get("user_message_timestamp")
+                recent_lens = state.get("recent_message_lengths") or []
+                session_hour = user_ts.hour if user_ts and hasattr(user_ts, "hour") else -1
+                beh_signals = detect_behavioral_signals(
+                    user_message=state["user_message"],
+                    bot_message_timestamp=bot_ts,
+                    user_message_timestamp=user_ts,
+                    recent_message_lengths=recent_lens,
+                    session_hour=session_hour,
+                )
+
+                is_en = state.get("expected_language", "") != "zh"
+                hint_parts: list[str] = []
+                if cue:
+                    hint_parts.append(cue)
+                for sig in beh_signals:
+                    hint_parts.append(sig.get("question_en" if is_en else "question_zh", ""))
+                if hint_parts:
+                    loop_hint_with_slice = f"{loop_hint_with_slice}\n\nCuriosity: {' '.join(hint_parts)}"
+            except Exception:  # noqa: BLE001
+                pass
+
             gen_kwargs = {
                 "user_message": state["user_message"],
                 "mode": state["mode"],

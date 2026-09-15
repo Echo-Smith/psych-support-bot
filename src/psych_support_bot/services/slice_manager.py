@@ -277,6 +277,15 @@ class SliceManager:
         except Exception:  # noqa: BLE001 - optional slice summary is fail-open
             logger.warning("Slice summary hook failed; slice lifecycle unaffected")
             session.rollback()
+
+        # K3 综合引擎：切片完成时生成/更新用户的结构性理解。
+        try:
+            from psych_support_bot.ai.profile.synthesis import run_k3_synthesis
+
+            run_k3_synthesis(session, completed.user_id)
+        except Exception:  # noqa: BLE001 - K3 is optional
+            logger.warning("K3 synthesis hook failed; slice lifecycle unaffected")
+
         try:
             last_msg = session.query(Message).filter_by(slice_id=completed.id).order_by(Message.id.desc()).first()
             if last_msg is not None:

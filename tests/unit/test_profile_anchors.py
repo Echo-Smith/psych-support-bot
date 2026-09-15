@@ -43,9 +43,12 @@ def test_bilingual_completeness() -> None:
 def test_k0_coverage_counts() -> None:
     # 设计文档 §4 六项输入的编译产物规模。有人删锚会在这里显式失败，
     # 防止静默缩水；有意扩容时同步更新本断言。
+    # D3: 5 ACT + 1 social avoidance + 3 维持循环（behavioral_withdrawal/safety_behavior/emotional_suppression）
+    #     + 11 distortion（identify_only，不进 allowed keys 但计入维度总数）
+    # D6: 5 互动偏好（prefers_brief/prefers_deep/dislikes_questions/prefers_listening/prefers_action）
     by_dimension = {dim: len(anchors_for_dimension(dim)) for dim in ANCHOR_DIMENSIONS}
-    assert by_dimension == {"D2": 1, "D3": 16, "D5": 9}
-    assert len(all_anchors()) == 26
+    assert by_dimension == {"D2": 1, "D3": 19, "D5": 9, "D6": 5}
+    assert len(all_anchors()) == 34
 
 
 # --- live-bind 不脱钩 ---

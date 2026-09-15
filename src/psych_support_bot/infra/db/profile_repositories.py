@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import json
 import logging
+from datetime import UTC, datetime
 
 from sqlalchemy import desc, select
 from sqlalchemy.orm import Session
@@ -43,6 +44,46 @@ CONFIDENCE_CEILING = 0.95
 L4_QUESTION_THRESHOLD = 0.7
 
 _VALID_DIMENSIONS = {f"D{i}" for i in range(1, 9)}
+
+
+def compute_confidence_weight(
+    belief: ProfileBelief,
+    *,
+    support_count: int = 0,
+    contradict_count: int = 0,
+    context_diversity: int = 0,
+    days_since_last_evidence: float = 0.0,
+) -> float:
+    """8 维置信度加权因子（0.5-1.0），用于调制 SUPPORT_GAIN 的增益幅度。
+
+    设计：base = 1.0（全额增益），负面信号逐项扣减。
+    来源可靠、情境多样、时新、无矛盾的证据获得全额增益；
+    反之衰减，但最低 0.5（保留基本增益，避免新信念停滞）。
+    """
+    weight = 1.0
+    # 1. 来源可信度（user_confirmed 不扣；extracted 扣 0.1）
+    weight -= {"user_confirmed": 0.0, "user_stated": 0.05, "program": 0.05, "extracted": 0.1}.get(belief.source, 0.1)
+    # 2. 确认层级（L2 不扣；L4 扣 0.1）
+    weight -= {"L1": 0.05, "L2": 0.0, "L3": 0.1, "L4": 0.1}.get(belief.layer, 0.1)
+    # 3. 证据积累（0 条扣 0.15；3+ 条不扣）
+    if support_count < 3:
+        weight -= 0.15 * (1 - support_count / 3)
+    # 4. 情境多样性（仅在有足够证据时评估；新信念不惩罚）
+    if support_count >= 2 and context_diversity < 3:
+        weight -= 0.1 * (1 - context_diversity / 3)
+    # 5. 时新性（30+ 天扣 0.15；7 天内不扣）
+    if days_since_last_evidence > 7:
+        weight -= min(0.15, 0.05 * (days_since_last_evidence - 7) / 23)
+    # 6. 矛盾惩罚（每次扣 0.1）
+    weight -= 0.1 * contradict_count
+    # 7. needs_clarification 额外扣 0.1
+    try:
+        val = json.loads(belief.value_json or "{}")
+        if val.get("clarification_status") == "needs_clarification":
+            weight -= 0.1
+    except (TypeError, ValueError):
+        pass
+    return round(min(1.0, max(0.5, weight)), 4)
 
 
 def is_profile_memory_enabled(session: Session, user_id: str) -> bool:
@@ -174,6 +215,7 @@ def record_claim(
     evidence_message_ids: list[int] | None = None,
     stats_id: int | None = None,
     origin_slice_id: str | None = None,
+    context_tags: list[str] | None = None,
 ) -> tuple[ProfileBelief | None, str]:
     """写入一条 claim，按合并策略落到 created / supported / contradicted /
     downgraded；命中否决守卫返回 (None, "resurrection_guard")。
@@ -204,12 +246,17 @@ def record_claim(
         return None, "resurrection_guard"
 
     if existing is None:
+        # 跨情境标签：合并到 value_json，支持跨情境证据聚合。
+        merged_value = dict(value or {})
+        if context_tags:
+            existing_tags = merged_value.get("context_tags", [])
+            merged_value["context_tags"] = sorted(set(existing_tags) | set(context_tags))
         belief = ProfileBelief(
             user_id=user_id,
             dimension=dimension,
             key=key,
             claim_text=claim_text,
-            value_json=json.dumps(value or {}, ensure_ascii=False),
+            value_json=json.dumps(merged_value, ensure_ascii=False),
             layer=layer,
             status="active",
             confidence=min(CONFIDENCE_CEILING, max(0.0, confidence)),
@@ -226,13 +273,47 @@ def record_claim(
         return belief, "created"
 
     if relation == "supports":
-        existing.confidence = min(CONFIDENCE_CEILING, existing.confidence + SUPPORT_GAIN)
-        merged = json.loads(existing.evidence_json or "[]")
+        # 8 维置信度加权：合并新证据后重新计算。
+        merged_evidence = json.loads(existing.evidence_json or "[]")
         for mid in evidence:
-            if mid not in merged:
-                merged.append(mid)
-        existing.evidence_json = json.dumps(merged[-MAX_EVIDENCE_REFS:])
+            if mid not in merged_evidence:
+                merged_evidence.append(mid)
+        existing.evidence_json = json.dumps(merged_evidence[-MAX_EVIDENCE_REFS:])
         existing.last_evidence_session_id = session_id
+
+        # 跨情境标签：支持证据的情境合并到 value_json。
+        if context_tags:
+            try:
+                val = json.loads(existing.value_json or "{}")
+            except (TypeError, ValueError):
+                val = {}
+            old_tags = val.get("context_tags", [])
+            val["context_tags"] = sorted(set(old_tags) | set(context_tags))
+            existing.value_json = json.dumps(val, ensure_ascii=False)
+
+        # 多因子置信度：基础增益 × 8 维权重。
+        now = datetime.now(UTC)
+        last_ev = existing.last_evidence_at
+        if last_ev.tzinfo is None:
+            last_ev = last_ev.replace(tzinfo=UTC)
+        days_since = max(0.0, (now - last_ev).total_seconds() / 86400)
+        try:
+            val = json.loads(existing.value_json or "{}")
+            ctx_div = len(val.get("context_tags", []))
+        except (TypeError, ValueError):
+            ctx_div = 0
+        events = get_belief_events(session, existing.user_id, existing.id)
+        contradict_count = sum(1 for e in events if e.event_type in {"contradicted", "downgraded"})
+        support_count = len(merged_evidence)
+
+        weight = compute_confidence_weight(
+            existing,
+            support_count=support_count,
+            contradict_count=contradict_count,
+            context_diversity=ctx_div,
+            days_since_last_evidence=days_since,
+        )
+        existing.confidence = min(CONFIDENCE_CEILING, existing.confidence + SUPPORT_GAIN * weight)
         _append_event(
             session,
             existing,
@@ -243,14 +324,19 @@ def record_claim(
         )
         return existing, "supported"
 
-    # contradicts：矛盾证据衰减；L2 降级回 L4 等待验证（不覆盖不删除）。
-    existing.confidence = round(existing.confidence * CONTRADICT_FACTOR, 4)
+    # contradicts：矛盾证据标记 needs_clarification，等待验证半环路澄清。
+    # 不一致处理升级（2026-09-15）：保留矛盾双方，标记待澄清，不直接降级。
+    # 置信度衰减从 0.5 放宽到 0.8（减少对旧信念的惩罚）；L2 不再自动降级。
+    existing.confidence = round(existing.confidence * 0.8, 4)
     event_type = "contradicted"
-    detail: dict = {"confidence": existing.confidence}
-    if existing.layer == "L2":
-        existing.layer = "L4"
-        event_type = "downgraded"
-        detail["previous_layer"] = "L2"
+    # 标记 needs_clarification 到 value_json。
+    try:
+        val = json.loads(existing.value_json or "{}")
+    except (TypeError, ValueError):
+        val = {}
+    val["clarification_status"] = "needs_clarification"
+    existing.value_json = json.dumps(val, ensure_ascii=False)
+    detail: dict = {"confidence": existing.confidence, "clarification_status": "needs_clarification"}
     _append_event(session, existing, event_type, evidence=evidence, detail=detail, stats_id=stats_id)
     return existing, event_type
 
@@ -331,6 +417,15 @@ def _dimension_question_weights(session: Session, user_id: str) -> dict[str, flo
     }
 
 
+def _needs_clarification_boost(belief: ProfileBelief) -> int:
+    """不一致处理：needs_clarification 的信念优先排入质询候选。"""
+    try:
+        val = json.loads(belief.value_json or "{}")
+    except (TypeError, ValueError):
+        return 0
+    return 1 if val.get("clarification_status") == "needs_clarification" else 0
+
+
 def list_question_candidates(session: Session, user_id: str, *, limit: int = 1) -> list[ProfileBelief]:
     """质询候选：L4 且 confidence ≥ 水位的待验证假设（K2 质询闭环数据源）。
 
@@ -350,6 +445,7 @@ def list_question_candidates(session: Session, user_id: str, *, limit: int = 1) 
     weights = _dimension_question_weights(session, user_id)
     pending.sort(
         key=lambda b: (
+            _needs_clarification_boost(b),
             _QUESTION_VALUE_TIER.get(b.dimension, 1) * weights.get(b.dimension, 1.0),
             b.confidence,
             b.last_evidence_at,

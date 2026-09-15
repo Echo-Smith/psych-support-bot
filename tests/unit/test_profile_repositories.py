@@ -9,6 +9,7 @@
 4. 级联删除（/v1/me 删除链）与 P2 统计行。
 """
 
+import json
 from uuid import uuid4
 
 import pytest
@@ -65,6 +66,7 @@ def test_created_claim_starts_active_with_event() -> None:
 
 
 def test_support_merges_evidence_and_raises_confidence() -> None:
+    """多因子置信度：支持证据合并 + 8 维权重调制增益幅度。"""
     user_id = _uid()
     belief_id, first = _claim(user_id, evidence_message_ids=[1, 2])
     assert first == "created"
@@ -73,7 +75,9 @@ def test_support_merges_evidence_and_raises_confidence() -> None:
     assert second == "supported"
     with SessionLocal() as session:
         belief = session.get(ProfileBelief, belief_id)
-        assert belief.confidence == pytest.approx(0.55)
+        # 多因子权重：1.0 - 0.1(source=extracted) - 0.1(layer=L4) - 0.1(context=0, support>=2) = 0.7
+        # 增益 = 0.15 * 0.7 = 0.105; 新置信度 = 0.4 + 0.105 = 0.505
+        assert belief.confidence == pytest.approx(0.505)
         assert belief.evidence_json == "[1, 2, 3]"  # 证据去重合并
         # 事件按最新在前（仓储层列表函数统一约定）
         assert [e.event_type for e in get_belief_events(session, user_id, belief_id)] == ["supported", "created"]
@@ -90,26 +94,29 @@ def test_confidence_capped_at_ceiling() -> None:
 
 
 def test_contradicts_decays_confidence() -> None:
+    """不一致处理升级：矛盾衰减从0.5放宽到0.8，标记needs_clarification。"""
     user_id = _uid()
     belief_id, _ = _claim(user_id, confidence=0.5)
     _, event = _claim(user_id, relation="contradicts", confidence=0.9)
     assert event == "contradicted"
     with SessionLocal() as session:
         belief = session.get(ProfileBelief, belief_id)
-        assert belief.confidence == pytest.approx(0.25)
+        assert belief.confidence == pytest.approx(0.4)  # 0.5 * 0.8
+        val = json.loads(belief.value_json or "{}")
+        assert val.get("clarification_status") == "needs_clarification"
 
 
-def test_contradicts_downgrades_l2_to_l4() -> None:
+def test_contradicts_marks_needs_clarification_not_downgrade() -> None:
+    """不一致处理升级：L2 不再自动降级，保留确认状态+标记待澄清。"""
     user_id = _uid()
-    # 程序硬证据（非 extracted）允许直接以 L2 起步：如量表记录推导的信念。
     belief_id, created = _claim(user_id, source="program", layer="L2", confidence=0.8)
     assert created == "created"
     _, event = _claim(user_id, relation="contradicts")
-    assert event == "downgraded"
+    assert event == "contradicted"
     with SessionLocal() as session:
         belief = session.get(ProfileBelief, belief_id)
-        assert belief.layer == "L4"
-        assert belief.confidence == pytest.approx(0.4)
+        assert belief.layer == "L2"  # 不降级
+        assert belief.confidence == pytest.approx(0.64)  # 0.8 * 0.8
 
 
 # --- 结构性红线 ---
