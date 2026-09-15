@@ -9,7 +9,7 @@
 """
 
 DISCLAIMER_VERSION = "20260904.1"
-PRIVACY_CONSENT_VERSION = "20260915.1"
+PRIVACY_CONSENT_VERSION = "20260915.2"
 
 
 def processing_services() -> list[dict[str, str]]:
@@ -75,9 +75,9 @@ def current_privacy_version() -> str:
 # ---------------------------------------------------------------------------
 
 PRIVACY_AGREEMENT_POINTS_ZH = [
-    "保存范围：服务端保存内部账号、登录身份与会话、对话与摘要、测评答案和结果、练习回答与引导、打卡、计划、周报，以及由这些内容生成的个人画像和历史切片。Web Access Token 仅在页面内存中，Refresh Token 位于 HttpOnly Cookie；原生端 Refresh Token 应保存到系统 Keychain/Keystore。浏览器还保存游客恢复秘密、未提交草稿和部分记录缓存。",
-    "使用范围：这些数据用于你自己的心理支持、上下文记忆、风险识别和记录展示，不公开展示，不用于广告画像。授权运维人员可能因故障排查和删除请求接触服务端数据。",
-    "同意与拒绝：同意当前版本后才可提交内容或调用 AI；暂不同意仍可查看已有记录、下载数据或注销。你可在“我”页随时暂停画像记忆；暂停后不再提取或使用画像，已有画像保留，亦可另行关闭并清除。练习和测评另有进入须知。",
+    "保存范围：服务端保存内部账号、登录身份与会话、对话与摘要、测评答案和结果、练习回答与引导、打卡、计划、周报，以及由这些内容生成的个性化记忆和历史切片。Web Access Token 仅在页面内存中，Refresh Token 位于 HttpOnly Cookie；原生端 Refresh Token 应保存到系统 Keychain/Keystore。浏览器还保存游客恢复秘密、未提交草稿和部分记录缓存。",
+    "使用范围：这些数据用于你自己的心理支持、上下文记忆、风险识别和记录展示，不公开展示，不用于广告。系统会从对话和记录中形成内部个性化理解，用于调整回复方式，不用于诊断或人格推断。授权运维人员可能因故障排查和删除请求接触服务端数据。",
+    '同意与拒绝：同意当前版本后才可提交内容或调用 AI；暂不同意仍可查看已有记录、下载数据或注销。你可在"我"页随时暂停个性化记忆；暂停后不再提取或使用记忆，已有记忆保留，亦可另行关闭并清除。练习和测评另有进入须知。',
     "下载与注销：下载包含在线业务库中的记录、派生数据和非秘密身份元数据，不包含密码哈希、令牌/挑战哈希、Passkey 公钥、供应商用户标识或 Langfuse 分析副本。注销删除登录身份、Passkey、认证挑战、会话及全部业务数据，并清理当前浏览器的本产品缓存和认证 Cookie。你已下载的文件及其他设备缓存需自行删除。",
     "外部清理：注销后，系统用不可逆假名标识定位 Langfuse 中可关联的历史与当前追踪并异步删除，可凭注销回执查询。确认追踪已删除后，回执中的临时定位信息会移除；缺少关联标识的旧追踪需运营人员核查。",
     "备份边界：在线注销不代表离线备份已同步销毁。部署方须处理备份到期删除，并在恢复备份前重放注销清单；备份和模型服务商留存不能由此页面证明已清除。",
@@ -85,19 +85,19 @@ PRIVACY_AGREEMENT_POINTS_ZH = [
 
 DATA_PROCESSING_POINTS_ZH = [
     "身份验证：选择 Apple、Google 或华为登录时，对应供应商处理登录交互并向本服务签发身份令牌。本服务校验签名、签发方、客户端、有效期和一次性随机数，仅保存由供应商、签发方和用户标识生成的密钥假名，不保存身份令牌，也不会按邮箱自动合并账号。",
-    "文本 AI：对话原文、必要的近期历史、摘要、画像、相关记录，以及你主动提交的测评或练习内容，可能发送到所配置的大模型服务，用于回复、风险分类、反馈和记忆提取。程序不会保证输入已完全脱敏，请避免填写无关的姓名、联系方式等身份信息。",
+    "文本 AI：对话原文、必要的近期历史、摘要、个性化记忆、相关记录，以及你主动提交的测评或练习内容，可能发送到所配置的大模型服务，用于回复、风险分类、反馈和记忆提取。程序不会保证输入已完全脱敏，请避免填写无关的姓名、联系方式等身份信息。",
     "语音 AI：使用录音时，音频发送到语音识别服务；开启朗读时，待朗读文本发送到语音合成服务。应用不持久保存用户录音，转写文字按对话记录处理。",
-    "Langfuse 产品分析：部署启用内容分析时，本地会先隐藏常见邮箱、手机号、证件号、IP、链接和凭据，再上传本轮用户输入、最终呈现给用户的模型回复、耗时、用量和失败标记。原始用户 ID 与会话 ID 会替换为服务端密钥生成的不可逆假名标识，用于分组分析和注销删除；不上传系统提示词、历史上下文、摘要或画像字段。",
-    "去标识化限制：自由文本可能通过姓名、事件或上下文重新识别个人，自动规则无法保证完全匿名。请勿输入无关身份信息。上述内容仅用于产品质量、安全和性能分析，不用于广告画像；商业化用量埋点仍只记录动作元数据。",
+    "Langfuse 产品分析：部署启用内容分析时，本地会先隐藏常见邮箱、手机号、证件号、IP、链接和凭据，再上传本轮用户输入、最终呈现给用户的模型回复、耗时、用量和失败标记。原始用户 ID 与会话 ID 会替换为服务端密钥生成的不可逆假名标识，用于分组分析和注销删除；不上传系统提示词、历史上下文、摘要或个性化记忆字段。",
+    "去标识化限制：自由文本可能通过姓名、事件或上下文重新识别个人，自动规则无法保证完全匿名。请勿输入无关身份信息。上述内容仅用于产品质量、安全和性能分析，不用于广告；商业化用量埋点仍只记录动作元数据。",
     "供应商边界：本产品不将内容用于广告或主动用于模型训练；外部服务的留存、训练政策及删除能力由部署方与供应商的约定决定，本产品无法承诺第三方零留存或即时删除。",
-    "运行日志：应用日志只记录技术状态、计数和固定错误类型，不主动记录对话、画像、原始用户标识或供应商错误正文；部署方负责日志访问控制和到期删除。",
+    "运行日志：应用日志只记录技术状态、计数和固定错误类型，不主动记录对话、个性化记忆、原始用户标识或供应商错误正文；部署方负责日志访问控制和到期删除。",
     "风险识别用于优先展示求助资源，不构成医疗诊断或治疗。",
 ]
 
 PRIVACY_AGREEMENT_POINTS_EN = [
-    "Storage: the server stores the internal account, login identities and sessions, conversations and summaries, assessments, guided exercise answers, check-ins, plans, reports, derived profiles and history slices. Web access tokens stay in page memory and refresh tokens use HttpOnly cookies; native refresh tokens belong in system Keychain/Keystore. The browser also stores a guest recovery secret, drafts and some cached records.",
-    "Purpose: personal support, contextual memory, risk screening and your records; no public display or advertising profiles. Authorized operators may access server data for maintenance and erasure requests.",
-    "Choice: accepting the current policy is required before submitting content or using AI. You may still read, export or delete existing data without accepting. Profile memory can be paused at any time from Me; pausing stops profile extraction and use while retaining existing profile data, which can also be disabled and erased separately. Exercises and assessments have additional notices.",
+    "Storage: the server stores the internal account, login identities and sessions, conversations and summaries, assessments, guided exercise answers, check-ins, plans, reports, personalized memory and history slices. Web access tokens stay in page memory and refresh tokens use HttpOnly cookies; native refresh tokens belong in system Keychain/Keystore. The browser also stores a guest recovery secret, drafts and some cached records.",
+    "Purpose: personal support, contextual memory, risk screening and your records; no public display or advertising. The system forms an internal personalized understanding from conversations and records, used to adjust how it responds — not for diagnosis or personality profiling. Authorized operators may access server data for maintenance and erasure requests.",
+    "Choice: accepting the current policy is required before submitting content or using AI. You may still read, export or delete existing data without accepting. Personalized memory can be paused at any time from Me; pausing stops memory extraction and use while retaining existing data, which can also be disabled and erased separately. Exercises and assessments have additional notices.",
     "Export and deletion: exports include online business records, derived data and non-secret identity metadata. Password, token and challenge hashes, Passkey public keys, provider subjects and Langfuse copies are excluded. Account deletion erases login identities, Passkeys, challenges, sessions and all business records, then clears this browser's product caches and authentication cookies. Remove downloaded exports and other devices' caches yourself.",
     "After account deletion, irreversible pseudonymous identifiers locate linked historical and current Langfuse traces for asynchronous erasure. A receipt reports progress. Temporary lookup data is removed after verification; unlinked legacy traces require operator review.",
     "Offline backups and provider retention are separate: operators must expire backups and replay erasures before restoring them. This page cannot verify deletion from backups or model providers.",
@@ -105,12 +105,12 @@ PRIVACY_AGREEMENT_POINTS_EN = [
 
 DATA_PROCESSING_POINTS_EN = [
     "Identity: when you choose Apple, Google or Huawei sign-in, that provider handles the sign-in interaction and issues an identity token to this service. The service validates its signature, issuer, client, expiry and one-time nonce, stores only a keyed pseudonym derived from provider/issuer/subject, does not retain the identity token, and never merges accounts by email automatically.",
-    "Text AI may receive your messages, relevant history, summaries, profile, records and submitted assessment/exercise content for responses, risk screening, feedback and memory extraction. Inputs are not guaranteed to be fully de-identified; avoid unnecessary identity details.",
+    "Text AI may receive your messages, relevant history, summaries, personalized memory, records and submitted assessment/exercise content for responses, risk screening, feedback and memory extraction. Inputs are not guaranteed to be fully de-identified; avoid unnecessary identity details.",
     "Voice: recordings go to speech recognition and spoken text goes to speech synthesis. The application does not persist user recordings; transcriptions are treated as conversation text.",
-    "Langfuse product analytics: when content analytics is enabled, local rules first hide common email addresses, phone and ID numbers, IP addresses, links and credentials. Langfuse receives the current user input, final user-facing model reply, timing, usage and failure flags. Raw user/session IDs are replaced with irreversible keyed pseudonyms for grouping and account-erasure lookup. System prompts, history context, summaries and profile fields are excluded.",
-    "De-identification is limited: names, events or context in free text may still identify someone, and automated rules cannot guarantee complete anonymity. Avoid unnecessary identity details. The content is used for product quality, safety and performance analysis, not advertising profiles; commercial usage telemetry remains action metadata only.",
+    "Langfuse product analytics: when content analytics is enabled, local rules first hide common email addresses, phone and ID numbers, IP addresses, links and credentials. Langfuse receives the current user input, final user-facing model reply, timing, usage and failure flags. Raw user/session IDs are replaced with irreversible keyed pseudonyms for grouping and account-erasure lookup. System prompts, history context, summaries and personalized memory fields are excluded.",
+    "De-identification is limited: names, events or context in free text may still identify someone, and automated rules cannot guarantee complete anonymity. Avoid unnecessary identity details. The content is used for product quality, safety and performance analysis, not advertising; commercial usage telemetry remains action metadata only.",
     "The product does not use content for ads or actively train models with it. Provider retention, training and deletion depend on the operator's supplier agreements; third-party zero retention or immediate erasure cannot be promised here.",
-    "Application logs contain technical status, counts and fixed error types, without intentionally recording conversations, profiles, raw user identifiers or provider error bodies. Operators control log access and expiry.",
+    "Application logs contain technical status, counts and fixed error types, without intentionally recording conversations, personalized memory, raw user identifiers or provider error bodies. Operators control log access and expiry.",
     "Risk screening prioritizes support resources; it is not medical diagnosis or treatment.",
 ]
 
