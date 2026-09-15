@@ -143,7 +143,6 @@ def _build_understanding_section(session: Session, user_id: str, language: str) 
 
     patterns = understanding.get("patterns", [])
     how_to = understanding.get("how_to_be_with_them", "")
-    questions = understanding.get("open_questions", [])
 
     if not patterns and not how_to:
         return None
@@ -156,16 +155,13 @@ def _build_understanding_section(session: Session, user_id: str, language: str) 
         items.append({"key": "how_to_be", "label": how_to, "detail": ""})
 
     for p in patterns[:3]:
+        if p.get("needs_verification"):
+            continue  # 面板只展示确定的，待验证的在对话中悄悄问
         desc = p.get("description", "")
         if desc:
-            confidence = p.get("confidence", 0)
-            status = "待验证" if p.get("needs_verification") else ""
-            detail = f"{status}（{int(confidence * 100)}%）" if status else ""
-            items.append({"key": f"pattern_{desc[:20]}", "label": desc, "detail": detail})
+            items.append({"key": f"pattern_{desc[:20]}", "label": desc, "detail": ""})
 
-    if questions and questions[0] != "Not enough data yet to form a clear picture.":
-        q = questions[0]
-        items.append({"key": "open_question", "label": f"🤔 {q}", "detail": ""})
+    # open_questions 不展示——它们是系统内部的探索方向，不是给用户看的。
 
     return {"dimension": "K3", "header": header, "items": items} if items else None
 
