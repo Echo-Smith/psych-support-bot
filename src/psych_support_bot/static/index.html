@@ -3050,16 +3050,16 @@
       <div class="record-section" style="margin-top:12px;">
         <div class="profile-memory-setting">
           <div>
-            <div class="setting-title">个性化画像记忆</div>
-            <div class="setting-desc" id="profileMemoryStatus">允许系统从对话中提炼并在后续对话中使用你的主题、偏好与有效方法。</div>
+            <div class="setting-title">个人画像</div>
+            <div class="setting-desc" id="profileMemoryStatus">系统从对话中逐步理解你——包括你关注什么、什么对你有效、你的表达习惯和正在面对的处境。</div>
           </div>
           <button class="profile-memory-switch" id="profileMemoryToggle" type="button" role="switch"
-            aria-label="个性化画像记忆" aria-checked="true" onclick="toggleProfileMemory()"></button>
+            aria-label="个人画像" aria-checked="true" onclick="toggleProfileMemory()"></button>
         </div>
         <div class="profile-hero">
           <div class="profile-avatar" id="profileAvatar" aria-hidden="true"></div>
           <div class="profile-hero-text">
-            <h2>系统对你的了解</h2>
+            <h2>对你的理解</h2>
             <p id="profileAvatarCaption">它来自我们对话的点滴，只反映系统对你的了解程度。</p>
           </div>
         </div>
@@ -3489,34 +3489,34 @@
         const data = await resp.json();
         const memory = data.profile_memory || { enabled: true, has_data: false };
         toggle.setAttribute('aria-checked', memory.enabled ? 'true' : 'false');
-        toggle.title = memory.enabled ? '关闭画像记忆' : '开启画像记忆';
+        toggle.title = memory.enabled ? '关闭画像' : '开启画像';
         clearBtn.disabled = !memory.has_data;
         status.textContent = memory.enabled
-          ? '已开启：系统会提炼并在后续对话中使用你的主题、偏好与有效方法。'
+          ? '已开启：系统会从对话中逐步理解你——包括你关注什么、什么有效、你的表达习惯和正在面对的处境。'
           : '已暂停：不会新增或使用画像；当轮安全识别和已保存记录不受影响。';
         if (!memory.enabled) {
           avatar.className = 'profile-avatar paused';
           document.getElementById('profileAvatarCaption').textContent = memory.has_data
-            ? '已有画像已暂停使用，你可以随时重新开启或彻底清除。'
-            : '画像记忆已关闭，目前没有保留的画像数据。';
-          wrap.innerHTML = '<div class="profile-card"><h3>画像记忆已暂停</h3><span class="profile-chip">不会从新对话继续提炼</span></div>';
+            ? '画像已暂停使用，你可以随时重新开启或彻底清除。'
+            : '画像已关闭，目前没有保留的画像数据。';
+          wrap.innerHTML = '<div class="profile-card"><h3>画像已暂停</h3><span class="profile-chip">不会从新对话继续理解你</span></div>';
           note.textContent = memory.has_data
             ? '关闭只暂停采集与使用，不会自动删除；需要删除时请使用下方按钮。'
-            : '重新开启后，画像会从之后的对话中逐步形成。';
+            : '重新开启后，系统会从之后的对话中逐步建立对你的理解。';
           return;
         }
         note.textContent = '这里只呈现系统有把握的部分；你想纠正或搁置任何一条，直接在对话里告诉我就可以。';
         const familiarity = (data.avatar && data.avatar.familiarity) || 0;
         avatar.className = 'profile-avatar' + (familiarity >= 3 ? ' f3' : familiarity === 2 ? ' f2' : '');
         document.getElementById('profileAvatarCaption').textContent = familiarity === 0
-          ? '它还在慢慢认识你——多聊聊，下面的拼图会一块块亮起来。'
-          : '它已经从我们的对话里拼出了 ' + familiarity + ' 块拼图。';
+          ? '它还在慢慢认识你——多聊聊，下面的内容会一点点丰富起来。'
+          : '它已经从我们的对话中对你有了 ' + familiarity + ' 方面的了解。';
         const cards = (data.sections || []).map(sec =>
           '<div class="profile-card"><h3>' + sec.header + '</h3>' +
           sec.items.map(it => '<span class="profile-chip">' + it.label + (it.detail ? ' · ' + it.detail : '') + '</span>').join('') +
           '</div>'
         ).join('');
-        wrap.innerHTML = cards || '<div class="profile-card"><h3>还在起步</h3><span class="profile-chip">多聊聊，画像会慢慢长出来</span></div>';
+        wrap.innerHTML = cards || '<div class="profile-card"><h3>还在起步</h3><span class="profile-chip">多聊聊，对你的理解会慢慢深入</span></div>';
       } catch (e) {
         wrap.innerHTML = '<div class="profile-card"><h3>暂时加载不了</h3><span class="profile-chip">稍后再试试</span></div>';
       }

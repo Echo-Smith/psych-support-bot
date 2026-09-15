@@ -104,6 +104,17 @@ def build_profile_panel(session: Session, user_id: str, *, language: str = "zh")
 
     # 未知维度防御：DIMENSIONS 之外的 section 不该存在（闭集一致性）。
     sections = [s for s in sections if s["dimension"] in DIMENSIONS]
+
+    # K3 结构性理解：how_to_be_with_them + open_questions。
+    understanding_section = _build_understanding_section(session, user_id, language)
+    if understanding_section:
+        sections.insert(0, understanding_section)
+
+    # 身份背景：从 UserProfile.background_json 读取。
+    background_section = _build_background_section(session, user_id, language)
+    if background_section:
+        sections.insert(0, background_section)
+
     return {
         "profile_memory": {
             "enabled": enabled,
@@ -111,8 +122,87 @@ def build_profile_panel(session: Session, user_id: str, *, language: str = "zh")
         },
         "avatar": {
             # 拟人形象边界：只表达"系统对你的了解程度"，不做人格化演绎。
-            "familiarity": len(seen_dimensions),
+            "familiarity": len(seen_dimensions) + (1 if understanding_section else 0) + (1 if background_section else 0),
             "known_dimensions": sorted(seen_dimensions),
         },
         "sections": sections,
     }
+
+
+def _build_understanding_section(session: Session, user_id: str, language: str) -> dict | None:
+    """K3 结构性理解 → 面板 section。"""
+    from psych_support_bot.infra.db.repositories import get_user_profile
+
+    profile = get_user_profile(session, user_id)
+    if not profile or not profile.understanding_json or profile.understanding_json == "{}":
+        return None
+    try:
+        understanding = json.loads(profile.understanding_json)
+    except (TypeError, ValueError):
+        return None
+
+    patterns = understanding.get("patterns", [])
+    how_to = understanding.get("how_to_be_with_them", "")
+    questions = understanding.get("open_questions", [])
+
+    if not patterns and not how_to:
+        return None
+
+    is_en = _is_en(language)
+    header = "对你整体的理解" if not is_en else "Overall understanding"
+    items: list[dict] = []
+
+    if how_to:
+        items.append({"key": "how_to_be", "label": how_to, "detail": ""})
+
+    for p in patterns[:3]:
+        desc = p.get("description", "")
+        if desc:
+            confidence = p.get("confidence", 0)
+            status = "待验证" if p.get("needs_verification") else ""
+            detail = f"{status}（{int(confidence * 100)}%）" if status else ""
+            items.append({"key": f"pattern_{desc[:20]}", "label": desc, "detail": detail})
+
+    if questions and questions[0] != "Not enough data yet to form a clear picture.":
+        q = questions[0]
+        items.append({"key": "open_question", "label": f"🤔 {q}", "detail": ""})
+
+    return {"dimension": "K3", "header": header, "items": items} if items else None
+
+
+def _build_background_section(session: Session, user_id: str, language: str) -> dict | None:
+    """身份背景 → 面板 section。"""
+    from psych_support_bot.infra.db.repositories import get_user_profile
+
+    profile = get_user_profile(session, user_id)
+    if not profile or not profile.background_json or profile.background_json == "{}":
+        return None
+    try:
+        bg = json.loads(profile.background_json)
+    except (TypeError, ValueError):
+        return None
+
+    if not bg:
+        return None
+
+    is_en = _is_en(language)
+    header = "背景信息" if not is_en else "Background"
+    # 友善化键名映射。
+    key_labels = {
+        "occupation": ("职业", "Occupation"),
+        "age": ("年龄", "Age"),
+        "family": ("家庭", "Family"),
+        "living": ("居住", "Living situation"),
+        "medical": ("健康", "Health"),
+        "cultural": ("文化背景", "Cultural background"),
+        "religion": ("信仰", "Belief"),
+        "support_network": ("支持网络", "Support network"),
+    }
+    items: list[dict] = []
+    for key, (zh_label, en_label) in key_labels.items():
+        val = bg.get(key)
+        if val:
+            label = en_label if is_en else zh_label
+            items.append({"key": f"bg_{key}", "label": label, "detail": str(val)})
+
+    return {"dimension": "BG", "header": header, "items": items} if items else None
