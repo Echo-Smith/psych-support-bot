@@ -3725,17 +3725,20 @@
       if (round !== LIVE_TEXT_ROUND) return;
       liveTextClear();
       hideTyping();
-      FORMAL_RENDERED = true;
-      parts.forEach((text, i) => {
-        if ((text || '').trim()) addMessage('bot', text, i === 0 ? data.mode : '', i === 0 ? data.risk : {}, i === 0);
-      });
-      turnMark('final'); turnTryReport();
-      postRender();
-      if (TTS_LIVE.failed && effectiveTtsOn(isCrisis)) appendDebug('语音播放未完成，完整回复已显示。');
-      if (!VOICE.ttsAvailable && hasText && effectiveTtsOn(isCrisis)) {
-        // Browser synthesis has no server PCM clock; show complete text.
+      const browserTts = !VOICE.ttsAvailable && hasText && effectiveTtsOn(isCrisis);
+      if (browserTts) {
+        // 浏览器合成路径：字幕随语音逐句上屏，语音结束后再渲染正式气泡
+        FORMAL_RENDERED = false;
         await speakReply(data.reply, isCrisis);
-      } else if (VOICE.mode === 'speaking') {
+        if (round !== LIVE_TEXT_ROUND) return;
+        liveTextClear();
+      }
+      renderBotParts(parts, data.mode, data.risk, () => {
+        turnMark('final'); turnTryReport();
+        postRender();
+        if (TTS_LIVE.failed && effectiveTtsOn(isCrisis)) appendDebug('语音播放未完成，完整回复已显示。');
+      });
+      if (!browserTts && VOICE.mode === 'speaking') {
         VOICE.lastCrisis = isCrisis;
         endSpeaking();
       }
@@ -4035,6 +4038,7 @@
         el.appendChild(bubble);
         const chat = document.getElementById('chatArea');
         chat.appendChild(el); chat.scrollTop = chat.scrollHeight;
+        LIVE_TEXT_SHOWN_CHARS += text.length; // 与 liveTextAppend 保持一致
       };
       requestAnimationFrame(tick);
     }
@@ -4048,9 +4052,20 @@
     }
 
     // Non-audio callers use ordinary IM bubbles. Audio captions use showAudioSentence.
+    // LIVE_TEXT_SHOWN_CHARS 记本轮 live 泡已上屏字数——正式渲染据此跳过已出现的字，
+    // 杜绝「final 整段重铺」的突兀替换。
     function renderBotParts(parts, mode, risk, onDone) {
       FORMAL_RENDERED = true;
-      parts.forEach((text, i) => addMessage('bot', text, i === 0 ? mode : '', i === 0 ? risk : {}, i === 0));
+      let skipped = 0;
+      parts.forEach((text, i) => {
+        if (!(text || '').trim()) return;
+        const skip = Math.min(LIVE_TEXT_SHOWN_CHARS - skipped, (text || '').length);
+        const remaining = skip > 0 ? (text || '').slice(skip) : (text || '');
+        skipped += (text || '').length;
+        if (remaining.trim()) {
+          addMessage('bot', remaining, i === 0 ? mode : '', i === 0 ? risk : {}, i === 0);
+        }
+      });
       if (onDone) onDone();
     }
 
@@ -5017,7 +5032,7 @@
       beginSpeaking();
       if (!VOICE.ttsAvailable) {
         // 未配置服务端 TTS 的部署：浏览器合成是仅有的朗读手段
-        speakWithBrowser(text);
+        await speakWithBrowser(text);
         return;
       }
       try {
@@ -5042,18 +5057,28 @@
     }
 
     function speakWithBrowser(text) {
-      if (!('speechSynthesis' in window)) { endSpeaking(); return; }
-      try {
-        const utter = new SpeechSynthesisUtterance(text);
-        utter.lang = 'zh-CN';
-        utter.rate = 0.95;
-        utter.onend = endSpeaking;
-        utter.onerror = endSpeaking;
-        window.speechSynthesis.cancel();
-        window.speechSynthesis.speak(utter);
-      } catch (err) {
-        endSpeaking(); // 静默降级：语音不可用不影响文字
+      if (!('speechSynthesis' in window)) { endSpeaking(); return Promise.resolve(); }
+      const sentences = (text.match(/[^。！？!?\n]+[。！？!?\n]*/g) || [text]);
+      window.speechSynthesis.cancel();
+      let chain = Promise.resolve();
+      for (const sentence of sentences) {
+        chain = chain.then(() => new Promise((resolve) => {
+          // 字幕随语音起播上屏（FORMAL_RENDERED 已由调用方重置为 false）
+          if (!FORMAL_RENDERED) liveTextAppend(sentence, 0, Math.max(700, sentence.length * 220));
+          try {
+            const utter = new SpeechSynthesisUtterance(sentence);
+            utter.lang = 'zh-CN';
+            utter.rate = 0.95;
+            utter.onend = resolve;
+            utter.onerror = resolve;
+            window.speechSynthesis.speak(utter);
+          } catch (err) {
+            resolve(); // 静默降级
+          }
+        }));
       }
+      chain.then(endSpeaking).catch(endSpeaking);
+      return chain;
     }
 
     // 图内练习进度标签：气泡流上方的小徽标（🪨 5-4-3-2-1 · 第 N/5 步）。

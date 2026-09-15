@@ -44,4 +44,5 @@ async def require_privacy_consent(
             return  # Let the endpoint's schema validation report malformed JSON.
     if current_user and declared and declared != current_user:
         raise HTTPException(status_code=403, detail="User ID does not match the authenticated identity.")
-    check_privacy_consent(session, normalize_user_id(current_user or declared))
+    subject = current_user or declared
+    check_privacy_consent(session, normalize_user_id(subject) if subject else subject)

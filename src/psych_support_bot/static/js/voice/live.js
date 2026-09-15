@@ -52,6 +52,7 @@ export function createTtsLive(deps) {
     if (watchdog != null) timers.clearTimeout(watchdog);
     watchdog = null;
     killLiveWs(TTS_LIVE.ws);
+    TTS_LIVE.ws = null; // 防御性：确保旧连接指针不残留
     if (rejectOpening) rejectOpening(new Error('round cancelled'));
     rejectOpening = null; connecting = null;
     if (endResolve) endResolve();
@@ -62,11 +63,15 @@ export function createTtsLive(deps) {
       curBytes: [], curChars: 0, pcm: false, sentenceStart: null,
       firstAudioMarked: false, sentenceSamples: 0, pendingEnd: false,
       finalTakeover: false, chain: Promise.resolve(), roundDone: null, firstAudioTimeoutMs: 0,
+      _roundGen: generation, // finishRound 守卫：新轮开始后旧轮的异步回调不再修改状态
     });
     pcm.stopAll();
   }
 
   function finishRound(failed = false) {
+    // 新轮已开始（ttsLiveBeginTurn 重置了 _roundGen）：旧轮的异步回调
+    // （watchdog 超时、ttsLiveEnsure 失败）不得修改新轮状态。
+    if (TTS_LIVE._roundGen !== generation) return;
     if (failed) TTS_LIVE.failed = true;
     if (watchdog != null) timers.clearTimeout(watchdog);
     watchdog = null;
@@ -115,7 +120,12 @@ export function createTtsLive(deps) {
   }
 
   async function ttsLiveEnsure() {
-    if (TTS_LIVE.ws && TTS_LIVE.ws.readyState === 1) return TTS_LIVE.ws;
+    // 复用已有连接：OPEN 直接返回；CONNECTING 时返回正在握手的同一个 promise，
+    // 避免投机回复集中发句时为每句各建一条 WS。
+    if (TTS_LIVE.ws) {
+      if (TTS_LIVE.ws.readyState === 1) return TTS_LIVE.ws;
+      if (TTS_LIVE.ws.readyState === 0 && connecting) return connecting;
+    }
     if (connecting) return connecting;
     const gen = generation;
     const ws = new WebSocketCtor(wsUrl());
