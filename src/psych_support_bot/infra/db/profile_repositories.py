@@ -107,7 +107,15 @@ def set_profile_memory_enabled(session: Session, user_id: str, enabled: bool) ->
 def has_profile_memory_data(session: Session, user_id: str) -> bool:
     """Whether any inferred profile, profile audit, or time-profile data remains."""
     models = (ProfileBelief, ProfileBeliefEvent, ProfileExtractionStats, ProfileInterventionEvent, UserTimeProfile)
-    return any(session.query(model).filter(model.user_id == user_id).first() is not None for model in models)
+    if any(session.query(model).filter(model.user_id == user_id).first() is not None for model in models):
+        return True
+    # 也检查 UserProfile 上的画像扩展字段。
+    from psych_support_bot.infra.db.models import UserProfile
+
+    profile = session.get(UserProfile, user_id)
+    if profile and profile.background_json and profile.background_json != "{}":
+        return True
+    return bool(profile and profile.understanding_json and profile.understanding_json != "{}")
 
 
 def record_extraction_stats(
@@ -280,6 +288,7 @@ def record_claim(
                 merged_evidence.append(mid)
         existing.evidence_json = json.dumps(merged_evidence[-MAX_EVIDENCE_REFS:])
         existing.last_evidence_session_id = session_id
+        existing.last_evidence_at = datetime.now(UTC)
 
         # 跨情境标签：支持证据的情境合并到 value_json。
         if context_tags:
@@ -441,7 +450,17 @@ def list_question_candidates(session: Session, user_id: str, *, limit: int = 1) 
         ProfileBelief.layer == "L4",
     )
     rows = list(session.scalars(select(ProfileBelief).where(*conditions)))
-    pending = [b for b in rows if b.confidence >= L4_QUESTION_THRESHOLD]
+    # 质询候选门槛：置信度 >= 阈值 且 跨会话证据（origin != last_evidence）。
+    pending = [
+        b
+        for b in rows
+        if b.confidence >= L4_QUESTION_THRESHOLD
+        and (
+            not b.origin_session_id
+            or not b.last_evidence_session_id
+            or b.origin_session_id != b.last_evidence_session_id
+        )
+    ]
     weights = _dimension_question_weights(session, user_id)
     pending.sort(
         key=lambda b: (
@@ -647,10 +666,20 @@ def delete_user_profile_beliefs(session: Session, user_id: str) -> dict[str, int
     time_profile_deleted = (
         session.query(UserTimeProfile).filter(UserTimeProfile.user_id == user_id).delete(synchronize_session=False)
     )
+    # 清除 UserProfile 上的画像扩展字段。
+    from psych_support_bot.infra.db.models import UserProfile
+
+    profile = session.get(UserProfile, user_id)
+    bg_cleared = 0
+    if profile and (profile.background_json or profile.understanding_json):
+        profile.background_json = "{}"
+        profile.understanding_json = "{}"
+        bg_cleared = 1
     return {
         "profile_beliefs": int(beliefs_deleted),
         "profile_belief_events": int(events_deleted),
         "profile_extraction_stats": int(stats_deleted),
         "profile_intervention_events": int(interventions_deleted),
         "user_time_profiles": int(time_profile_deleted),
+        "profile_background_cleared": bg_cleared,
     }

@@ -25,7 +25,7 @@
 
 ### 3.1 可见性
 
-1. 普通“我”页面不展示画像推断、模式、假设或“对你的整体理解”。
+1. 普通“我”页面不展示画像推断、模式、假设或“对你的整体理解”。可以保留用户主动填写或已经明确确认的背景、偏好、目标和边界，统一放在“记忆与偏好”中，支持逐项修改和删除。
 2. 页面保留“个性化记忆”开关、用途说明、数据类别说明、清除入口和个人信息副本入口。
 3. 用户明确进入数据管理流程时，可以查看依法需要提供的存储事实和推断数据；该流程不是日常产品内容。
 4. 待验证假设仅供系统内部校验，不得原样进入对用户可见的回复。
@@ -45,14 +45,23 @@
 
 发布前由目标市场的专业法律顾问复核个人信息副本范围、敏感信息同意、自动化决策告知以及供应商跨境处理安排。
 
+### 3.3 执行方式
+
+1. Celery 不是第一阶段的必要依赖。先复用现有 `privacy_deletion` 模式，以数据库任务表、FastAPI lifespan 后台轮询器和 `asyncio.to_thread` 实现可重试异步任务。
+2. 当服务扩展到多个实例、画像任务需要独立扩缩容或数据库轮询成为瓶颈时，再将同一任务处理函数接入已有 Celery/Redis；业务状态和幂等语义保持不变。
+3. K1 确定性提取保持同步，和用户消息、练习完成事实及显式偏好一起落库，为异步任务提供一致的证据水位。
+4. K2 的 LLM 语义提取移出用户请求链路，交给异步画像任务。用户明确确认、否决、编辑和关闭画像的状态变更保持同步立即生效。
+5. K3 综合全部异步执行，不再挂在新一轮用户请求触发的切片收尾路径上。
+
 ## 4. 最小技术架构
 
-沿用现有在线 Conversation Graph、SQLAlchemy、Celery 和 Redis。新增一个小型异步 LangGraph，不新增 Agent 平台。
+沿用现有在线 Conversation Graph 和 SQLAlchemy。新增一个小型异步 LangGraph，由应用内持久后台 Worker 执行；Celery/Redis 作为规模化替换层，不作为首版运行前提。不新增 Agent 平台。
 
 ```text
 在线对话完成
   -> 保存消息、belief 和用户明确事实
-  -> 写入/合并 profile_evolution Celery 任务
+  -> 写入/合并 profile_evolution_jobs
+  -> 应用内持久后台 Worker 领取任务
   -> 异步 ProfileEvolutionGraph
        1. load_evidence      读取新增证据
        2. formulate          一次 LLM 调用生成候选理解
@@ -62,7 +71,9 @@
   -> 下一轮只读取最近一个 active 快照
 ```
 
-第一阶段不启用 LangGraph Store。业务数据库继续作为画像、导出和删除的唯一事实源。第一阶段也不要求 LangGraph checkpointer；Celery 重试、幂等键和任务表足以恢复。只有在需要节点级恢复、人工中断或执行重放时再增加持久化 checkpointer。
+第一阶段不启用 LangGraph Store。业务数据库继续作为画像、导出和删除的唯一事实源。第一阶段也不要求 LangGraph checkpointer；任务表、幂等键和应用内 Worker 重试足以恢复。只有在需要节点级恢复、人工中断或执行重放时再增加持久化 checkpointer。
+
+首版 Worker 与现有 `services/privacy_deletion.py::deletion_worker` 同构。禁止只使用 FastAPI `BackgroundTasks` 或裸 `asyncio.create_task` 承载画像写入；进程退出后仍须能从数据库任务表恢复。多实例部署时，任务领取必须使用数据库锁、租约或迁移到 Celery，避免两个实例同时处理同一用户。
 
 ## 5. 数据契约
 
@@ -90,7 +101,18 @@
 
 待验证假设保存在内部候选快照中，不直接进入回复提示词。系统如需进一步了解，只向提问规划器提供不带结论的 `information_gap`，例如“尚不了解工作评价带来的具体压力来源”，而不是“用户可能害怕被否定”。每轮最多使用一个信息缺口，并受 `no_question_mode`、危机模式和用户边界约束。
 
-### 5.4 最小新增表
+### 5.4 语音信号
+
+语音信号属于短期、低权重的 `behavioral_observation`，不是身份事实、人格特征或稳定画像。规则如下：
+
+- 原始录音不进入画像证据库；画像层只接收 VAD 产生的停顿次数、有效语音时长等最小化元数据。
+- 单次停顿、短句、回复延迟和深夜使用仅在当前会话内帮助调整节奏，不能单独形成 belief、候选解释或支持策略。
+- 回复延迟必须标记数据质量；应用退到后台、网络中断或跨设备继续时不得解释为犹豫。
+- 只有同类信号跨多个会话重复，且有文本证据或用户明确表达支持时，才可作为某个观察的辅助证据。
+- 持久化时保存离散类别和证据会话，不保存精确录音时间线；默认设置较短有效期，到期后不参与画像综合。
+- 语音信号不得用于危机降级、诊断、人格判断或推断用户“不愿意聊”。向用户提问时使用中性措辞，不暴露系统做出的行为解释。
+
+### 5.5 最小新增表
 
 新增 `profile_evolution_jobs`：
 
@@ -157,16 +179,18 @@
 - 用户可以在不关闭账号的情况下停止和清除画像。
 - “内容与记录导出”与“个人信息副本”不会被误认为同一范围。
 
-### 工作单元 C：建立异步画像工作流
+### 工作单元 C：建立轻量异步画像工作流
 
 变更：
 
-- 增加 Celery `profile_evolution` 任务。
+- 增加应用内 `profile_evolution_worker`，复用现有持久删除 Worker 的启动、停止和轮询模式。
 - 增加按用户合并任务、幂等键和单用户互斥。
 - 建立 `ProfileEvolutionGraph` 五节点流程。
+- 将 K2 LLM 语义提取和 K3 综合迁入 Worker；K1 和用户显式状态更新保留同步。
 - 不再依赖切片关闭作为唯一综合触发条件。
 - 触发条件包括：新增有效证据达到水位、用户确认/否决、身份事实变化、练习反馈变化、出现反证、每天最多一次兜底综合。
 - 任务失败只记录固定错误码，不保存模型原始错误正文。
+- 预留同一处理函数的 Celery task 包装；达到多实例或独立扩缩容条件后切换，不改变任务表和画像数据契约。
 
 验收：
 
@@ -175,6 +199,7 @@
 - Worker 重启后可以安全重试。
 - 一个用户的任务不会并发覆盖画像版本。
 - 画像关闭时队列中的未执行任务安全退出且不写入。
+- 进程在任务中途退出后，租约过期的任务能够由下一次启动恢复。
 
 ### 工作单元 D：候选理解与确定性校验
 
@@ -193,6 +218,7 @@
 - 所有观察必须引用存在且属于该用户的证据；
 - 不同消息不等于不同会话，稳定模式必须满足不同会话门槛；
 - 单轮停顿、回复延迟和深夜使用不能独立形成稳定解释；
+- 语音行为信号只能作为辅助证据，不能独立提高模式到 active；
 - 禁止诊断、人格障碍、依恋类型和认知歪曲人格化标签；
 - 禁止把第三方事实归到用户；
 - 禁止未同意的敏感信息进入持久快照；
@@ -276,7 +302,9 @@
 - `src/psych_support_bot/infra/db/repositories.py`
 - `src/psych_support_bot/services/slice_manager.py`
 - `src/psych_support_bot/services/conversation.py`
-- `src/psych_support_bot/infra/queue/celery_app.py`
+- `src/psych_support_bot/app.py`
+- `src/psych_support_bot/services/privacy_deletion.py`
+- `src/psych_support_bot/infra/queue/celery_app.py`（规模化阶段）
 - `src/psych_support_bot/api/routes/me.py`
 - `src/psych_support_bot/domain/consents.py`
 - `src/psych_support_bot/static/index.html`

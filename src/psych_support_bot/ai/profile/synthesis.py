@@ -204,8 +204,11 @@ def run_k3_synthesis(
 def render_understanding(session: Session, user_id: str, language: str = "") -> str | None:
     """将用户的结构性理解渲染为可注入 memory snapshot 的文本。"""
     try:
+        from psych_support_bot.infra.db.profile_repositories import is_profile_memory_enabled
         from psych_support_bot.infra.db.repositories import get_user_profile
 
+        if not is_profile_memory_enabled(session, user_id):
+            return None
         profile = get_user_profile(session, user_id)
         if not profile or not profile.understanding_json or profile.understanding_json == "{}":
             return None

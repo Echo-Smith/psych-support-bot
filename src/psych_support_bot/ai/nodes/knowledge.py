@@ -30,7 +30,18 @@ def load_knowledge_context(state: GraphState) -> GraphState:
         topics = list(dict.fromkeys([*llm_topics, *detect_topics(state["user_message"])]))
         state["topics"] = topics
         # 通路5 + 第二层：画像信念话题 + D3 学派匹配注入知识检索。
-        p_topics, d3_beliefs = _profile_topics_and_beliefs(state["user_id"])
+        # 画像关闭时跳过——不注入任何画像信号。
+        p_topics: list[str] = []
+        d3_beliefs: list = []
+        try:
+            from psych_support_bot.infra.db.profile_repositories import is_profile_memory_enabled
+            from psych_support_bot.infra.db.session import SessionLocal
+
+            with SessionLocal() as _s:
+                if is_profile_memory_enabled(_s, state["user_id"]):
+                    p_topics, d3_beliefs = _profile_topics_and_beliefs(state["user_id"])
+        except Exception:  # noqa: BLE001
+            pass
         state["knowledge_context"] = get_knowledge_context(
             mode=state["mode"],
             risk_level=state["risk_result"].risk_level,

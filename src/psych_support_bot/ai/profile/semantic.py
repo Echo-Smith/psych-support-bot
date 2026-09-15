@@ -67,7 +67,7 @@ _SYSTEM_PROMPT = (
     '"<one clinical-neutral observation sentence in Chinese>", "confidence": '
     '<0.0-1.0>, "relation": "supports|contradicts"}],\n'
     '"background": {"occupation": "", "family": "", "living": "", "medical": "", '
-    '"cultural": "", "religion": "", "support_network": ""},\n'
+    '"cultural": "", "religion": "", "support_network": "", "subject": "user|third_party|unknown"},\n'
     '"life_events": [{"summary": "<brief description>", "confidence": 0.0-1.0}],\n'
     '"context_tags": ["工作"|"关系"|"家庭"|"健康"|"学业"|"社交"],\n'
     '"protective_factors": [{"key": "protective.support_people"|'
@@ -126,6 +126,9 @@ _SYSTEM_PROMPT = (
     "empty if not mentioned. Sensitive fields (trauma, substance, family history) "
     "are NOT extracted here — only occupation, family, living situation, medical, "
     "cultural, religion, support network.\n"
+    "- Background subject: set 'subject' to 'user' when the user describes their "
+    "own situation ('我是做IT的'), 'third_party' when describing others ('我朋友说…'), "
+    "and 'unknown' when ambiguous. Only 'user' and 'unknown' entries are persisted.\n"
     "- Life events: when the user describes a concrete life change (new job, "
     "moved, breakup, loss, illness), output it in life_events with a brief "
     "summary and confidence. Do NOT extract routine topics as life events.\n"
@@ -229,12 +232,23 @@ def parse_extraction_json(raw: str) -> list[dict]:
 
 
 def _parse_background(data: dict) -> dict[str, str]:
-    """从 K2 输出中提取背景信息（仅用户显式声明的字段）。"""
+    """从 K2 输出中提取背景信息（仅用户显式声明的字段）。
+
+    subject 字段标识信息来源：user（用户关于自己）、third_party（关于他人）、unknown。
+    第三方信息默认不写入 background_json（只在 user 或 unknown 时写入）。
+    """
     raw = data.get("background")
     if not isinstance(raw, dict):
         return {}
     _BG_KEYS = ("occupation", "family", "living", "medical", "cultural", "religion", "support_network")
-    return {k: str(raw.get(k) or "").strip()[:40] for k in _BG_KEYS if raw.get(k)}
+    subject = str(raw.get("subject") or "user").strip()
+    # 第三方信息（如"我朋友说…"）不写入用户背景。
+    if subject == "third_party":
+        return {}
+    result = {k: str(raw.get(k) or "").strip()[:40] for k in _BG_KEYS if raw.get(k)}
+    if result:
+        result["_subject"] = subject
+    return result
 
 
 def _parse_life_events(data: list | None) -> list[dict]:

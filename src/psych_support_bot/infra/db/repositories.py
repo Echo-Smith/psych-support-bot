@@ -257,7 +257,7 @@ def build_memory_snapshot(
 
             try:
                 bg = _json.loads(profile.background_json)
-                bg_parts = [f"{k}:{v}" for k, v in bg.items() if v]
+                bg_parts = [f"{k}:{v}" for k, v in bg.items() if v and not k.startswith("_")]
                 if bg_parts:
                     pieces.append("背景：" + "，".join(bg_parts))
             except (TypeError, ValueError):
