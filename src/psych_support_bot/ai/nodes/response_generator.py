@@ -245,6 +245,19 @@ def _generate_normal_reply(state: GraphState, risk_level: str, no_question_mode:
                 user_ts = state.get("user_message_timestamp")
                 recent_lens = state.get("recent_message_lengths") or []
                 session_hour = user_ts.hour if user_ts and hasattr(user_ts, "hour") else -1
+
+                # 读取用户的睡眠窗口（来自 UserTimeProfile 打卡行为推断）。
+                sleep_win = None
+                try:
+                    from psych_support_bot.infra.db.repositories import get_user_time_profile
+
+                    with _CS() as _s:
+                        tp = get_user_time_profile(_s, state["user_id"])
+                    if tp and tp.sleep_start_hour is not None and tp.sleep_end_hour is not None:
+                        sleep_win = (tp.sleep_start_hour, tp.sleep_end_hour)
+                except Exception:  # noqa: BLE001
+                    pass
+
                 beh_signals = detect_behavioral_signals(
                     user_message=state["user_message"],
                     bot_message_timestamp=bot_ts,
@@ -252,6 +265,7 @@ def _generate_normal_reply(state: GraphState, risk_level: str, no_question_mode:
                     recent_message_lengths=recent_lens,
                     session_hour=session_hour,
                     vad_metadata=state.get("vad_metadata") or None,
+                    sleep_window=sleep_win,
                 )
 
                 is_en = state.get("expected_language", "") != "zh"

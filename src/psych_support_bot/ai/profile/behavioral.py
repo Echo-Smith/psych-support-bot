@@ -12,6 +12,7 @@
 
 from __future__ import annotations
 
+import contextlib
 from datetime import UTC, datetime
 from typing import Any
 
@@ -24,13 +25,17 @@ def detect_behavioral_signals(
     recent_message_lengths: list[int] | None = None,
     session_hour: int = -1,
     vad_metadata: dict | None = None,
+    sleep_window: tuple[int, int] | None = None,
 ) -> list[dict[str, Any]]:
     """检测当前轮次的行为异常信号。
 
     返回信号列表，每个信号是 {"type": str, "detail": str, "question_zh": str, "question_en": str}。
     不做推断——只提供"可以问什么"的建议。
 
-    vad_metadata 来自前端 VAD：{startAt, endAt, speechDurationMs, pauseCount}。
+    参数：
+    - vad_metadata: 前端 VAD 元数据 {startAt, endAt, speechDurationMs, pauseCount}
+    - sleep_window: 用户的睡眠窗口 (start_hour, end_hour)，来自 UserTimeProfile；
+      None 时使用默认 23:00-05:00
     """
     signals: list[dict[str, Any]] = []
 
@@ -56,12 +61,18 @@ def detect_behavioral_signals(
             })
 
     # 2. 回复延迟异常（>5 分钟，排除网络噪声的阈值）
-    if bot_message_timestamp and user_message_timestamp:
+    #    有 VAD 元数据时用客户端 startAt（更接近用户真实思考时间），
+    #    否则用服务端消息时间戳（包含网络延迟+STT 处理时间）。
+    effective_user_ts = user_message_timestamp
+    if vad_metadata and vad_metadata.get("startAt"):
+        with contextlib.suppress(TypeError, ValueError, OSError):
+            effective_user_ts = datetime.fromtimestamp(vad_metadata["startAt"] / 1000, tz=UTC)
+    if bot_message_timestamp and effective_user_ts:
         if bot_message_timestamp.tzinfo is None:
             bot_message_timestamp = bot_message_timestamp.replace(tzinfo=UTC)
-        if user_message_timestamp.tzinfo is None:
-            user_message_timestamp = user_message_timestamp.replace(tzinfo=UTC)
-        latency = (user_message_timestamp - bot_message_timestamp).total_seconds()
+        if effective_user_ts.tzinfo is None:
+            effective_user_ts = effective_user_ts.replace(tzinfo=UTC)
+        latency = (effective_user_ts - bot_message_timestamp).total_seconds()
         if 300 < latency < 3600:  # 5-60 分钟：可能是有意义的停顿
             signals.append({
                 "type": "long_pause",
@@ -82,14 +93,25 @@ def detect_behavioral_signals(
                 "question_en": "Your message is shorter than usual — are you tired or not in the mood to talk about this?",
             })
 
-    # 4. 深夜来访（23:00-05:00）
-    if session_hour >= 23 or session_hour <= 4:
-        signals.append({
-            "type": "late_night",
-            "detail": f"hour={session_hour}",
-            "question_zh": "这么晚了还没休息，是睡不着还是有什么事在心里？",
-            "question_en": "It's quite late — are you having trouble sleeping, or is something on your mind?",
-        })
+    # 4. 深夜来访：用用户的睡眠窗口代替固定 23:00-05:00。
+    #    sleep_window 来自 UserTimeProfile（从打卡行为推断），格式 (start_hour, end_hour)。
+    if session_hour >= 0:
+        if sleep_window:
+            sleep_start, sleep_end = sleep_window
+            # 判断 session_hour 是否在睡眠窗口内（处理跨午夜）
+            if sleep_start > sleep_end:
+                in_sleep = session_hour >= sleep_start or session_hour < sleep_end
+            else:
+                in_sleep = sleep_start <= session_hour < sleep_end
+        else:
+            in_sleep = session_hour >= 23 or session_hour <= 4
+        if in_sleep:
+            signals.append({
+                "type": "late_night",
+                "detail": f"hour={session_hour}",
+                "question_zh": "这么晚了还没休息，是睡不着还是有什么事在心里？",
+                "question_en": "It's quite late — are you having trouble sleeping, or is something on your mind?",
+            })
 
     # 限制每轮最多 1 个信号（不轰炸用户）
     return signals[:1] if signals else []
