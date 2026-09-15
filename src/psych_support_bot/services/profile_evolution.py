@@ -19,7 +19,7 @@ import json
 import logging
 import uuid
 from contextlib import suppress
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 from sqlalchemy.orm import Session
 
@@ -85,6 +85,14 @@ def enqueue_evolution_job(session: Session, user_id: str) -> ProfileEvolutionJob
 def process_pending_evolutions() -> None:
     """处理所有 pending 任务（同步，由 Worker 线程调用）。"""
     with SessionLocal() as session:
+        # 崩溃恢复：lease 过期的 running 任务重置为 pending。
+        lease_cutoff = datetime.now(UTC) - timedelta(seconds=JOB_LEASE_SECONDS)
+        session.query(ProfileEvolutionJob).filter(
+            ProfileEvolutionJob.status == "running",
+            ProfileEvolutionJob.started_at < lease_cutoff,
+        ).update({"status": "pending"}, synchronize_session=False)
+        session.commit()
+
         jobs = (
             session.query(ProfileEvolutionJob)
             .filter(ProfileEvolutionJob.status == "pending")
@@ -95,17 +103,30 @@ def process_pending_evolutions() -> None:
         if not jobs:
             return
         for job in jobs:
+            # 原子抢占：只有 status=pending 的任务才能被 claim。
+            updated = (
+                session.query(ProfileEvolutionJob)
+                .filter(
+                    ProfileEvolutionJob.id == job.id,
+                    ProfileEvolutionJob.status == "pending",
+                )
+                .update(
+                    {
+                        ProfileEvolutionJob.status: "running",
+                        ProfileEvolutionJob.started_at: datetime.now(UTC),
+                        ProfileEvolutionJob.attempt_count: ProfileEvolutionJob.attempt_count + 1,
+                    },
+                    synchronize_session=False,
+                )
+            )
+            session.commit()
+            if updated == 0:
+                continue  # 被其他实例抢占，跳过
             _process_single_job(session, job)
 
 
 def _process_single_job(session: Session, job: ProfileEvolutionJob) -> None:
-    """处理单个画像综合任务。"""
-    now = datetime.now(UTC)
-    job.status = "running"
-    job.started_at = now
-    job.attempt_count += 1
-    session.commit()
-
+    """处理单个画像综合任务（调用前已原子 claim 为 running）。"""
     try:
         # Node 1: load_evidence
         evidence = _load_evidence(session, job.user_id)
@@ -126,13 +147,14 @@ def _process_single_job(session: Session, job: ProfileEvolutionJob) -> None:
         job.completed_at = datetime.now(UTC)
         job.error_code = ""
         session.commit()
-        logger.info("Profile evolution completed for user %s", job.user_id)
+        logger.info("Profile evolution completed (job=%s)", job.id[:8])
 
     except Exception as exc:  # noqa: BLE001 — worker must not crash; retry on next tick
         job.status = "failed" if job.attempt_count >= MAX_ATTEMPTS else "pending"
         job.error_code = type(exc).__name__
         session.commit()
-        logger.warning("Profile evolution failed for user %s: %s", job.user_id, exc)
+        # 日志隐私：不记录原始 user_id 和异常正文，只记录 job id 和错误类型。
+        logger.warning("Profile evolution failed (job=%s, error=%s)", job.id[:8], type(exc).__name__)
 
 
 # ── Node 1: load_evidence ────────────────────────────────────────────

@@ -110,12 +110,17 @@ def has_profile_memory_data(session: Session, user_id: str) -> bool:
     if any(session.query(model).filter(model.user_id == user_id).first() is not None for model in models):
         return True
     # 也检查 UserProfile 上的画像扩展字段。
-    from psych_support_bot.infra.db.models import UserProfile
+    from psych_support_bot.infra.db.models import ProfileEvolutionJob, ProfileSnapshot, UserProfile
 
     profile = session.get(UserProfile, user_id)
     if profile and profile.background_json and profile.background_json != "{}":
         return True
-    return bool(profile and profile.understanding_json and profile.understanding_json != "{}")
+    if profile and profile.understanding_json and profile.understanding_json != "{}":
+        return True
+    # 检查异步任务和快照。
+    if session.query(ProfileEvolutionJob).filter(ProfileEvolutionJob.user_id == user_id).first() is not None:
+        return True
+    return session.query(ProfileSnapshot).filter(ProfileSnapshot.user_id == user_id).first() is not None
 
 
 def record_extraction_stats(
@@ -667,7 +672,7 @@ def delete_user_profile_beliefs(session: Session, user_id: str) -> dict[str, int
         session.query(UserTimeProfile).filter(UserTimeProfile.user_id == user_id).delete(synchronize_session=False)
     )
     # 清除 UserProfile 上的画像扩展字段。
-    from psych_support_bot.infra.db.models import UserProfile
+    from psych_support_bot.infra.db.models import ProfileEvolutionJob, ProfileSnapshot, UserProfile
 
     profile = session.get(UserProfile, user_id)
     bg_cleared = 0
@@ -675,6 +680,17 @@ def delete_user_profile_beliefs(session: Session, user_id: str) -> dict[str, int
         profile.background_json = "{}"
         profile.understanding_json = "{}"
         bg_cleared = 1
+    # 清除异步任务和快照。
+    jobs_deleted = (
+        session.query(ProfileEvolutionJob)
+        .filter(ProfileEvolutionJob.user_id == user_id)
+        .delete(synchronize_session=False)
+    )
+    snapshots_deleted = (
+        session.query(ProfileSnapshot)
+        .filter(ProfileSnapshot.user_id == user_id)
+        .delete(synchronize_session=False)
+    )
     return {
         "profile_beliefs": int(beliefs_deleted),
         "profile_belief_events": int(events_deleted),
@@ -682,4 +698,6 @@ def delete_user_profile_beliefs(session: Session, user_id: str) -> dict[str, int
         "profile_intervention_events": int(interventions_deleted),
         "user_time_profiles": int(time_profile_deleted),
         "profile_background_cleared": bg_cleared,
+        "profile_evolution_jobs": int(jobs_deleted),
+        "profile_snapshots": int(snapshots_deleted),
     }

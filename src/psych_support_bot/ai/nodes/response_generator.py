@@ -286,19 +286,23 @@ def _generate_normal_reply(state: GraphState, risk_level: str, no_question_mode:
 
                 if _gs().profile_policy_enabled:
                     from psych_support_bot.infra.db.models import ProfileSnapshot
+                    from psych_support_bot.infra.db.profile_repositories import is_profile_memory_enabled
                     from psych_support_bot.infra.db.session import SessionLocal as _PS
 
+                    snapshot = None
                     with _PS() as _s:
-                        snapshot = (
-                            _s.query(ProfileSnapshot)
-                            .filter(
-                                ProfileSnapshot.user_id == state["user_id"],
-                                ProfileSnapshot.status == "active",
+                        # 用户暂停或清除画像后，不读取快照。
+                        if is_profile_memory_enabled(_s, state["user_id"]):
+                            snapshot = (
+                                _s.query(ProfileSnapshot)
+                                .filter(
+                                    ProfileSnapshot.user_id == state["user_id"],
+                                    ProfileSnapshot.status == "active",
+                                )
+                                .order_by(ProfileSnapshot.version.desc())
+                                .limit(1)
+                                .first()
                             )
-                            .order_by(ProfileSnapshot.version.desc())
-                            .limit(1)
-                            .first()
-                        )
                     if snapshot and snapshot.support_policy_json:
                         import json as _json
 

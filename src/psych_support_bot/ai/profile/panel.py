@@ -105,6 +105,17 @@ def build_profile_panel(session: Session, user_id: str, *, language: str = "zh")
     # 未知维度防御：DIMENSIONS 之外的 section 不该存在（闭集一致性）。
     sections = [s for s in sections if s["dimension"] in DIMENSIONS]
 
+    # 画像关闭时只返回开关状态和 has_data，不返回推断内容。
+    if not enabled:
+        return {
+            "profile_memory": {
+                "enabled": False,
+                "has_data": has_profile_memory_data(session, user_id),
+            },
+            "avatar": {"familiarity": 0, "known_dimensions": []},
+            "sections": [],
+        }
+
     # K3 结构性理解：how_to_be_with_them + open_questions。
     understanding_section = _build_understanding_section(session, user_id, language)
     if understanding_section:

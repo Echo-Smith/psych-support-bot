@@ -240,7 +240,10 @@ def _parse_background(data: dict) -> dict[str, str]:
     raw = data.get("background")
     if not isinstance(raw, dict):
         return {}
-    _BG_KEYS = ("occupation", "family", "living", "medical", "cultural", "religion", "support_network")
+    _BG_KEYS = ("occupation", "family", "living", "cultural", "support_network")
+    # 敏感字段（医疗/宗教/创伤/家族史/物质使用）不做长期保存，
+    # 除非有单独、明确的同意机制。K2 提取结果中过滤掉。
+    _SENSITIVE_BG_KEYS = ("medical", "religion")
     subject = str(raw.get("subject") or "user").strip()
     # 第三方信息（如"我朋友说…"）不写入用户背景。
     if subject == "third_party":

@@ -3051,7 +3051,7 @@
         <div class="profile-memory-setting">
           <div>
             <div class="setting-title">个性化记忆</div>
-            <div class="setting-desc" id="profileMemoryStatus">系统会记住你主动分享的背景和偏好，并在后续对话中参考。不会对你做推断或人格分析。</div>
+            <div class="setting-desc" id="profileMemoryStatus">系统会记住你主动分享的背景和偏好，并从对话中形成内部个性化理解来调整回复方式。不会作为诊断或人格结论展示。</div>
           </div>
           <button class="profile-memory-switch" id="profileMemoryToggle" type="button" role="switch"
             aria-label="个性化记忆" aria-checked="true" onclick="toggleProfileMemory()"></button>
@@ -3468,6 +3468,9 @@
     }
 
     // ========== 个性化记忆面板 ==========
+    function escapeHtml(s) {
+      return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+    }
     async function loadProfilePanel() {
       const wrap = document.getElementById('profileSections');
       const toggle = document.getElementById('profileMemoryToggle');
@@ -3482,7 +3485,7 @@
         toggle.title = memory.enabled ? '关闭记忆' : '开启记忆';
         clearBtn.disabled = !memory.has_data;
         status.textContent = memory.enabled
-          ? '已开启：系统会记住你主动分享的背景和偏好，并在后续对话中参考。不会对你做推断或人格分析。'
+          ? '已开启：系统会记住你主动分享的背景和偏好，并从对话中形成内部个性化理解来调整回复方式。不会作为诊断或人格结论展示。'
           : '已暂停：不会新增或使用记忆；当轮安全识别和已保存记录不受影响。';
         if (!memory.enabled) {
           wrap.innerHTML = '<div class="profile-card"><h3>记忆已暂停</h3><span class="profile-chip">不会从新对话继续记录</span></div>';
@@ -3491,8 +3494,8 @@
         // 只展示用户主动提供的事实（背景信息），不展示推断性画像。
         const bgSection = (data.sections || []).find(s => s.dimension === 'BG');
         if (bgSection && bgSection.items && bgSection.items.length) {
-          wrap.innerHTML = '<div class="profile-card"><h3>' + bgSection.header + '</h3>' +
-            bgSection.items.map(it => '<span class="profile-chip">' + it.label + (it.detail ? ' · ' + it.detail : '') + '</span>').join('') +
+          wrap.innerHTML = '<div class="profile-card"><h3>' + escapeHtml(bgSection.header) + '</h3>' +
+            bgSection.items.map(it => '<span class="profile-chip">' + escapeHtml(it.label) + (it.detail ? ' · ' + escapeHtml(it.detail) : '') + '</span>').join('') +
             '</div>';
         } else {
           wrap.innerHTML = '<div class="profile-card"><h3>还没有记录</h3><span class="profile-chip">在对话中告诉我你的背景和偏好，会在这里显示</span></div>';

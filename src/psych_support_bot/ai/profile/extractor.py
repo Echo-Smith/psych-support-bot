@@ -26,7 +26,7 @@ from dataclasses import dataclass, field
 from sqlalchemy import desc, select
 from sqlalchemy.orm import Session
 
-from psych_support_bot.ai.profile.semantic import run_semantic_extraction, run_verification_judgment
+from psych_support_bot.ai.profile.semantic import run_verification_judgment
 from psych_support_bot.infra.config.settings import get_settings
 from psych_support_bot.infra.db.models import Message
 from psych_support_bot.infra.db.profile_repositories import (
@@ -591,24 +591,15 @@ def _extract_background_info(text: str) -> dict[str, str]:
     # 居住状况
     if _BACKGROUND_LIVING.search(text):
         result["living"] = _BACKGROUND_LIVING.search(text).group(0)[:30]
-    # 躯体健康/用药
-    if _BACKGROUND_MEDICAL.search(text):
-        result["medical"] = _BACKGROUND_MEDICAL.search(text).group(0)[:40]
     # 文化背景
     if _BACKGROUND_CULTURAL.search(text):
         result["cultural"] = _BACKGROUND_CULTURAL.search(text).group(0)[:30]
-    # 宗教信仰
-    if _BACKGROUND_RELIGION.search(text):
-        result["religion"] = _BACKGROUND_RELIGION.search(text).group(0)[:30]
     # 社会支持
     if _BACKGROUND_SUPPORT_NETWORK.search(text):
         result["support_network"] = _BACKGROUND_SUPPORT_NETWORK.search(text).group(0)[:30]
-    # 创伤史（敏感：只在用户主动提及时采集）
-    if _BACKGROUND_TRAUMA.search(text):
-        result["trauma"] = _BACKGROUND_TRAUMA.search(text).group(0)[:40]
-    # 家族精神健康史
-    if _BACKGROUND_FAMILY_HISTORY.search(text):
-        result["family_history"] = _BACKGROUND_FAMILY_HISTORY.search(text).group(0)[:40]
+    # 敏感字段（医疗/宗教/创伤/家族史/物质使用）不做长期保存，
+    # 除非有单独、明确的同意机制。K1 提取结果中过滤掉。
+    # 这些正则仍可用于当轮 LLM 上下文（不持久化）。
     # 物质使用
     if _BACKGROUND_SUBSTANCE.search(text):
         result["substance"] = _BACKGROUND_SUBSTANCE.search(text).group(0)[:30]
@@ -780,25 +771,16 @@ def run_turn_extraction(
     # 回半环（K2 收尾）：上一轮若质询过且本轮是首次回应，先判定应答并
     # 驱动 confirm/reject；质询判定占用本轮时跳过常规语义提取（该轮的
     # 信号属于"对假设的回应"，不是新主题）。
-    verification_handled = run_verification_judgment(
+    # 注：用户确认/否决保持同步（立即生效），K2 语义提取异步化（Worker）。
+    run_verification_judgment(
         session,
         user_id=user_id,
         session_id=session_id,
         user_text=valence_text,
     )
 
-    # K2 LLM 语义提取（独立提交与统计；内部自带节流/危机门控/fail-open）。
-    if not verification_handled:
-        run_semantic_extraction(
-            session,
-            user_id=user_id,
-            session_id=session_id,
-            user_text=valence_text,
-            turn_count=turn_count,
-            risk_level=risk_level,
-            practice_event=bool(exercise_tag),
-            slice_id=slice_id,
-        )
+    # K2 LLM 语义提取已移至异步 Worker（profile_evolution.py）。
+    # 用户明确确认/否决仍同步执行（run_verification_judgment 保留）。
 
 
 def record_turn_interventions(

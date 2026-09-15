@@ -34,6 +34,18 @@ async def lifespan(_: FastAPI):
     _run_migrations()
     init_db()
     get_langfuse()
+
+    # 认证安全检查：AUTH_ENABLED=false 时客户端可声明任意 user_id，
+    # 存在跨用户读写风险。生产环境强制开启。
+    from psych_support_bot.infra.config.settings import get_settings
+    _settings = get_settings()
+    if not _settings.auth_enabled:
+        logger.warning(
+            "AUTH_ENABLED=false: clients can declare arbitrary user_id. "
+            "This is acceptable for local development only. "
+            "Set AUTH_ENABLED=true before deploying to production."
+        )
+
     from psych_support_bot.services.privacy_deletion import deletion_worker
     from psych_support_bot.services.profile_evolution import profile_evolution_worker
 
