@@ -22,7 +22,7 @@ from typing import Any
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, UploadFile, WebSocket, WebSocketDisconnect
 from fastapi.responses import Response, StreamingResponse
 
-from psych_support_bot.api.auth import decode_access_token, require_auth
+from psych_support_bot.api.auth import require_auth
 from psych_support_bot.infra.config.settings import get_settings
 from psych_support_bot.infra.voice.adapter import (
     _MINIMAX_SAMPLE_RATE,
@@ -46,6 +46,7 @@ from psych_support_bot.infra.voice.protocol import (
     LiveRoundEnd,
     LiveSay,
     LiveSentenceEnd,
+    LiveSentenceStart,
     LiveServerEvent,
     LiveTtsProfile,
     parse_live_client_message,
@@ -138,14 +139,14 @@ async def transcribe_audio(request: Request, file: UploadFile, _sub: str = Depen
         text = await asyncio.to_thread(transcribe, audio, filename)
     except VoiceNotConfigured as exc:
         # 配置性未配置 ≠ 上游故障：不计入看门狗 streak
-        raise HTTPException(status_code=503, detail=str(exc)) from exc
+        raise HTTPException(status_code=503, detail="Voice STT is not configured") from exc
     except VoiceProviderError as exc:
         streak = _stt_fail_note(failed=True)
         # 连续失败升格为 ERROR（WhisperLiveKit 教训：静默故障只打 warning，
         # 用户看到的是「永远转不出来」）
         log = logger.error if streak >= 2 else logger.warning
-        log("Voice transcribe failed (streak=%d): %s", streak, exc)
-        raise HTTPException(status_code=502, detail=f"Transcription failed: {exc}") from exc
+        log("Voice transcribe failed (streak=%d, provider_error)", streak)
+        raise HTTPException(status_code=502, detail="Transcription failed") from exc
     _stt_fail_note(failed=False)
     # 服务端 STT 段耗时（前端 /turn_metrics 上报的是含网络的全链差值，
     # 两行日志对账即可切分出「网络+排队」与「上游合成」各占多少）
@@ -202,10 +203,10 @@ async def speak_text(request: Request, payload: dict[str, Any], _sub: str = Depe
     try:
         audio = await asyncio.to_thread(synthesize, text)
     except VoiceNotConfigured as exc:
-        raise HTTPException(status_code=503, detail=str(exc)) from exc
+        raise HTTPException(status_code=503, detail="Voice TTS is not configured") from exc
     except VoiceProviderError as exc:
-        logger.warning("Voice speak failed: %s", exc)
-        raise HTTPException(status_code=502, detail=f"Speech synthesis failed: {exc}") from exc
+        logger.warning("Voice speak failed (provider_error)")
+        raise HTTPException(status_code=502, detail="Speech synthesis failed") from exc
     return Response(content=audio, media_type=tts_media_type())
 
 
@@ -230,9 +231,9 @@ async def speak_stream(request: Request, payload: dict[str, Any], _sub: str = De
     def _gen():
         try:
             yield from synthesize_stream(text)
-        except VoiceProviderError as exc:
+        except VoiceProviderError:
             # 流已开始：状态码不可改，截断表达（前端播放已收到的部分）
-            logger.warning("Voice speak stream interrupted: %s", exc)
+            logger.warning("Voice speak stream interrupted (provider_error)")
 
     return StreamingResponse(_gen(), media_type=tts_media_type())
 
@@ -261,10 +262,10 @@ async def backchannel_audio(index: int, _sub: str = Depends(require_auth)) -> Re
     try:
         audio = await asyncio.to_thread(synthesize, _BACKCHANNEL_PHRASES[index])
     except VoiceNotConfigured as exc:
-        raise HTTPException(status_code=503, detail=str(exc)) from exc
+        raise HTTPException(status_code=503, detail="Voice TTS is not configured") from exc
     except VoiceProviderError as exc:
-        logger.warning("Voice backchannel failed: %s", exc)
-        raise HTTPException(status_code=502, detail=f"Backchannel synthesis failed: {exc}") from exc
+        logger.warning("Voice backchannel failed (provider_error)")
+        raise HTTPException(status_code=502, detail="Backchannel synthesis failed") from exc
     return Response(content=audio, media_type=tts_media_type())
 
 
@@ -341,11 +342,15 @@ async def _tts_live_mimo(websocket: WebSocket, config, text_q: asyncio.Queue, re
                 await _send_event(websocket, LiveRoundEnd())
                 return
             try:
-                await pump_say(item)
-                await _send_event(websocket, LiveSentenceEnd())
-            except VoiceProviderError as exc:
-                logger.warning("TTS live mimo: %s", exc)
-                await _send_event(websocket, LiveError(detail=str(exc)[:200]))
+                # Legacy internal callers may still enqueue bare text.
+                utterance = item if isinstance(item, LiveSay) else LiveSay(text=item)
+                identity = {"round_id": utterance.round_id, "sentence_id": utterance.sentence_id}
+                await _send_event(websocket, LiveSentenceStart(**identity))
+                await pump_say(utterance.text)
+                await _send_event(websocket, LiveSentenceEnd(**identity))
+            except VoiceProviderError:
+                logger.warning("TTS live mimo failed (provider_error)")
+                await _send_event(websocket, LiveError(detail="Speech synthesis failed"))
                 await _send_event(websocket, LiveRoundEnd())
                 return
     except WebSocketDisconnect:
@@ -359,13 +364,26 @@ async def _tts_live_mimo(websocket: WebSocket, config, text_q: asyncio.Queue, re
 
 @ws_router.websocket("/tts/live")
 async def tts_live(websocket: WebSocket, token: str = Query(default="")):
+    from psych_support_bot.api.auth import validate_account_token
+
     settings = get_settings()
+    user_id = websocket.query_params.get("user_id", "")
     if settings.auth_enabled:
         try:
-            decode_access_token(token)
+            user_id = validate_account_token(token)
         except Exception:  # noqa: BLE001 —— 任何签发/解码/过期错误一律拒绝（fail-closed）
             await websocket.close(code=4401)
             return
+
+    from psych_support_bot.api.privacy import check_privacy_consent
+    from psych_support_bot.infra.db.session import SessionLocal
+
+    try:
+        with SessionLocal() as session:
+            check_privacy_consent(session, user_id)
+    except HTTPException:
+        await websocket.close(code=4403)
+        return
 
     config = get_tts_config()
     await websocket.accept()
@@ -388,7 +406,7 @@ async def tts_live(websocket: WebSocket, token: str = Query(default="")):
                 if isinstance(msg, LiveSay):
                     text = msg.text.strip()
                     if text:
-                        await text_q.put(text)
+                        await text_q.put(msg.model_copy(update={"text": text}))
                 elif isinstance(msg, LiveEnd):
                     await text_q.put(None)
                     return
@@ -449,7 +467,7 @@ async def tts_live(websocket: WebSocket, token: str = Query(default="")):
                 started = json.loads(await asyncio.wait_for(mmws.recv(), timeout=15))
             if started.get("event") != "task_started":
                 base = started.get("base_resp") or {}
-                logger.warning("TTS live task_start failed: %s", base)
+                logger.warning("TTS live task_start failed (status=%s)", base.get("status_code"))
                 await _send_event(websocket, LiveError(detail=f"task_start failed: {base.get('status_code')}"))
                 await _send_event(websocket, LiveRoundEnd())
                 return
@@ -457,6 +475,10 @@ async def tts_live(websocket: WebSocket, token: str = Query(default="")):
             reader_task = asyncio.ensure_future(read_client())
             live_tasks.add(reader_task)
             reader_task.add_done_callback(live_tasks.discard)
+
+            sentence_complete = asyncio.Event()
+            sentence_complete.set()
+            active_identity: dict = {}
 
             async def client_to_mm() -> None:
                 # 客户端句子 → MiniMax task_continue；end → task_finish；
@@ -468,11 +490,16 @@ async def tts_live(websocket: WebSocket, token: str = Query(default="")):
                         await mmws.send(json.dumps({"event": "task_cancel"}))
                         return
                     if item is None:
+                        await sentence_complete.wait()
                         if not sent_finish:
                             await mmws.send(json.dumps({"event": "task_finish"}))
                             sent_finish = True
                         return
-                    await mmws.send(json.dumps({"event": "task_continue", "text": item}))
+                    await sentence_complete.wait()
+                    sentence_complete.clear()
+                    active_identity.update(round_id=item.round_id, sentence_id=item.sentence_id)
+                    await _send_event(websocket, LiveSentenceStart(**active_identity))
+                    await mmws.send(json.dumps({"event": "task_continue", "text": item.text}))
 
             ct = asyncio.ensure_future(client_to_mm())
             live_tasks.add(ct)
@@ -483,10 +510,10 @@ async def tts_live(websocket: WebSocket, token: str = Query(default="")):
                 base = msg.get("base_resp") or {}
                 status = base.get("status_code", 0)
                 if status != 0:
-                    logger.warning("TTS live upstream error %s: %s", status, base.get("status_msg"))
+                    logger.warning("TTS live upstream error (status=%s)", status)
                     # 错误显式下发（round_end 前）：前端据此把剩余句子转投 HTTP
                     # 队列续读——上游半途故障不再表现为"音频静默消失"
-                    await _send_event(websocket, LiveError(detail=f"upstream {status}: {base.get('status_msg')}"))
+                    await _send_event(websocket, LiveError(detail=f"Speech synthesis failed ({status})"))
                     await _send_event(websocket, LiveRoundEnd())
                     return
                 event = msg.get("event")
@@ -498,14 +525,15 @@ async def tts_live(websocket: WebSocket, token: str = Query(default="")):
                 if msg.get("is_final"):
                     # 句级边界：前端以此切分播放单元（sentence_start/end 事件
                     # 名沿用语义）。会话不终态，下一句 task_continue 继续喂。
-                    await _send_event(websocket, LiveSentenceEnd())
+                    await _send_event(websocket, LiveSentenceEnd(**active_identity))
+                    sentence_complete.set()
                 if event in ("task_finished", "task_failed"):
                     await _send_event(websocket, LiveRoundEnd())
                     return
     except WebSocketDisconnect:
         logger.info("TTS live: client disconnected")
-    except Exception as exc:
-        logger.warning("TTS live session ended: %s", exc, exc_info=True)
+    except Exception:  # noqa: BLE001 - disconnects and provider failures end this isolated session
+        logger.warning("TTS live session ended")
     finally:
         pending = list(live_tasks)
         for task in pending:

@@ -5,10 +5,10 @@
 // 交叉校验：tests/frontend/protocol.test.mjs 读取 schema 文件比对本文常量。
 
 export const CLIENT = { SAY: 'say', END: 'end', ABORT: 'abort' };
-export const SERVER = { READY: 'ready', SENTENCE_END: 'sentence_end', ROUND_END: 'round_end', ERROR: 'error' };
+export const SERVER = { READY: 'ready', SENTENCE_START: 'sentence_start', SENTENCE_END: 'sentence_end', ROUND_END: 'round_end', ERROR: 'error' };
 
 // 客户端 → 服务端文本帧构造器
-export const say = (text) => ({ type: CLIENT.SAY, text });
+export const say = (text, round_id = '', sentence_id = 0) => ({ type: CLIENT.SAY, text, round_id, sentence_id });
 export const end = () => ({ type: CLIENT.END });
 export const abort = () => ({ type: CLIENT.ABORT });
 
@@ -18,6 +18,7 @@ export const ready = (sampleRate, tts) => ({
   audio: { format: 'pcm', sample_rate: sampleRate },
   ...(tts ? { tts } : {}), // 可选 TTS 延迟画像 {first_audio_timeout_ms}：复刻音色下发，预置音色省略
 });
-export const sentenceEnd = () => ({ type: SERVER.SENTENCE_END });
+export const sentenceStart = (round_id = '', sentence_id = 0) => ({ type: SERVER.SENTENCE_START, round_id, sentence_id });
+export const sentenceEnd = (round_id = '', sentence_id = 0) => ({ type: SERVER.SENTENCE_END, round_id, sentence_id });
 export const roundEnd = () => ({ type: SERVER.ROUND_END });
 export const error = (detail) => ({ type: SERVER.ERROR, detail });

@@ -42,6 +42,16 @@
           "text": {
             "title": "Text",
             "type": "string"
+          },
+          "round_id": {
+            "default": "",
+            "title": "Round Id",
+            "type": "string"
+          },
+          "sentence_id": {
+            "default": 0,
+            "title": "Sentence Id",
+            "type": "integer"
           }
         },
         "required": [
@@ -164,9 +174,42 @@
             "default": "sentence_end",
             "title": "Type",
             "type": "string"
+          },
+          "round_id": {
+            "default": "",
+            "title": "Round Id",
+            "type": "string"
+          },
+          "sentence_id": {
+            "default": 0,
+            "title": "Sentence Id",
+            "type": "integer"
           }
         },
         "title": "LiveSentenceEnd",
+        "type": "object"
+      },
+      "LiveSentenceStart": {
+        "description": "Identifies the text associated with the following PCM frames.",
+        "properties": {
+          "type": {
+            "const": "sentence_start",
+            "default": "sentence_start",
+            "title": "Type",
+            "type": "string"
+          },
+          "round_id": {
+            "default": "",
+            "title": "Round Id",
+            "type": "string"
+          },
+          "sentence_id": {
+            "default": 0,
+            "title": "Sentence Id",
+            "type": "integer"
+          }
+        },
+        "title": "LiveSentenceStart",
         "type": "object"
       },
       "LiveTtsProfile": {
@@ -189,13 +232,17 @@
         "error": "#/$defs/LiveError",
         "ready": "#/$defs/LiveReady",
         "round_end": "#/$defs/LiveRoundEnd",
-        "sentence_end": "#/$defs/LiveSentenceEnd"
+        "sentence_end": "#/$defs/LiveSentenceEnd",
+        "sentence_start": "#/$defs/LiveSentenceStart"
       },
       "propertyName": "type"
     },
     "oneOf": [
       {
         "$ref": "#/$defs/LiveReady"
+      },
+      {
+        "$ref": "#/$defs/LiveSentenceStart"
       },
       {
         "$ref": "#/$defs/LiveSentenceEnd"

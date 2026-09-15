@@ -32,7 +32,7 @@ test('服务端事件常量与 schema 一致', () => {
 });
 
 test('构造器产出的线格式与服务端模型序列化逐字一致', () => {
-  assert.deepEqual(proto.say('你好'), { type: 'say', text: '你好' });
+  assert.deepEqual(proto.say('你好'), { type: 'say', text: '你好', round_id: '', sentence_id: 0 });
   assert.deepEqual(proto.end(), { type: 'end' });
   assert.deepEqual(proto.abort(), { type: 'abort' });
   assert.deepEqual(proto.ready(24000), { type: 'ready', audio: { format: 'pcm', sample_rate: 24000 } });
@@ -40,7 +40,7 @@ test('构造器产出的线格式与服务端模型序列化逐字一致', () =>
     proto.ready(24000, { first_audio_timeout_ms: 20000 }),
     { type: 'ready', audio: { format: 'pcm', sample_rate: 24000 }, tts: { first_audio_timeout_ms: 20000 } },
   );
-  assert.deepEqual(proto.sentenceEnd(), { type: 'sentence_end' });
+  assert.deepEqual(proto.sentenceEnd(), { type: 'sentence_end', round_id: '', sentence_id: 0 });
   assert.deepEqual(proto.roundEnd(), { type: 'round_end' });
   assert.deepEqual(proto.error('boom'), { type: 'error', detail: 'boom' });
 });

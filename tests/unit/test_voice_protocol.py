@@ -73,7 +73,7 @@ def test_outgoing_wire_shapes_unchanged() -> None:
         tts={"first_audio_timeout_ms": 20000},
     ).model_dump()
     assert clone_ready["tts"] == {"first_audio_timeout_ms": 20000}
-    assert LiveSentenceEnd().model_dump() == {"type": "sentence_end"}
+    assert LiveSentenceEnd().model_dump() == {"type": "sentence_end", "round_id": "", "sentence_id": 0}
     assert LiveRoundEnd().model_dump() == {"type": "round_end"}
     assert LiveError(detail="boom").model_dump() == {"type": "error", "detail": "boom"}
 

@@ -290,3 +290,76 @@ test('ttsLiveRound 整轮：say 全文+end、重置字幕预算、round_end 后 
   await p;
   assert.equal(calls.stopAll >= 1, true);
 });
+
+test('burst sentences reuse one connecting socket and preserve ordered IDs', async () => {
+  const before = FakeWS.created.length;
+  const { deps } = makeDeps();
+  const live = createTtsLive(deps);
+  live.ttsLiveSay('一。'); live.ttsLiveSay('二。'); live.ttsLiveSay('三。');
+  const done = live.ttsLiveEndRound();
+  const ws = await live.ttsLiveEnsure();
+  await Promise.resolve();
+  assert.equal(FakeWS.created.length - before, 1);
+  const frames = ws.sent.map(JSON.parse);
+  assert.deepEqual(frames.map(f => f.type), ['say', 'say', 'say', 'end']);
+  assert.deepEqual(frames.slice(0, 3).map(f => f.sentence_id), [1, 2, 3]);
+  ws.serverJson({ type: 'round_end' }); await done;
+});
+
+test('second round sends its own end and cancelled handshake cannot take ownership', async () => {
+  const { deps } = makeDeps();
+  const live = createTtsLive(deps);
+  live.ttsLiveSay('旧句。');
+  const old = FakeWS.created.at(-1);
+  const oldDone = live.ttsLiveEndRound();
+  live.ttsLiveBeginTurn();
+  assert.equal(live.state.ended, false);
+  assert.equal(live.state.roundStarted, false);
+  live.ttsLiveSay('新句。');
+  const done = live.ttsLiveEndRound();
+  const ws = await live.ttsLiveEnsure(); await Promise.resolve();
+  assert.notEqual(ws, old);
+  assert.deepEqual(ws.sent.map(s => JSON.parse(s).type), ['say', 'end']);
+  ws.serverJson({ type: 'round_end' });
+  await Promise.all([oldDone, done]);
+});
+
+test('caption uses first PCM start before sentence_end, one caption per tagged sentence', async () => {
+  const { deps } = makeDeps(); const captions = [];
+  deps.ui.playSentence = c => captions.push(c);
+  const live = createTtsLive(deps); live.ttsLiveBeginTurn();
+  live.ttsLiveSay('正在说的话。');
+  const ws = await openPcmSession(live);
+  const frame = JSON.parse(ws.sent[0]);
+  ws.serverJson({ type: 'sentence_start', round_id: frame.round_id, sentence_id: frame.sentence_id });
+  ws.serverBinary(4800); ws.serverBinary(4800);
+  assert.equal(captions.length, 1);
+  assert.equal(captions[0].text, frame.text);
+  assert.equal(captions[0].start, live.state.sentenceStart);
+  ws.serverJson({ type: 'sentence_end', round_id: frame.round_id, sentence_id: frame.sentence_id });
+  assert.equal(captions.length, 1);
+  assert.deepEqual(live.state.pendingTexts, []);
+});
+
+test('round_end followed by close waits for actual playback drain', async () => {
+  let drain; let completed = false;
+  const { deps } = makeDeps(); deps.pcm.drained = () => new Promise(r => { drain = r; });
+  const live = createTtsLive(deps); const ws = await openPcmSession(live);
+  live.ttsLiveSay('长回复。');
+  const done = live.ttsLiveEndRound().then(() => { completed = true; });
+  ws.serverJson({ type: 'round_end' }); ws.close();
+  await Promise.resolve(); assert.equal(completed, false);
+  drain(); await done; assert.equal(completed, true);
+});
+
+test('late ready updates first-audio deadline; first PCM switches to activity timeout', async () => {
+  const { scheduled, timers } = makeFakeTimers(); const { deps } = makeDeps({ timers });
+  const live = createTtsLive(deps); live.ttsLiveSay('慢首音。');
+  const done = live.ttsLiveEndRound(); const ws = await live.ttsLiveEnsure();
+  ws.serverJson({ type: 'ready', audio: { format: 'pcm', sample_rate: 24000 }, tts: { first_audio_timeout_ms: 20000 } });
+  assert.ok(scheduled.some(t => t.fn && t.ms === 20000));
+  ws.serverBinary(4800);
+  assert.ok(scheduled.some(t => t.fn && t.ms === 25000));
+  assert.equal(scheduled.some(t => t.fn && t.ms === 20000), false);
+  ws.serverJson({ type: 'round_end' }); await done;
+});

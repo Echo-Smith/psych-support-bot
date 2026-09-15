@@ -30,6 +30,8 @@ class LiveSay(BaseModel):
 
     type: Literal["say"] = "say"
     text: str
+    round_id: str = ""
+    sentence_id: int = 0
 
 
 class LiveEnd(BaseModel):
@@ -79,11 +81,21 @@ class LiveReady(BaseModel):
     tts: LiveTtsProfile | None = None
 
 
+class LiveSentenceStart(BaseModel):
+    """Identifies the text associated with the following PCM frames."""
+
+    type: Literal["sentence_start"] = "sentence_start"
+    round_id: str = ""
+    sentence_id: int = 0
+
+
 class LiveSentenceEnd(BaseModel):
     """当前句音频边界：MiMo=我们的 say 粒度（每句合成流末尾）；
     MiniMax=is_final（服务端攒句）。前端以此驱动字幕铺字与下一句入队。"""
 
     type: Literal["sentence_end"] = "sentence_end"
+    round_id: str = ""
+    sentence_id: int = 0
 
 
 class LiveRoundEnd(BaseModel):
@@ -102,7 +114,7 @@ class LiveError(BaseModel):
 
 
 LiveServerEvent = Annotated[
-    LiveReady | LiveSentenceEnd | LiveRoundEnd | LiveError,
+    LiveReady | LiveSentenceStart | LiveSentenceEnd | LiveRoundEnd | LiveError,
     Field(discriminator="type"),
 ]
 
