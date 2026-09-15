@@ -1,9 +1,10 @@
-"""JWT 认证基础设施：密码哈希、token 签发/校验、路由守卫。
+"""Authentication primitives: password hashing, short access tokens, guards.
 
 设计要点：
 - 密码哈希用标准库 pbkdf2_hmac（SHA-256，600k 迭代），零新增重依赖；
   存储格式 ``pbkdf2_sha256$<iterations>$<salt_hex>$<hash_hex>``。
-- JWT 用 pyjwt（HS256），claims: sub / exp / iat，TTL 7 天。
+- JWT access tokens use the immutable internal account ID as ``sub`` and carry
+  explicit issuer, audience, token type, JWT ID, and account token version.
 - require_auth 守卫挂在各数据路由上：AUTH_ENABLED=false 时是 no-op
   （面板登录 UI 尚未上线，本地开发与既有测试不携带 token），
   true 时无/坏 token 一律 401。user_id 的权威来源是 JWT sub——
@@ -16,15 +17,16 @@ import hashlib
 import hmac
 import secrets
 from datetime import UTC, datetime, timedelta
+from uuid import uuid4
 
 import jwt as pyjwt
 from fastapi import Depends, HTTPException, Request
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
+from psych_support_bot.api.user_id import normalize_user_id
 from psych_support_bot.infra.config.settings import get_settings
 
 PBKDF2_ITERATIONS = 600_000
-TOKEN_TTL_DAYS = 7
 _ALGORITHM = "HS256"
 
 
@@ -45,28 +47,82 @@ def verify_password(password: str, stored: str) -> bool:
         return False
 
 
-def create_access_token(user_id: str) -> str:
+def token_secret_hash(secret: str) -> str:
+    """Hash a high-entropy token secret for lookup-safe persistence."""
+    return hashlib.sha256(secret.encode()).hexdigest()
+
+
+def create_access_token(user_id: str, *, account_version: int | None = None) -> str:
     settings = get_settings()
     now = datetime.now(UTC)
-    payload = {"sub": user_id, "iat": now, "exp": now + timedelta(days=TOKEN_TTL_DAYS)}
+    payload = {
+        "sub": user_id,
+        "iss": settings.auth_token_issuer,
+        "aud": settings.auth_token_audience,
+        "typ": "access",
+        "jti": uuid4().hex,
+        "iat": now,
+        "nbf": now,
+        "exp": now + timedelta(minutes=settings.auth_access_token_minutes),
+        "account_version": account_version if account_version is not None else _account_version(user_id),
+    }
     return pyjwt.encode(payload, settings.jwt_secret_key, algorithm=_ALGORITHM)
+
+
+def _account_version(user_id: str) -> int | None:
+    from psych_support_bot.infra.db.models import User
+    from psych_support_bot.infra.db.session import SessionLocal
+
+    with SessionLocal() as session:
+        # Filtered query (not primary-key get): the row is only ever read back
+        # when its own id column equals the requested subject.
+        user = session.query(User).filter(User.id == user_id).first()
+        return user.token_version if user and user.status == "active" else None
+
+
+def _decode_access_payload(token: str) -> dict:
+    settings = get_settings()
+    try:
+        payload = pyjwt.decode(
+            token,
+            settings.jwt_secret_key,
+            algorithms=[_ALGORITHM],
+            audience=settings.auth_token_audience,
+            issuer=settings.auth_token_issuer,
+            options={"require": ["sub", "iss", "aud", "typ", "jti", "iat", "nbf", "exp"]},
+        )
+    except pyjwt.PyJWTError as exc:
+        raise HTTPException(status_code=401, detail="Invalid or expired token") from exc
+    if payload.get("typ") != "access":
+        raise HTTPException(status_code=401, detail="Invalid or expired token")
+    return payload
+
+
+def validate_account_token(token: str) -> str:
+    payload = _decode_access_payload(token)
+    user_id = normalize_user_id(str(payload["sub"]), field="token subject")
+    version = _account_version(user_id)
+    if not version or payload.get("account_version") != version:
+        raise HTTPException(status_code=401, detail="Account credentials are no longer valid; please sign in again.")
+    return user_id
 
 
 def decode_access_token(token: str) -> str:
     """校验并返回 sub（user_id）；任何失败统一以 401 呈现，不泄漏原因细节。"""
-    settings = get_settings()
-    try:
-        payload = pyjwt.decode(token, settings.jwt_secret_key, algorithms=[_ALGORITHM])
-    except pyjwt.PyJWTError as exc:
-        raise HTTPException(status_code=401, detail="Invalid or expired token") from exc
-    sub = payload.get("sub")
-    if not sub:
-        raise HTTPException(status_code=401, detail="Invalid or expired token")
-    return str(sub)
+    return normalize_user_id(str(_decode_access_payload(token)["sub"]), field="token subject")
 
 
 # auto_error=False 让缺失头也走我们的统一 401 JSON，而非 FastAPI 默认 403。
 _bearer_scheme = HTTPBearer(auto_error=False)
+
+
+def require_account_auth(
+    credentials: HTTPAuthorizationCredentials | None = Depends(_bearer_scheme),
+) -> str:
+    """Always require a valid account token for account-management endpoints."""
+    if credentials is None or not credentials.credentials:
+        raise HTTPException(status_code=401, detail="Missing bearer token")
+    return validate_account_token(credentials.credentials)
 
 
 def require_auth(
@@ -80,9 +136,7 @@ def require_auth(
     settings = get_settings()
     if not settings.auth_enabled:
         return ""
-    if credentials is None or not credentials.credentials:
-        raise HTTPException(status_code=401, detail="Missing bearer token")
-    return decode_access_token(credentials.credentials)
+    return require_account_auth(credentials)
 
 
 def request_user_id(request: Request, declared: str | None = None) -> str:
@@ -101,11 +155,11 @@ def request_user_id(request: Request, declared: str | None = None) -> str:
     if not settings.auth_enabled:
         if not declared:
             raise HTTPException(status_code=422, detail="user_id is required.")
-        return declared
+        return normalize_user_id(declared)
     auth_header = request.headers.get("Authorization", "")
     if not auth_header.startswith("Bearer "):
         raise HTTPException(status_code=401, detail="Missing bearer token")
-    current = decode_access_token(auth_header.removeprefix("Bearer ").strip())
+    current = validate_account_token(auth_header.removeprefix("Bearer ").strip())
     if declared and declared != current:
         raise HTTPException(status_code=403, detail="User ID does not match the authenticated identity.")
     return current
