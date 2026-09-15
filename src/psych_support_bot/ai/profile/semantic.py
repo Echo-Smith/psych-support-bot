@@ -27,6 +27,7 @@ from psych_support_bot.ai.profile.anchors import all_anchors
 from psych_support_bot.ai.profile.display_dict import friendly_label
 from psych_support_bot.infra.config.settings import get_settings
 from psych_support_bot.infra.db.profile_repositories import (
+    is_profile_memory_enabled,
     list_active_beliefs,
     record_claim,
     record_extraction_stats,
@@ -235,6 +236,8 @@ def run_verification_judgment(
     返回 True = 本轮已被质询判定占用（调用方跳过常规语义提取）。
     fail-open：任何异常只记 error 统计，绝不抛出。
     """
+    if not is_profile_memory_enabled(session, user_id):
+        return False
     from psych_support_bot.infra.db.profile_repositories import (
         confirm_belief,
         get_belief,
@@ -292,10 +295,10 @@ def run_verification_judgment(
         )
         stats.claims_out = 1 if verdict in {"confirm", "deny"} else 0
         session.commit()
-        logger.info("Verification judged: user=%s belief=%s verdict=%s", user_id, belief.key, verdict)
+        logger.info("Profile verification completed: verdict=%s", verdict)
         return True
-    except Exception:
-        logger.warning("Verification judgment failed for user %s; skipping.", user_id, exc_info=True)
+    except Exception:  # noqa: BLE001 - verification is optional and fail-open
+        logger.warning("Profile verification failed; skipping")
         session.rollback()
         try:
             record_extraction_stats(
@@ -445,15 +448,13 @@ def _should_llm_extract(
         existing_conf.get(key, 0.0) >= _SIGNAL_MATURE_CONFIDENCE for key in topics
     )
     logger.info(
-        "profile extraction gate: value=%.2f topics=%d mechanism=%s novel_mechanism=%s "
-        "covered=%s base=%s user=%s turn=%s",
+        "profile extraction gate: value=%.2f topics=%d mechanism_count=%d novel_count=%d covered=%s base=%s turn=%s",
         value,
         topic_hits,
-        mechanism_keys,
-        novel_mechanism,
+        len(mechanism_keys),
+        len(novel_mechanism),
         topics_mature_covered,
         base,
-        user_id,
         turn_count,
     )
     # 高价值门：新颖机制信号优先，与画像成熟度无关（新机制永远值得提取）。
@@ -481,6 +482,8 @@ def run_semantic_extraction(
 
     fail-open：LLM 不可用 / 解析失败 / 落库异常，只记 error 统计，绝不抛出。
     """
+    if not is_profile_memory_enabled(session, user_id):
+        return
     settings = get_settings()
     if not settings.profile_llm_extraction_enabled:
         return
@@ -536,8 +539,8 @@ def run_semantic_extraction(
             )
         stats.claims_out = len(claims)
         session.commit()
-    except Exception:
-        logger.warning("Semantic profile extraction failed for user %s; skipping.", user_id, exc_info=True)
+    except Exception:  # noqa: BLE001 - semantic extraction must not block the response
+        logger.warning("Semantic profile extraction failed; skipping")
         session.rollback()
         try:
             record_extraction_stats(

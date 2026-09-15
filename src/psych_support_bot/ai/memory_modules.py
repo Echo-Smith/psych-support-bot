@@ -260,8 +260,8 @@ def render_record_layers(
                 )
             else:
                 rendered = module.render(session, user_id, language=language, char_budget=DEFAULT_MODULE_BUDGET)
-        except Exception:
-            logger.warning("Memory module %r failed to render; skipping layer.", module.name, exc_info=True)
+        except Exception:  # noqa: BLE001 - memory modules are isolated and fail-open
+            logger.warning("Memory module %r failed to render; skipping layer", module.name)
             continue
         if rendered:
             parts.append(rendered)

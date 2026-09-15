@@ -12,6 +12,17 @@
   <meta name="apple-mobile-web-app-title" content="心理助手">
   <meta name="theme-color" content="#f5f5f7">
   <link rel="manifest" href="/static/manifest.webmanifest">
+  <script>
+    // 主题引导：首屏绘制前应用已存偏好，避免深色用户看到白闪。
+    // 键名与主脚本 STORE_KEYS.THEME 一致；主脚本加载后由 applyTheme 接管。
+    (function () {
+      var pref = localStorage.getItem('np_theme') || 'system';
+      var dark = pref === 'dark' || (pref === 'system' && matchMedia('(prefers-color-scheme: dark)').matches);
+      document.documentElement.setAttribute('data-theme', dark ? 'dark' : 'light');
+      var meta = document.querySelector('meta[name="theme-color"]');
+      if (meta) meta.content = dark ? '#000000' : '#f5f5f7';
+    })();
+  </script>
   <style>
     /* ════════════════════════════════════════════════════════════
        Apple Liquid Glass 设计令牌
@@ -21,6 +32,7 @@
        JS 内联样式仍引用 --card/--muted/--soft/--text。
        ════════════════════════════════════════════════════════════ */
     :root {
+      color-scheme: light;
       /* 中性骨架 */
       --bg: #f5f5f7;
       --surface: #ffffff;
@@ -2539,6 +2551,19 @@
     }
     /* ========== Profile panel (K3b) ========== */
     .profile-hero { display: flex; align-items: center; gap: 14px; margin-bottom: 14px; }
+    .profile-memory-setting { display: flex; align-items: center; justify-content: space-between; gap: 16px;
+      padding: 0 0 14px; margin-bottom: 14px; border-bottom: 1px solid var(--hairline); }
+    .profile-memory-setting .setting-title { font-size: 15px; font-weight: 650; }
+    .profile-memory-setting .setting-desc { margin-top: 3px; font-size: 12px; line-height: 1.55; color: var(--text-2); }
+    .profile-memory-switch { width: 50px; height: 30px; padding: 3px; border: 0; border-radius: 999px;
+      background: #cbd6d0; cursor: pointer; flex: none; transition: background .2s var(--ease-out-quart); }
+    .profile-memory-switch::after { content: ''; display: block; width: 24px; height: 24px; border-radius: 50%;
+      background: #fff; box-shadow: 0 1px 4px rgba(0,0,0,.2); transition: transform .2s var(--ease-out-quart); }
+    .profile-memory-switch[aria-checked="true"] { background: var(--accent); }
+    .profile-memory-switch[aria-checked="true"]::after { transform: translateX(20px); }
+    .profile-memory-switch:focus-visible { outline: 3px solid rgba(76, 126, 104, .28); outline-offset: 2px; }
+    .profile-memory-switch:disabled { cursor: wait; opacity: .55; }
+    .profile-avatar.paused { filter: grayscale(1); opacity: .55; }
     .profile-avatar { width: 64px; height: 64px; border-radius: 50%; flex: none; position: relative;
       background: radial-gradient(circle at 35% 35%, #cfe3d8, #9ec7b4);
       box-shadow: inset 0 -6px 0 rgba(0,0,0,.06); }
@@ -2553,6 +2578,216 @@
     .profile-card h3 { margin: 0 0 8px; font-size: 14px; color: #3d5a4c; }
     .profile-chip { display: inline-block; background: #eef5f1; border-radius: 999px; padding: 4px 12px; margin: 0 6px 6px 0; font-size: 13px; }
     .profile-note { font-size: 12px; color: #8aa094; margin-top: 10px; }
+
+    /* ════════════════════════════════════════════════════════════
+       深色主题（html[data-theme="dark"]）
+       只覆盖令牌与硬编码色；语音条的绿/橙/白状态色保持不变。
+       ════════════════════════════════════════════════════════════ */
+    :root[data-theme="dark"] {
+      color-scheme: dark;
+
+      --bg: #000000;
+      --surface: #1c1c1e;
+      --hover: #2c2c2e;
+      --text: #f5f5f7;
+      --text-body: #d1d1d6;
+      --text-2: #aeaeb2;
+      --text-3: #8e8e93;
+      --text-4: #636366;
+      --faint: #3a3a3c;
+      --hairline: rgba(255, 255, 255, 0.12);
+      --track: #3a3a3c;
+
+      --accent: #0a84ff;
+      --accent-link: #409cff;
+      --heat: #ff9f0a;
+      --heat-bg: rgba(255, 159, 10, 0.16);
+      --alarm: #ff453a;
+      --alarm-text: #ff6961;
+
+      --sh-card: 0 1px 2px rgba(0, 0, 0, 0.3), 0 8px 24px rgba(0, 0, 0, 0.35);
+      --sh-panel: 0 1px 3px rgba(0, 0, 0, 0.3), 0 14px 40px rgba(0, 0, 0, 0.4);
+      --sh-lift: 0 12px 32px rgba(0, 0, 0, 0.5);
+      --sh-cta: 0 20px 54px rgba(10, 132, 255, 0.3);
+      --sh-overlay: 0 2px 8px rgba(0, 0, 0, 0.4), 0 30px 80px rgba(0, 0, 0, 0.5);
+
+      --safe: #30d158;
+      --warn: #ffb340;
+    }
+
+    /* 玻璃导航：深底半透明 + 白发丝线 */
+    :root[data-theme="dark"] .tabs {
+      border-color: rgba(255, 255, 255, 0.1);
+      box-shadow: 0 1px 2px rgba(0, 0, 0, 0.3), 0 8px 24px rgba(0, 0, 0, 0.4);
+      background: rgba(28, 28, 30, 0.92);
+    }
+
+    @supports (backdrop-filter: blur(20px)) or (-webkit-backdrop-filter: blur(20px)) {
+      :root[data-theme="dark"] .tabs {
+        background: rgba(28, 28, 30, 0.72);
+      }
+    }
+
+    :root[data-theme="dark"] .tab.active,
+    :root[data-theme="dark"] .tools-seg button.active {
+      box-shadow: 0 1px 3px rgba(0, 0, 0, 0.5);
+    }
+
+    :root[data-theme="dark"] .tools-seg {
+      background: rgba(255, 255, 255, 0.08);
+    }
+
+    /* 选中态「深底白字」在深色下反转为「浅底黑字」 */
+    :root[data-theme="dark"] .type-chip {
+      border-color: rgba(255, 255, 255, 0.14);
+    }
+
+    :root[data-theme="dark"] .type-chip:hover {
+      border-color: rgba(255, 255, 255, 0.3);
+    }
+
+    :root[data-theme="dark"] .type-chip.active {
+      color: var(--bg);
+    }
+
+    :root[data-theme="dark"] .step-row.done .step-num {
+      color: var(--bg);
+    }
+
+    /* 黑 alpha 填充 → 白 alpha */
+    :root[data-theme="dark"] .tl-tag,
+    :root[data-theme="dark"] .risk-pill,
+    :root[data-theme="dark"] .risk-low,
+    :root[data-theme="dark"] .risk-tag,
+    :root[data-theme="dark"] .practice-badge,
+    :root[data-theme="dark"] .step-num,
+    :root[data-theme="dark"] .rb-band,
+    :root[data-theme="dark"] .paywall-tag,
+    :root[data-theme="dark"] .md code,
+    :root[data-theme="dark"] .ex-history-title .count,
+    :root[data-theme="dark"] .history-row .h-src {
+      background: rgba(255, 255, 255, 0.1);
+    }
+
+    :root[data-theme="dark"] .reset-btn:hover {
+      background: rgba(255, 255, 255, 0.1);
+    }
+
+    /* 黑发丝线边框 → 白发丝线 */
+    :root[data-theme="dark"] button.btn.btn-secondary,
+    :root[data-theme="dark"] .btn-outline,
+    :root[data-theme="dark"] #muteBtn {
+      border-color: rgba(255, 255, 255, 0.16);
+    }
+
+    :root[data-theme="dark"] button.btn.btn-secondary {
+      box-shadow: none;
+    }
+
+    :root[data-theme="dark"] .chip {
+      border-color: rgba(255, 255, 255, 0.14);
+      box-shadow: none;
+    }
+
+    :root[data-theme="dark"] .chip:hover {
+      border-color: rgba(255, 255, 255, 0.3);
+    }
+
+    :root[data-theme="dark"] .input-wrap input[type=text],
+    :root[data-theme="dark"] .ex-response-field,
+    :root[data-theme="dark"] .note-field {
+      border-color: rgba(255, 255, 255, 0.18);
+    }
+
+    :root[data-theme="dark"] .gr-slot {
+      border-color: rgba(255, 255, 255, 0.16);
+    }
+
+    :root[data-theme="dark"] .gr-slot.filled {
+      border-color: rgba(255, 255, 255, 0.38);
+    }
+
+    :root[data-theme="dark"] .opt-btn {
+      border-color: rgba(255, 255, 255, 0.14);
+    }
+
+    :root[data-theme="dark"] .opt-btn:hover {
+      border-color: rgba(255, 255, 255, 0.3);
+    }
+
+    /* 焦点环与强调色悬停在深色下提亮 */
+    :root[data-theme="dark"] ::selection {
+      background: rgba(10, 132, 255, 0.4);
+    }
+
+    :root[data-theme="dark"] .input-wrap input[type=text]:focus,
+    :root[data-theme="dark"] .ex-response-field:focus,
+    :root[data-theme="dark"] .gr-slot:focus,
+    :root[data-theme="dark"] .note-field:focus {
+      box-shadow: 0 0 0 3.5px rgba(10, 132, 255, 0.32);
+    }
+
+    :root[data-theme="dark"] .history-top button:hover {
+      background: rgba(10, 132, 255, 0.16);
+    }
+
+    :root[data-theme="dark"] button.btn:hover,
+    :root[data-theme="dark"] #sendBtn:hover {
+      background: #2f93ff;
+    }
+
+    /* 琥珀/红语义在深色下提亮 */
+    :root[data-theme="dark"] .risk-elevated {
+      background: rgba(255, 159, 10, 0.18);
+      color: #ffb340;
+    }
+
+    :root[data-theme="dark"] .btn-danger {
+      background: rgba(255, 69, 58, 0.16);
+    }
+
+    :root[data-theme="dark"] .btn-danger:hover {
+      background: rgba(255, 69, 58, 0.24);
+    }
+
+    :root[data-theme="dark"] .msg.bot.crisis .bubble,
+    :root[data-theme="dark"] .msg.bot.critical .bubble,
+    :root[data-theme="dark"] .safety-flag {
+      background: rgba(255, 69, 58, 0.1);
+    }
+
+    :root[data-theme="dark"] .safety-banner {
+      border-color: rgba(255, 69, 58, 0.35);
+      background: rgba(255, 69, 58, 0.1);
+    }
+
+    /* 调试终端保持深色（--text 在深色下反白，需钉住底色） */
+    :root[data-theme="dark"] .debug-log {
+      background: #000000;
+      color: #a1a1a6;
+    }
+
+    /* 画像卡（原硬编码绿调） */
+    :root[data-theme="dark"] .profile-card {
+      background: var(--surface);
+      border-color: rgba(255, 255, 255, 0.12);
+    }
+
+    :root[data-theme="dark"] .profile-card h3 {
+      color: #a9c8b8;
+    }
+
+    :root[data-theme="dark"] .profile-hero-text p {
+      color: #93a89e;
+    }
+
+    :root[data-theme="dark"] .profile-chip {
+      background: rgba(255, 255, 255, 0.1);
+    }
+
+    :root[data-theme="dark"] .profile-note {
+      color: #7d918a;
+    }
   </style>
 </head>
 
@@ -2813,6 +3048,14 @@
       </div>
 
       <div class="record-section" style="margin-top:12px;">
+        <div class="profile-memory-setting">
+          <div>
+            <div class="setting-title">个性化画像记忆</div>
+            <div class="setting-desc" id="profileMemoryStatus">允许系统从对话中提炼并在后续对话中使用你的主题、偏好与有效方法。</div>
+          </div>
+          <button class="profile-memory-switch" id="profileMemoryToggle" type="button" role="switch"
+            aria-label="个性化画像记忆" aria-checked="true" onclick="toggleProfileMemory()"></button>
+        </div>
         <div class="profile-hero">
           <div class="profile-avatar" id="profileAvatar" aria-hidden="true"></div>
           <div class="profile-hero-text">
@@ -2821,7 +3064,9 @@
           </div>
         </div>
         <div id="profileSections"></div>
-        <p class="profile-note">这里只呈现系统有把握的部分；你想纠正或搁置任何一条，直接在对话里告诉我就可以。</p>
+        <p class="profile-note" id="profileMemoryNote">这里只呈现系统有把握的部分；你想纠正或搁置任何一条，直接在对话里告诉我就可以。</p>
+        <button class="btn-outline" id="clearProfileMemoryBtn" type="button" onclick="clearProfileMemory()"
+          style="margin-top:8px;">关闭并清除已有画像</button>
       </div>
 
       <div class="stat-grid" id="meStatGrid" style="margin-top:12px;">
@@ -2845,11 +3090,26 @@
       </div>
 
       <div class="record-section" style="margin-top:12px;">
+        <div class="trend-title"><span>外观</span></div>
+        <div class="mgmt-row">
+          <div class="m-main">
+            <div class="m-title">深色模式</div>
+            <div class="m-desc">默认跟随浏览器/系统外观并实时联动；手动选择后会记住你的偏好。</div>
+          </div>
+          <div class="tools-seg" id="themeSeg" role="group" aria-label="外观模式" style="margin-bottom:0;">
+            <button type="button" data-theme="system" onclick="setThemePref('system')">自动</button>
+            <button type="button" data-theme="light" onclick="setThemePref('light')">浅色</button>
+            <button type="button" data-theme="dark" onclick="setThemePref('dark')">深色</button>
+          </div>
+        </div>
+      </div>
+
+      <div class="record-section" style="margin-top:12px;">
         <div class="trend-title"><span>数据管理</span></div>
         <div class="mgmt-row">
           <div class="m-main">
             <div class="m-title">下载我的数据</div>
-            <div class="m-desc">导出一个 JSON 文件：测评分数、练习回答、打卡记录与对话历史。文件只生成在你本机。</div>
+            <div class="m-desc">下载服务端生成的 JSON：含对话、练习会话、测评、画像、切片和行为记录，不含密码哈希。</div>
           </div>
           <button class="btn" id="meExportBtn" onclick="exportMyData()">下载</button>
         </div>
@@ -2872,7 +3132,7 @@
       <div class="record-section" style="margin-top:12px;">
         <div class="trend-title"><span>帮助与安全</span></div>
         <div class="cl-note">若你此刻处于紧急情况，请直接拨打当地心理危机热线——在聊天里说出你的困境时，危机求助资源会第一时间出现。</div>
-        <div class="cl-note">隐私协议与数据处理协议在首次使用时确认；版本更新后会重新征求你的同意。</div>
+        <div class="cl-note">暂不同意时仍可查看、下载或注销；提交内容和使用 AI 前需同意当前版本。<button class="btn" onclick="ensurePrivacyConsent(true)">查看协议与同意状态</button></div>
       </div>
     </section>
 
@@ -2881,19 +3141,42 @@
   <script>
     // ========== Globals ==========
     const API_BASE = window.location.origin;
-    const STORE_KEYS = { EX_HIST: 'np_ex_history', EX_DONE: 'np_ex_done', CK: 'np_checkins', UID: 'np_user_id', TOKEN: 'np_auth_token', PRIVACY_VER: 'np_privacy_ver', GUEST_SECRET: 'np_guest_secret' };
+    const STORE_KEYS = { EX_HIST: 'np_ex_history', EX_DONE: 'np_ex_done', CK: 'np_checkins', UID: 'np_user_id', LOGIN: 'np_login_handle', TOKEN: 'np_auth_token', PRIVACY_VER: 'np_privacy_ver', GUEST_SECRET: 'np_guest_secret', THEME: 'np_theme' };
     let USER_ID = localStorage.getItem(STORE_KEYS.UID);
     if (!USER_ID) { USER_ID = 'u_' + Math.random().toString(36).slice(2, 10); localStorage.setItem(STORE_KEYS.UID, USER_ID); }
     let SESSION_ID = null;
     let isLoading = false;
 
+    // ========== 外观主题：跟随系统 / 浅色 / 深色 ==========
+    // <head> 里的引导脚本已按已存偏好设置 data-theme；这里负责开关交互、
+    // 系统外观实时联动与 theme-color 同步。偏好存 localStorage（np_theme）。
+    const DARK_MQ = window.matchMedia('(prefers-color-scheme: dark)');
+    function themePref() { return localStorage.getItem(STORE_KEYS.THEME) || 'system'; }
+    function applyTheme(pref) {
+      const dark = pref === 'dark' || (pref === 'system' && DARK_MQ.matches);
+      document.documentElement.setAttribute('data-theme', dark ? 'dark' : 'light');
+      const meta = document.querySelector('meta[name="theme-color"]');
+      if (meta) meta.content = dark ? '#000000' : '#f5f5f7';
+      document.querySelectorAll('#themeSeg button').forEach(b => {
+        b.classList.toggle('active', b.dataset.theme === pref);
+      });
+    }
+    function setThemePref(pref) {
+      localStorage.setItem(STORE_KEYS.THEME, pref);
+      applyTheme(pref);
+    }
+    DARK_MQ.addEventListener('change', () => { if (themePref() === 'system') applyTheme('system'); });
+    applyTheme(themePref());
+
     // ========== 游客直进认证（AUTH_ENABLED=true 的服务端也零操作） ==========
-    // 游客身份：user_id 自动赋值；后端开启强制认证时，首次 401 后用游客
-    // user_id 作为 username 静默注册/登录拿 token，全程无感、无表单。
+    // 游客登录句柄与内部 account_id 分离。Access Token 只留在内存；长期
+    // Refresh Token 由服务端放入 HttpOnly Cookie，页面刷新后轮换取新 token。
     // AUTH_ENABLED=false（本地/内网）时首探即 200，直接进游客模式。
-    let AUTH_TOKEN = localStorage.getItem(STORE_KEYS.TOKEN) || null;
+    let LOGIN_HANDLE = localStorage.getItem(STORE_KEYS.LOGIN) || USER_ID;
+    let AUTH_TOKEN = null;
+    localStorage.removeItem(STORE_KEYS.TOKEN); // 清理历史版本持久化的 bearer token
     function authHeaders(extra) {
-      const h = Object.assign({ 'Content-Type': 'application/json' }, extra || {});
+      const h = Object.assign({ 'Content-Type': 'application/json', 'X-User-ID': USER_ID }, extra || {});
       if (AUTH_TOKEN) h['Authorization'] = 'Bearer ' + AUTH_TOKEN;
       return h;
     }
@@ -2908,41 +3191,62 @@
       }
       return 'guest-' + userId + '-' + secret;
     }
-    // 单次认证尝试：register（409 则 login）。成功存 token 返回 true。
-    async function guestAuthAttempt(userId) {
-      const pw = guestPassword(userId);
+    function cookieValue(name) {
+      const prefix = encodeURIComponent(name) + '=';
+      const part = document.cookie.split('; ').find(item => item.startsWith(prefix));
+      return part ? decodeURIComponent(part.slice(prefix.length)) : '';
+    }
+    async function refreshBrowserSession() {
+      const csrf = cookieValue('psb_csrf');
+      if (!csrf) return false;
+      const res = await fetch(API_BASE + '/v1/auth/refresh', {
+        method: 'POST', credentials: 'same-origin', headers: { 'X-CSRF-Token': csrf }
+      });
+      if (!res.ok) return false;
+      const data = await res.json();
+      AUTH_TOKEN = data.access_token;
+      if (data.user_id) { USER_ID = data.user_id; localStorage.setItem(STORE_KEYS.UID, USER_ID); }
+      return true;
+    }
+    // 单次认证尝试：register（409 则 login）。成功后 access token 只留内存。
+    async function guestAuthAttempt(loginHandle) {
+      const pw = guestPassword(loginHandle);
       let reg = await fetch(API_BASE + '/v1/auth/register', {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ username: userId, password: pw })
+        method: 'POST', credentials: 'same-origin', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ username: loginHandle, password: pw })
       });
       if (reg.status === 409) {                               // 游客账号已存在
         reg = await fetch(API_BASE + '/v1/auth/login', {
-          method: 'POST', headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ username: userId, password: pw })
+          method: 'POST', credentials: 'same-origin', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ username: loginHandle, password: pw })
         });
       }
       if (!reg.ok) return false;
       const data = await reg.json();
       AUTH_TOKEN = data.access_token;
-      localStorage.setItem(STORE_KEYS.TOKEN, AUTH_TOKEN);
+      LOGIN_HANDLE = loginHandle;
+      localStorage.setItem(STORE_KEYS.LOGIN, LOGIN_HANDLE);
       if (data.user_id) { USER_ID = data.user_id; localStorage.setItem(STORE_KEYS.UID, USER_ID); }
       return true;
     }
     async function ensureGuestAuth() {
       try {
+        if (!AUTH_TOKEN && await refreshBrowserSession()) return;
         const probe = await fetch(API_BASE + '/v1/checkins?user_id=' + encodeURIComponent(USER_ID), { headers: authHeaders() });
         // 401 = token 失效；403 = 身份冲突（token 有效但 sub ≠ USER_ID：历史版
         // 本 JS 会轮换 USER_ID 而保留旧 token，破坏对留在 localStorage）。
         // 两者都要重认证；只认 401 会把 403 锁死成永久故障。
         if (probe.status !== 401 && probe.status !== 403) return;  // 认证关闭或配对完好
         AUTH_TOKEN = null;
-        localStorage.removeItem(STORE_KEYS.TOKEN);
-        if (await guestAuthAttempt(USER_ID)) return;
+        if (await refreshBrowserSession()) return;
+        if (await guestAuthAttempt(LOGIN_HANDLE)) return;
         // 自愈：历史版本用随机密码注册的旧账号无法登录（密码不可恢复）——
         // 轮换新身份重新注册，保证任何情况下都不会被永久锁死。
-        USER_ID = 'u_' + Math.random().toString(36).slice(2, 10);
+        LOGIN_HANDLE = 'u_' + Math.random().toString(36).slice(2, 10);
+        USER_ID = LOGIN_HANDLE;
+        localStorage.setItem(STORE_KEYS.LOGIN, LOGIN_HANDLE);
         localStorage.setItem(STORE_KEYS.UID, USER_ID);
-        await guestAuthAttempt(USER_ID);
+        await guestAuthAttempt(LOGIN_HANDLE);
       } catch (e) { /* 探测失败（后端未起等）不阻断页面 */ }
     }
 
@@ -2952,22 +3256,32 @@
     let curAssess = null;    // { session_id, user_id, type, view, guide }
 
     // ---- 隐私协议 / 数据处理协议（使用前确认；版本变更后重新弹窗）----
-    async function ensurePrivacyConsent() {
-      const agreedVer = localStorage.getItem(STORE_KEYS.PRIVACY_VER);
+    let PRIVACY_READY = false;
+    function requirePrivacyForAction() {
+      if (PRIVACY_READY) return true;
+      ensurePrivacyConsent();
+      return false;
+    }
+    async function ensurePrivacyConsent(showAccepted = false) {
+      if (document.getElementById('privacyMask')) return;
       try {
         const res = await fetch(API_BASE + '/v1/users/privacy-agreement?expected_language=zh', { headers: authHeaders() });
-        if (!res.ok) return; // 后端不可达时不阻断页面主流程
+        if (!res.ok) throw new Error('暂时无法加载协议，请稍后重试。');
         const agreement = await res.json();
-        if (agreedVer === agreement.consent_version) return; // 已同意当前版本
+        const statusRes = await fetch(API_BASE + '/v1/users/privacy-consent?user_id=' + encodeURIComponent(USER_ID), { headers: authHeaders() });
+        if (!statusRes.ok) throw new Error('暂时无法确认协议状态，请重试。');
+        const consentStatus = await statusRes.json();
+        PRIVACY_READY = consentStatus.acknowledged === true;
+        if (PRIVACY_READY && !showAccepted) { localStorage.setItem(STORE_KEYS.PRIVACY_VER, consentStatus.consent_version); return; }
         const mask = document.createElement('div');
         mask.id = 'privacyMask';
         mask.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:999;display:flex;align-items:center;justify-content:center;padding:16px;';
         const listHtml = agreement.privacy_points.map(p => '<li>' + escapeHtml(p) + '</li>').join('');
-        const dpHtml = agreement.data_processing_points.map(p => '<li>' + escapeHtml(p) + '</li>').join('');
+        const dpHtml = agreement.data_processing_points.map(p => '<li>' + escapeHtml(p) + '</li>').join('') + (agreement.processing_services || []).map(p => '<li>' + escapeHtml(p.purpose + ': ' + p.host + ' / ' + p.model) + '</li>').join('');
         mask.innerHTML =
           '<div style="background:var(--card);border-radius:var(--r-sheet);box-shadow:var(--sh-overlay);max-width:520px;width:100%;max-height:80vh;overflow:auto;padding:22px;">' +
           '<div style="font-weight:700;font-size:17px;margin-bottom:10px;">隐私协议与数据处理说明</div>' +
-          '<div style="font-size:13px;color:#444;line-height:1.7;">' +
+          '<div style="font-size:13px;color:var(--text-body);line-height:1.7;">' +
           '<div style="font-weight:600;margin:6px 0;">隐私协议</div><ul style="padding-left:18px;margin:0 0 8px;">' + listHtml + '</ul>' +
           '<div style="font-weight:600;margin:6px 0;">数据处理协议</div><ul style="padding-left:18px;margin:0;">' + dpHtml + '</ul>' +
           '</div>' +
@@ -2982,18 +3296,33 @@
         const chk = mask.querySelector('#privacyChk');
         const agreeBtn = mask.querySelector('#privacyAgree');
         chk.addEventListener('change', () => { agreeBtn.disabled = !chk.checked; });
-        mask.querySelector('#privacyDecline').addEventListener('click', () => { mask.remove(); });
+        mask.querySelector('#privacyDecline').addEventListener('click', async () => {
+          try {
+            const revoked = await fetch(API_BASE + '/v1/users/privacy-consent?user_id=' + encodeURIComponent(USER_ID), { method: 'DELETE', headers: authHeaders() });
+            if (!revoked.ok) throw new Error('暂时无法保存你的选择，请重试。');
+            PRIVACY_READY = false;
+            localStorage.removeItem(STORE_KEYS.PRIVACY_VER);
+            mask.remove();
+            document.querySelector('[data-tab="me"]').click();
+          } catch (e) { alert(e.message); }
+        });
         agreeBtn.addEventListener('click', async () => {
           try {
-            await fetch(API_BASE + '/v1/users/privacy-consent?user_id=' + encodeURIComponent(USER_ID), {
+            agreeBtn.disabled = true;
+            const saved = await fetch(API_BASE + '/v1/users/privacy-consent?user_id=' + encodeURIComponent(USER_ID), {
               method: 'POST', headers: authHeaders(),
               body: JSON.stringify({ acknowledged: true, consent_version: agreement.consent_version })
             });
-          } catch (e) { /* 落库失败不阻断本地记住 */ }
-          localStorage.setItem(STORE_KEYS.PRIVACY_VER, agreement.consent_version);
-          mask.remove();
+            if (!saved.ok) throw new Error('同意状态未保存，请重新加载协议后重试。');
+            const result = await saved.json();
+            if (result.consent_version !== agreement.consent_version) throw new Error('协议已更新，请重新阅读。');
+            PRIVACY_READY = true;
+            localStorage.setItem(STORE_KEYS.PRIVACY_VER, agreement.consent_version);
+            mask.remove();
+            initVoice();
+          } catch (e) { PRIVACY_READY = false; agreeBtn.disabled = false; alert(e.message); }
         });
-      } catch (e) { /* 网络失败静默 */ }
+      } catch (e) { PRIVACY_READY = false; alert(e.message || '协议状态不可用，当前仅可查看、下载或注销。'); }
     }
 
     // ---- 练习须知页（每次练习确认）----
@@ -3118,7 +3447,6 @@
         bindTabs();
         bindQuickChips();
         loadSystemInfo();
-        initVoice();
         initHistory();
         renderExerciseGrid();
         renderScaleList();
@@ -3128,7 +3456,7 @@
         loadAssessHistory();
         document.getElementById('messageInput').focus();
         // 20260904：隐私协议/数据处理协议使用前确认（版本变更后重新弹窗）
-        ensurePrivacyConsent();
+        ensurePrivacyConsent().then(() => { if (PRIVACY_READY) initVoice(); });
       });
     }
 
@@ -3151,10 +3479,33 @@
     async function loadProfilePanel() {
       const wrap = document.getElementById('profileSections');
       const avatar = document.getElementById('profileAvatar');
+      const toggle = document.getElementById('profileMemoryToggle');
+      const status = document.getElementById('profileMemoryStatus');
+      const note = document.getElementById('profileMemoryNote');
+      const clearBtn = document.getElementById('clearProfileMemoryBtn');
       try {
         const resp = await fetch(API_BASE + '/v1/me/profile-panel?language=zh&user_id=' + encodeURIComponent(USER_ID), { headers: authHeaders() });
         if (!resp.ok) throw new Error('http ' + resp.status);
         const data = await resp.json();
+        const memory = data.profile_memory || { enabled: true, has_data: false };
+        toggle.setAttribute('aria-checked', memory.enabled ? 'true' : 'false');
+        toggle.title = memory.enabled ? '关闭画像记忆' : '开启画像记忆';
+        clearBtn.disabled = !memory.has_data;
+        status.textContent = memory.enabled
+          ? '已开启：系统会提炼并在后续对话中使用你的主题、偏好与有效方法。'
+          : '已暂停：不会新增或使用画像；当轮安全识别和已保存记录不受影响。';
+        if (!memory.enabled) {
+          avatar.className = 'profile-avatar paused';
+          document.getElementById('profileAvatarCaption').textContent = memory.has_data
+            ? '已有画像已暂停使用，你可以随时重新开启或彻底清除。'
+            : '画像记忆已关闭，目前没有保留的画像数据。';
+          wrap.innerHTML = '<div class="profile-card"><h3>画像记忆已暂停</h3><span class="profile-chip">不会从新对话继续提炼</span></div>';
+          note.textContent = memory.has_data
+            ? '关闭只暂停采集与使用，不会自动删除；需要删除时请使用下方按钮。'
+            : '重新开启后，画像会从之后的对话中逐步形成。';
+          return;
+        }
+        note.textContent = '这里只呈现系统有把握的部分；你想纠正或搁置任何一条，直接在对话里告诉我就可以。';
         const familiarity = (data.avatar && data.avatar.familiarity) || 0;
         avatar.className = 'profile-avatar' + (familiarity >= 3 ? ' f3' : familiarity === 2 ? ' f2' : '');
         document.getElementById('profileAvatarCaption').textContent = familiarity === 0
@@ -3168,6 +3519,38 @@
         wrap.innerHTML = cards || '<div class="profile-card"><h3>还在起步</h3><span class="profile-chip">多聊聊，画像会慢慢长出来</span></div>';
       } catch (e) {
         wrap.innerHTML = '<div class="profile-card"><h3>暂时加载不了</h3><span class="profile-chip">稍后再试试</span></div>';
+      }
+    }
+
+    async function toggleProfileMemory() {
+      const toggle = document.getElementById('profileMemoryToggle');
+      const enabled = toggle.getAttribute('aria-checked') !== 'true';
+      toggle.disabled = true;
+      try {
+        await fetchOrThrow(API_BASE + '/v1/me/profile-memory', {
+          method: 'PUT',
+          body: JSON.stringify({ user_id: USER_ID, enabled: enabled })
+        });
+        await loadProfilePanel();
+      } catch (err) {
+        alert('画像记忆设置失败：' + err.message);
+      } finally {
+        toggle.disabled = false;
+      }
+    }
+
+    async function clearProfileMemory() {
+      if (!confirm('将关闭画像记忆，并永久删除已有画像、推断事件和画像统计。对话、测评、练习、打卡及安全记录不会删除。\n\n确定继续吗？')) return;
+      const btn = document.getElementById('clearProfileMemoryBtn');
+      btn.disabled = true;
+      try {
+        const token = await requestConfirmToken('clear_profile_memory');
+        await fetchOrThrow(API_BASE + '/v1/me/profile-memory?user_id=' + encodeURIComponent(USER_ID) +
+          '&confirm_token=' + encodeURIComponent(token), { method: 'DELETE' });
+        await loadProfilePanel();
+      } catch (err) {
+        alert('画像清除失败：' + err.message);
+        btn.disabled = false;
       }
     }
 
@@ -3197,6 +3580,7 @@
     }
 
     async function sendMessage() {
+      if (!requirePrivacyForAction()) return;
       const input = document.getElementById('messageInput');
       const message = input.value.trim();
       if (!message || isLoading) return;
@@ -3275,7 +3659,7 @@
         }
       }
       if (!finalData) throw new Error('stream ended without final');
-      handleStreamFinal(finalData);
+      await handleStreamFinal(finalData);
     }
 
     function handleStreamSentence(text) {
@@ -3290,30 +3674,24 @@
       }
     }
 
-    async function handleStreamRevise(text) {
-      // 全文审查与已朗读内容不一致（或投机快路径无 sentence）：
-      // 停止旧轮朗读 + 用修正后文本重新开始一轮。
-      stopVoicePlayback();
-      if (TTS_LIVE.ws) { ttsLiveSend({ type: 'abort' }); killLiveWs(TTS_LIVE.ws); }
-      pcmStopAll();
-      TTS_LIVE.curBytes = []; TTS_LIVE.curChars = 0; TTS_LIVE.pendingTexts = [];
-      liveTextClear(); // 旧文字的 live 泡作废（新内容文字等 final 定稿）
-      TTS_LIVE.chain = Promise.resolve();
-      TTS_LIVE.roundDone = null;
-      TTS_LIVE.ended = false;
-      TTS_LIVE.roundStarted = false;
-      // 重新朗读修正后全文（唯一通道：整轮 WS；失败=本轮无声，下轮重试探路）
-      await speakRound(text);
+    function handleStreamRevise(text) {
+      abortAllPlayback();
+      FORMAL_RENDERED = false;
+      // Revision only replaces the queue; final closes it once. Respect mute.
+      if (VOICE.ttsAvailable && VOICE.ttsPref) {
+        for (const sentence of (text.match(/[^。！？!?\n]+[。！？!?\n]*/g) || [text])) {
+          ttsLiveSay(sentence);
+        }
+      }
     }
 
-    function handleStreamFinal(data) {
+    async function handleStreamFinal(data) {
       SESSION_ID = data.session_id;
       updateRiskIndicator(data.risk);
       updateDebugState(data);
       const isCrisis = data.mode === 'crisis' || !!(data.risk && data.risk.needs_crisis_mode);
       // 文本气泡：按 reply.messages 渲染成多个气泡（打字节奏），与旧非流式一致
-      liveTextClear(); // live 泡交棒正式气泡（同帧替换，无闪断）
-      hideTyping();
+      const round = LIVE_TEXT_ROUND;
       const parts = (data.reply && Array.isArray(data.reply.messages) && data.reply.messages.length)
         ? data.reply.messages.slice(0, 3)
         : [(data.reply && data.reply.text) || ''];
@@ -3332,83 +3710,40 @@
           renderScaleChips(data.question_options);
         }
       };
-      if (hasText) {
-        // 定稿渲染跟音频走，三态：
-        // - 音频正在放（PCM 有积压）→ 空泡按剩余音频铺字，跳过 live 已铺字数；
-        // - 音频在途未起播（投机轮常态：WS 握手中、首块未到）→ 先不渲染，
-        //   等「第一声」起播再接管（live 泡继续随句上屏），6s 兜底直出——
-        //   音频真不来时不再按估算假爬几十秒（2026-09-10 无声+慢爬实证）；
-        // - 无音频轮（静音/未配置/WS 失败/ctx 被系统挂起）→ 即时渲染。
-        const audioCtxReady = !!(PCM.ctx && PCM.ctx.state === 'running');
-        const audioOn = !!(VOICE.ttsAvailable && VOICE.ttsPref && !TTS_LIVE.failed && audioCtxReady);
-        const pcmRemain = audioCtxReady ? Math.max(0, (PCM.cursor - PCM.ctx.currentTime) * 1000) : 0;
-        const pendingChars = (TTS_LIVE.pending.join('') + TTS_LIVE.pendingTexts.join('')).length;
-        const takeOver = () => {
-          // ctx 状态现查现用：waitFirstAudio 的 6s 等待期间 suspended→running
-          // 的转变很常见（resume() 异步完成），闭包旧值会误走即时渲染
-          const ctxReady = !!(PCM.ctx && PCM.ctx.state === 'running');
-          const totalChars = parts.reduce((n, p) => n + (p || '').length, 0);
-          const rem = ctxReady ? Math.max(0, (PCM.cursor - PCM.ctx.currentTime) * 1000) : 0;
-          // 铺字预算只认「已真实起播的音频」：首音未出（上游挂死）时
-          // pendingTexts 是幻影时钟，按它铺字会让文字龟速爬行几十秒
-          const pend = TTS_LIVE.firstAudioMarked
-            ? (TTS_LIVE.pending.join('') + TTS_LIVE.pendingTexts.join('')).length * 220
-            : 0;
-          const remMs = Math.max(rem, pend);
-          if (remMs > 500 && totalChars > 0) {
-            TTS_LIVE.finalTakeover = true; // 此后 sentence_end 不再上屏字幕
-            liveTextClear();
-            renderBotParts(parts, data.mode, data.risk, postRender, {
-              audioRemainingMs: remMs,
-              revealedChars: Math.min(totalChars, LIVE_TEXT_SHOWN_CHARS),
-            });
-          } else {
-            renderBotParts(parts, data.mode, data.risk, postRender);
+      const audioOn = hasText && effectiveTtsOn(isCrisis) && VOICE.ttsAvailable && !TTS_LIVE.failed;
+      if (audioOn) {
+        beginSpeaking();
+        if (!TTS_LIVE.roundStarted) {
+          const text = (data.reply && data.reply.text) || parts.join(' ');
+          for (const sentence of (text.match(/[^。！？!?\n]+[。！？!?\n]*/g) || [text])) {
+            ttsLiveSay(sentence);
           }
-        };
-        if (!audioOn) {
-          renderBotParts(parts, data.mode, data.risk, postRender);
-        } else if (pcmRemain > 300 || pendingChars === 0) {
-          takeOver();
-        } else {
-          showTyping(TYPING_TEXT);
-          const deadline = performance.now() + 6000;
-          const waitFirstAudio = () => {
-            const rem = (PCM.ctx && PCM.ctx.state === 'running') ? Math.max(0, (PCM.cursor - PCM.ctx.currentTime) * 1000) : 0;
-            if (rem > 300 || performance.now() > deadline || TTS_LIVE.failed || !TTS_LIVE.pendingTexts.length) {
-              takeOver();
-            } else {
-              setTimeout(waitFirstAudio, 250);
-            }
-          };
-          waitFirstAudio();
         }
-      } else {
-        postRender();
+        await ttsLiveEndRound();
       }
-      // 朗读收尾：流式轮用 ttsLiveEndRound 收束；投机/无 sentence 轮用
-      // speakReply。危机则退出对话模式。
-      const finish = () => {
-        if (VOICE.mode === 'speaking') {
-          VOICE.lastCrisis = isCrisis; // endSpeaking：危机→退出；用户暂停过→回白框；否则黄→绿
-          endSpeaking();
-        }
-      };
-      if (TTS_LIVE.roundStarted && !TTS_LIVE.ended) {
-        // 流式轮：句已通过 WS say 发送，final 到了收束
-        ttsLiveEndRound().then(finish);
-      } else if (TTS_LIVE.roundStarted && TTS_LIVE.ended) {
-        // revise 已启动一轮（say+end），等 round_done
-        TTS_LIVE.chain.then(finish);
-      } else if (!TTS_LIVE.roundStarted && hasText) {
-        // 无 sentence/revise 事件（会诊综合等单发路径）：兜底整轮朗读
-        speakReply(data.reply, isCrisis);
-      } else {
-        finish();
+      // A user interruption or a newer turn owns the UI now.
+      if (round !== LIVE_TEXT_ROUND) return;
+      liveTextClear();
+      hideTyping();
+      FORMAL_RENDERED = true;
+      parts.forEach((text, i) => {
+        if ((text || '').trim()) addMessage('bot', text, i === 0 ? data.mode : '', i === 0 ? data.risk : {}, i === 0);
+      });
+      turnMark('final'); turnTryReport();
+      postRender();
+      if (TTS_LIVE.failed && effectiveTtsOn(isCrisis)) appendDebug('语音播放未完成，完整回复已显示。');
+      if (!VOICE.ttsAvailable && hasText && effectiveTtsOn(isCrisis)) {
+        // Browser synthesis has no server PCM clock; show complete text.
+        await speakReply(data.reply, isCrisis);
+      } else if (VOICE.mode === 'speaking') {
+        VOICE.lastCrisis = isCrisis;
+        endSpeaking();
       }
     }
 
     async function sendMessageFallback(message) {
+      abortAllPlayback();
+      FORMAL_RENDERED = false;
       // 整段 /respond（与历史行为一致）：流式失败时的零风险回退
       showTyping(ECHO_WAIT_TEXT);
       try {
@@ -3428,29 +3763,9 @@
         }
         if (!res.ok) throw new Error('HTTP ' + res.status);
         const data = await res.json();
-        SESSION_ID = data.session_id;
-        updateRiskIndicator(data.risk);
-        updateDebugState(data);
-        const parts = (data.reply && Array.isArray(data.reply.messages) && data.reply.messages.length)
-          ? data.reply.messages.slice(0, 3)
-          : [data.reply.text];
-        renderBotParts(parts, data.mode, data.risk, () => {
-          const dbg = data.debug || {};
-          // 聊天入口卡片化：新开问卷只发引导卡（会话由评估页确认须知后创建）
-          if (data.mode === 'assessment' && dbg.source === 'assessment_card' && dbg.assessment_type) {
-            renderAssessDeepLink(dbg.assessment_type);
-          }
-          // 图内练习进度标签（GPT Voice 式陪伴练习的可见进度）
-          if (dbg.source === 'practice_guide' && dbg.practice_action) {
-            renderPracticeBadge(dbg.practice_action, dbg.practice_step);
-          }
-          if (Array.isArray(data.question_options) && data.question_options.length) {
-            renderScaleChips(data.question_options);
-          }
-        });
-        // 语音朗读（气泡渲染与朗读并行）。危机回复绕过静音强制照读——
-        // 热线号码读出来更可达，安全设计优先于成本开关。
-        speakReply(data.reply, data.mode === 'crisis' || !!(data.risk && data.risk.needs_crisis_mode));
+        abortAllPlayback();
+        FORMAL_RENDERED = false;
+        await handleStreamFinal(data);
       } catch (err) {
         console.error(err);
         addMessage('bot', '抱歉，遇到了问题：' + err.message + '。请确认后端服务正在运行。');
@@ -3708,6 +4023,22 @@
       LIVE_TEXT_SHOWN_CHARS += text.length;
       revealText(el.querySelector('.bubble'), text, elapsedMs, totalMs, false);
     }
+    function showAudioSentence({ text, start, round, clock }) {
+      const tick = () => {
+        if (round !== LIVE_TEXT_ROUND || FORMAL_RENDERED) return;
+        if (clock() < start) { requestAnimationFrame(tick); return; }
+        hideTyping();
+        const el = document.createElement('div');
+        el.className = 'msg bot live-msg';
+        const bubble = document.createElement('div');
+        bubble.className = 'bubble'; bubble.textContent = text;
+        el.appendChild(bubble);
+        const chat = document.getElementById('chatArea');
+        chat.appendChild(el); chat.scrollTop = chat.scrollHeight;
+      };
+      requestAnimationFrame(tick);
+    }
+
     function liveTextAppendRound(round, text, elapsedMs, totalMs) {
       if (round === LIVE_TEXT_ROUND) liveTextAppend(text, elapsedMs, totalMs);
     }
@@ -3716,44 +4047,11 @@
       document.querySelectorAll('.live-msg').forEach((el) => el.remove());
     }
 
-    // Render a reply as consecutive IM-style bubbles with typing rhythm between them.
-    // sync={audioRemainingMs,revealedChars}：final 到达时音频仍在放——正式气泡
-    // 逐段揭示、总时长摊到剩余音频，跳过 live 泡已上屏的字数；无 sync（静音/
-    // 音频已完）照旧整气泡直出，不拖累阅读速度。
-    function renderBotParts(parts, mode, risk, onDone, sync) {
-      FORMAL_RENDERED = true; // 定稿上屏：朗读字幕泡退场
-      let i = 0;
-      let consumed = sync ? Math.max(0, sync.revealedChars | 0) : 0;
-      const step = () => {
-        hideTyping();
-        const first = i === 0;
-        const text = parts[i] || '';
-        if (first) { turnMark('final'); turnTryReport(); } // 首个气泡可见 = 文本全链终点
-        if (!sync) {
-          addMessage('bot', text, first ? mode : '', first ? risk : {}, first);
-          i++;
-          if (i < parts.length) {
-            setTimeout(() => { showTyping(TYPING_TEXT); setTimeout(step, 700); }, 400);
-          } else if (onDone) {
-            onDone();
-          }
-          return;
-        }
-        // 音频同步定稿：空泡上屏 → 按"剩余音频 × 本段未揭示字数占比"铺字
-        const skip = Math.min(consumed, text.length);
-        consumed -= skip;
-        const remainingTotal = Math.max(1, parts.slice(i).reduce((n, p) => n + (p || '').length, 0));
-        const dur = Math.max(500, sync.audioRemainingMs * ((text.length - skip) / remainingTotal));
-        const msgEl = addMessage('bot', '', first ? mode : '', first ? risk : {}, first);
-        revealText(msgEl.querySelector('.bubble'), text, 0, dur, true);
-        i++;
-        if (i < parts.length) {
-          setTimeout(step, dur + 250); // 本段铺完稍候即下段（音频即节奏，不再插"正在输入"）
-        } else {
-          setTimeout(() => { if (onDone) onDone(); }, dur + 250);
-        }
-      };
-      step();
+    // Non-audio callers use ordinary IM bubbles. Audio captions use showAudioSentence.
+    function renderBotParts(parts, mode, risk, onDone) {
+      FORMAL_RENDERED = true;
+      parts.forEach((text, i) => addMessage('bot', text, i === 0 ? mode : '', i === 0 ? risk : {}, i === 0));
+      if (onDone) onDone();
     }
 
     // 聊天入口卡片化：评估引导轮附「打开评估页」深链卡。
@@ -4126,6 +4424,7 @@
     }
 
     function startConversation() {
+      if (!requirePrivacyForAction()) return;
       if (!navigator.mediaDevices || !window.MediaRecorder) {
         addMessage('bot', '当前浏览器不支持录音，请直接打字。');
         return;
@@ -4662,7 +4961,7 @@
         const live = lm.createTtsLive({
           wsUrl: () => {
             const proto = location.protocol === 'https:' ? 'wss' : 'ws';
-            const qs = AUTH_TOKEN ? '?token=' + encodeURIComponent(AUTH_TOKEN) : '';
+            const qs = '?user_id=' + encodeURIComponent(USER_ID) + (AUTH_TOKEN ? '&token=' + encodeURIComponent(AUTH_TOKEN) : '');
             return proto + '://' + location.host + '/v1/voice/tts/live' + qs;
           },
           debug: appendDebug,
@@ -4671,6 +4970,7 @@
           ui: {
             getRound: () => LIVE_TEXT_ROUND,
             appendRound: liveTextAppendRound,
+            playSentence: showAudioSentence,
             turnMark,
             turnTryReport,
             resetShownChars: () => { LIVE_TEXT_SHOWN_CHARS = 0; },
@@ -4940,6 +5240,7 @@
       loadExerciseRecords();
     }
     async function openExercise(key, tag) {
+      if (!requirePrivacyForAction()) return;
       document.getElementById('exerciseHistorySection').style.display = 'none';
       const box = document.getElementById('exerciseViewer');
       box.innerHTML = '<div class="empty-tip">' + loadingLine('加载练习') + '</div>';
@@ -5395,6 +5696,7 @@
     // M3→20260904 完成流程：最后一步保存 → 加载动画（准备对话）→ 直接进入
     // "和 AI 聊聊"对话框；温柔总结与 AI 分析统一放到"结束引导，生成报告"。
     async function finishExerciseFlow() {
+      if (!requirePrivacyForAction()) return;
       if (!curExercise || curExercise.finishing) return;
       curExercise.finishing = true;
       const d = curExercise.data;
@@ -5496,6 +5798,7 @@
     }
 
     async function exGuideSend() {
+      if (!requirePrivacyForAction()) return;
       const input = document.getElementById('exGuideInput');
       if (!input || !curExercise) return;
       const msg = input.value.trim();
@@ -5611,6 +5914,7 @@
       loadAssessHistory(); // 返回列表即刷新测评历史——刚完成的量表立刻可见
     }
     async function startAssess(code) {
+      if (!requirePrivacyForAction()) return;
       const box = document.getElementById('assessViewBox');
       box.innerHTML = '<div class="empty-tip">' + loadingLine('正在打开评估须知') + '</div>';
       document.getElementById('assessList').style.display = 'none';
@@ -5645,6 +5949,7 @@
     }
 
     async function launchAssessSession(code, disclaimerVersion) {
+      if (!requirePrivacyForAction()) return;
       const box = document.getElementById('assessViewBox');
       box.innerHTML = '<div class="empty-tip">' + loadingLine('正在开始评估会话') + '</div>';
       try {
@@ -5770,6 +6075,7 @@
     }
 
     async function submitAssessBulk() {
+      if (!requirePrivacyForAction()) return;
       if (!curAssess || !curAssess.localAnswers) return;
       const answers = curAssess.localAnswers.slice();
       if (answers.some(a => a === null || a === undefined)) return; // 提交按钮已禁用，此处防御性兜底
@@ -5934,7 +6240,12 @@
       'No exercise history yet.': '暂无练习记录'
     };
     async function fetchOrThrow(url, options) {
-      const res = await fetch(url, Object.assign({}, options || {}, { headers: authHeaders((options || {}).headers) }));
+      let res = await fetch(url, Object.assign({}, options || {}, { headers: authHeaders((options || {}).headers) }));
+      if (res.status === 401) {
+        AUTH_TOKEN = null;
+        await ensureGuestAuth();
+        res = await fetch(url, Object.assign({}, options || {}, { headers: authHeaders((options || {}).headers) }));
+      }
       if (res.ok) return res;
       let detail = '';
       try {
@@ -6017,6 +6328,7 @@
     }
 
     async function generateAssessAnalysis() {
+      if (!requirePrivacyForAction()) return;
       const body = document.getElementById('assessAnalysisBody');
       const btn = document.getElementById('assessAnalysisBtn');
       btn.disabled = true;
@@ -6089,20 +6401,25 @@
       const x = i => PAD_L + (n === 1 ? (W - PAD_L - PAD_R) / 2 : i * (W - PAD_L - PAD_R) / (n - 1));
       const y = v => PAD_T + (10 - Math.max(0, Math.min(10, v))) * (H - PAD_T - PAD_B) / 10;
       const path = key => points.map((p, i) => (i ? 'L' : 'M') + x(i).toFixed(1) + ',' + y(p[key]).toFixed(1)).join(' ');
+      // 跟随当前主题取色（深色模式下 --text 反白、--track 变深灰）
+      const cs = getComputedStyle(document.documentElement);
+      const C_TEXT = cs.getPropertyValue('--text').trim() || '#1D1D1F';
+      const C_SUB = cs.getPropertyValue('--text-3').trim() || '#86868B';
+      const C_GRID = cs.getPropertyValue('--track').trim() || '#E8E8ED';
       const gridLines = [0, 5, 10].map(v =>
-        '<line x1="' + PAD_L + '" y1="' + y(v) + '" x2="' + (W - PAD_R) + '" y2="' + y(v) + '" stroke="#E8E8ED" stroke-width="1"/>' +
-        '<text x="4" y="' + (y(v) + 3) + '" font-size="9" fill="#86868B" font-family="-apple-system, PingFang SC">' + v + '</text>'
+        '<line x1="' + PAD_L + '" y1="' + y(v) + '" x2="' + (W - PAD_R) + '" y2="' + y(v) + '" stroke="' + C_GRID + '" stroke-width="1"/>' +
+        '<text x="4" y="' + (y(v) + 3) + '" font-size="9" fill="' + C_SUB + '" font-family="-apple-system, PingFang SC">' + v + '</text>'
       ).join('');
       const labelEvery = Math.max(1, Math.ceil(n / 6));
       const xLabels = points.map((p, i) => i % labelEvery === 0
-        ? '<text x="' + x(i) + '" y="' + (H - 6) + '" font-size="9" fill="#86868B" text-anchor="middle" font-family="-apple-system, PingFang SC">' + escapeHtml(p.date.slice(5)) + '</text>'
+        ? '<text x="' + x(i) + '" y="' + (H - 6) + '" font-size="9" fill="' + C_SUB + '" text-anchor="middle" font-family="-apple-system, PingFang SC">' + escapeHtml(p.date.slice(5)) + '</text>'
         : '').join('');
-      const dots = key => points.map((p, i) => '<circle cx="' + x(i).toFixed(1) + '" cy="' + y(p[key]).toFixed(1) + '" r="2.2" fill="#1D1D1F"/>').join('');
+      const dots = key => points.map((p, i) => '<circle cx="' + x(i).toFixed(1) + '" cy="' + y(p[key]).toFixed(1) + '" r="2.2" fill="' + C_TEXT + '"/>').join('');
       body.innerHTML =
         '<svg viewBox="0 0 ' + W + ' ' + H + '" style="width:100%;height:auto;display:block;">' +
         gridLines +
-        '<path d="' + path('mood_score') + '" fill="none" stroke="#1D1D1F" stroke-width="2"/>' +
-        '<path d="' + path('anxiety_score') + '" fill="none" stroke="#86868B" stroke-width="1.5" stroke-dasharray="4 3"/>' +
+        '<path d="' + path('mood_score') + '" fill="none" stroke="' + C_TEXT + '" stroke-width="2"/>' +
+        '<path d="' + path('anxiety_score') + '" fill="none" stroke="' + C_SUB + '" stroke-width="1.5" stroke-dasharray="4 3"/>' +
         dots('mood_score') +
         xLabels +
         '</svg>' +
@@ -6110,6 +6427,7 @@
     }
 
     async function generateCheckinAnalysis() {
+      if (!requirePrivacyForAction()) return;
       const body = document.getElementById('checkinAnalysisBody');
       const btn = document.getElementById('checkinAnalysisBtn');
       btn.disabled = true;
@@ -6384,6 +6702,8 @@
           '&confirm_token=' + encodeURIComponent(token), { method: 'DELETE' });
         const data = await res.json();
         // 本地未同步的打卡/练习缓存一并清掉，避免删除后“复活”
+        for (const key of Object.keys(localStorage)) { if (key.startsWith('psb_assess_draft_' + USER_ID + '_')) localStorage.removeItem(key); }
+        curExercise = null; curAssess = null;
         saveCheckins([]);
         localStorage.removeItem(STORE_KEYS.EX_HIST);
         localStorage.removeItem(STORE_KEYS.EX_DONE);
@@ -6397,18 +6717,46 @@
       }
     }
 
-    async function deleteMyAccount() {
-      if (!confirm('将删除你的身份与全部数据（含聊天记录），删除后不可恢复。\n\n这是隐私协议承诺的删除权。确定继续吗？')) return;
+    function clearLocalProductData() {
+      for (const store of [localStorage, sessionStorage]) {
+        const keys = [];
+        for (let i = 0; i < store.length; i++) keys.push(store.key(i));
+        keys.filter(key => key && (key.startsWith('np_') || key.startsWith('psb_assess_draft_')))
+          .forEach(key => store.removeItem(key));
+      }
+    }
+
+    async function clearBrowserAuthCookies() {
+      const csrf = cookieValue('psb_csrf');
       try {
+        await fetch(API_BASE + '/v1/auth/logout', {
+          method: 'POST', credentials: 'same-origin', headers: csrf ? { 'X-CSRF-Token': csrf } : {}
+        });
+      } catch (e) { /* 账号数据已删除时，服务端会话本就不可再使用 */ }
+    }
+
+    async function deleteMyAccount() {
+      if (!confirm('将删除在线账号及全部业务数据，并清理当前浏览器缓存。可关联的 Langfuse 产品分析追踪将异步清理；已下载文件、其他设备缓存、离线备份和模型供应商留存不在即时删除范围内。\n\n确定注销吗？')) return;
+      try {
+        stopVoicePlayback();
+        if (typeof exitConversation === 'function') exitConversation();
         const token = await requestConfirmToken('delete_account');
-        await fetchOrThrow(API_BASE + '/v1/me/account?user_id=' + encodeURIComponent(USER_ID) +
+        const res = await fetchOrThrow(API_BASE + '/v1/me/account?user_id=' + encodeURIComponent(USER_ID) +
           '&confirm_token=' + encodeURIComponent(token), { method: 'DELETE' });
-        // 全部本地痕迹清掉，刷新后以全新访客身份开始
-        [STORE_KEYS.EX_HIST, STORE_KEYS.EX_DONE, STORE_KEYS.CK, STORE_KEYS.UID, STORE_KEYS.TOKEN, STORE_KEYS.PRIVACY_VER]
-          .forEach(key => localStorage.removeItem(key));
-        location.reload();
+        const data = await res.json();
+        await clearBrowserAuthCookies();
+        clearLocalProductData();
+        PRIVACY_READY = false;
+        AUTH_TOKEN = null;
+        const receipt = data.external_cleanup.receipt;
+        document.body.innerHTML = '<main style="max-width:560px;margin:12vh auto;padding:24px;line-height:1.8">' +
+          '<h1>在线账号数据已删除</h1><p>当前浏览器缓存已清理。Langfuse 产品分析追踪的清理结果请通过回执查询；请保存回执链接。已下载文件与其他设备缓存需自行删除。</p>' +
+          '<p><a id="deletionReceipt">查询历史追踪清理状态</a></p>' +
+          '<p>离线备份和无法关联账号的旧追踪需由部署方处理。</p>' +
+          '<button onclick="location.reload()">以新访客开始</button></main>';
+        document.getElementById('deletionReceipt').href = '/v1/privacy/deletions/' + encodeURIComponent(receipt);
       } catch (err) {
-        alert('注销失败：' + err.message);
+        alert('注销未完成：' + err.message);
       }
     }
 
@@ -6446,6 +6794,7 @@
     // 重复补传只覆盖同日记录、不虚增条目；成功后置位 saved_to_cloud 并刷新视图。
     let _backfillInFlight = false;
     async function backfillLocalCheckins() {
+      if (!PRIVACY_READY) return;
       if (_backfillInFlight) return;
       const pending = getCheckins().filter(x => !x.saved_to_cloud && x.date);
       if (!pending.length) return;
@@ -6524,6 +6873,7 @@
       document.getElementById('checkinSuccess').style.display = 'none';
     }
     async function submitCheckin(e) {
+      if (!requirePrivacyForAction()) return;
       e.preventDefault();
       if (hasCheckedInToday()) {
         alert('请明天再来打卡哦');

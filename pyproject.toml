@@ -55,6 +55,7 @@ default = true
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 markers = [
+    "privacy_boundary: exercises real consent and erasure boundaries without legacy fixture overrides",
     "slow: marks tests as slow (deselect with '-k \"not slow\"')",
 ]
 

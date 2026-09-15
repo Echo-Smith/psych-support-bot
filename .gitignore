@@ -49,3 +49,7 @@ dist/
 # 巡检脚本生成的报告（dev/crisis_baseline.py 落盘）
 dev/reports/
 .firecrawl/
+
+# 本地测试产物与音频样本，不入库
+gui-test-screenshots/
+data/voice/

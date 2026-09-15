@@ -200,20 +200,20 @@ def _invoke(
                 if attempt >= len(_RETRY_BACKOFF_SECONDS) or not _is_retryable_llm_error(exc):
                     break
                 logger.warning(
-                    "LLM call failed (attempt %d/%d, retryable): %s",
+                    "LLM call failed (attempt %d/%d, retryable, error_type=%s)",
                     attempt + 1,
                     len(_RETRY_BACKOFF_SECONDS) + 1,
-                    exc,
+                    type(exc).__name__,
                 )
                 time.sleep(_RETRY_BACKOFF_SECONDS[attempt])
         if last_exc is not None or response is None:
             update_span_output(gen_obs, {"error": str(last_exc)[:300]})
             if fallback is not None:
-                logger.exception("LLM unavailable after retries; serving caller-declared fallback.")
+                logger.warning("LLM unavailable after retries; serving caller-declared fallback")
                 fallback_text = fallback()
                 update_span_output(gen_obs, {"fallback": fallback_text[:300]})
                 return fallback_text
-            raise LLMUnavailableError(f"LLM unavailable: {last_exc}") from last_exc
+            raise LLMUnavailableError("LLM unavailable") from None
         output = _coerce_content(response.content)
         update_span_output(gen_obs, output)
         if (usage := _usage_details(response)) is not None:
@@ -405,8 +405,8 @@ def generate_multidisciplinary_consultation(
                 pieces.append(chunk)
                 on_token(chunk)
             return "".join(pieces), opinions
-        except Exception:
-            logger.exception("Streaming synthesis failed; falling back to blocking synthesis.")
+        except Exception:  # noqa: BLE001 - streaming falls back to the same bounded blocking path
+            logger.warning("Streaming synthesis failed; falling back to blocking synthesis")
     reply_text = _invoke(
         synthesis_prompt,
         user_message,

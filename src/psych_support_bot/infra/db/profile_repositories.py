@@ -24,6 +24,9 @@ from psych_support_bot.infra.db.models import (
     ProfileBeliefEvent,
     ProfileExtractionStats,
     ProfileInterventionEvent,
+    ProfileMemoryPreference,
+    UserTimeProfile,
+    utcnow,
 )
 
 logger = logging.getLogger(__name__)
@@ -40,6 +43,30 @@ CONFIDENCE_CEILING = 0.95
 L4_QUESTION_THRESHOLD = 0.7
 
 _VALID_DIMENSIONS = {f"D{i}" for i in range(1, 9)}
+
+
+def is_profile_memory_enabled(session: Session, user_id: str) -> bool:
+    """Return the user's profile-memory choice; missing rows preserve legacy-on behavior."""
+    preference = session.get(ProfileMemoryPreference, user_id)
+    return preference.enabled if preference is not None else True
+
+
+def set_profile_memory_enabled(session: Session, user_id: str, enabled: bool) -> ProfileMemoryPreference:
+    preference = session.get(ProfileMemoryPreference, user_id)
+    if preference is None:
+        preference = ProfileMemoryPreference(user_id=user_id)
+        session.add(preference)
+    preference.enabled = enabled
+    preference.disabled_at = None if enabled else utcnow()
+    preference.updated_at = utcnow()
+    session.flush()
+    return preference
+
+
+def has_profile_memory_data(session: Session, user_id: str) -> bool:
+    """Whether any inferred profile, profile audit, or time-profile data remains."""
+    models = (ProfileBelief, ProfileBeliefEvent, ProfileExtractionStats, ProfileInterventionEvent, UserTimeProfile)
+    return any(session.query(model).filter(model.user_id == user_id).first() is not None for model in models)
 
 
 def record_extraction_stats(
@@ -116,6 +143,8 @@ def list_active_beliefs(
     limit: int = 50,
 ) -> list[ProfileBelief]:
     """当前生效信念，按证据时近排序（渲染排序是记忆模块的职责）。"""
+    if not is_profile_memory_enabled(session, user_id):
+        return []
     conditions = [ProfileBelief.user_id == user_id, ProfileBelief.status == "active"]
     if dimensions:
         conditions.append(ProfileBelief.dimension.in_(dimensions))
@@ -151,6 +180,8 @@ def record_claim(
 
     返回的事件名同时是 profile_belief_events.event_type。
     """
+    if not is_profile_memory_enabled(session, user_id):
+        return None, "profile_memory_disabled"
     if dimension not in _VALID_DIMENSIONS:
         raise ValueError(f"invalid profile dimension: {dimension!r}")
     if key.startswith("distortion."):
@@ -163,7 +194,7 @@ def record_claim(
 
     # 提取器产出一律 L4：L2 只能来自用户确认（confirm_belief）或程序硬证据。
     if source == "extracted" and layer != "L4":
-        logger.warning("Clamping non-L4 layer from extracted claim, key=%s layer=%s", key, layer)
+        logger.warning("Clamping non-L4 layer from extracted claim (layer=%s)", layer)
         layer = "L4"
 
     existing = get_belief(session, user_id, key)
@@ -226,6 +257,8 @@ def record_claim(
 
 def list_rejected_beliefs(session: Session, user_id: str, *, limit: int = 5) -> list[ProfileBelief]:
     """D8 负记忆：被否决信念，按时近取最近 N 条（渲染为应回避清单）。"""
+    if not is_profile_memory_enabled(session, user_id):
+        return []
     conditions = (ProfileBelief.user_id == user_id, ProfileBelief.status == "rejected")
     stmt = select(ProfileBelief).where(*conditions).order_by(desc(ProfileBelief.updated_at)).limit(limit)
     return list(session.scalars(stmt))
@@ -305,6 +338,8 @@ def list_question_candidates(session: Session, user_id: str, *, limit: int = 1) 
     排序 = （干预价值分级 × 该维度确认率学习权重，置信度，时近）降序。
     无质询历史时权重全为 1.0，回退为静态分级（D3>D5>其余）。
     """
+    if not is_profile_memory_enabled(session, user_id):
+        return []
     conditions = (
         ProfileBelief.user_id == user_id,
         ProfileBelief.status == "active",
@@ -331,8 +366,10 @@ def record_intervention_event(
     session_id: str,
     kind: str,
     detail: dict | None = None,
-) -> ProfileInterventionEvent:
+) -> ProfileInterventionEvent | None:
     """干预→反应事件（K2c）：只记动作元数据，不记对话内容。"""
+    if not is_profile_memory_enabled(session, user_id):
+        return None
     row = ProfileInterventionEvent(
         user_id=user_id,
         session_id=session_id,
@@ -492,7 +529,7 @@ def reject_belief(session: Session, user_id: str, belief_id: int) -> ProfileBeli
 
 
 def delete_user_profile_beliefs(session: Session, user_id: str) -> dict[str, int]:
-    """级联删除某用户全部画像数据（接入 /v1/me 删除链）。"""
+    """级联删除某用户全部推断画像和行为时间画像数据。"""
     events_deleted = (
         session.query(ProfileBeliefEvent)
         .filter(ProfileBeliefEvent.user_id == user_id)
@@ -511,9 +548,13 @@ def delete_user_profile_beliefs(session: Session, user_id: str) -> dict[str, int
         .filter(ProfileInterventionEvent.user_id == user_id)
         .delete(synchronize_session=False)
     )
+    time_profile_deleted = (
+        session.query(UserTimeProfile).filter(UserTimeProfile.user_id == user_id).delete(synchronize_session=False)
+    )
     return {
         "profile_beliefs": int(beliefs_deleted),
         "profile_belief_events": int(events_deleted),
         "profile_extraction_stats": int(stats_deleted),
         "profile_intervention_events": int(interventions_deleted),
+        "user_time_profiles": int(time_profile_deleted),
     }

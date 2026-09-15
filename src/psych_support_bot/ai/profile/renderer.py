@@ -158,6 +158,10 @@ def render_profile_block(
     tail_load: int = 0,
 ) -> str | None:
     """渲染画像 memory block；无可渲染内容返回 None（fail-open 上游约定）。"""
+    from psych_support_bot.infra.db.profile_repositories import is_profile_memory_enabled
+
+    if not is_profile_memory_enabled(session, user_id):
+        return None
     settings = get_settings()
     topics = detect_topics(user_message) if user_message else []
     budget = compute_profile_budget(
@@ -209,11 +213,10 @@ def render_profile_block(
 
     block = joiner.join(rendered)
     logger.info(
-        "profile render: chars=%d budget=%d items=%d dropped=%d user=%s",
+        "profile render: chars=%d budget=%d items=%d dropped=%d",
         used,
         budget,
         len(rendered),
         dropped,
-        user_id,
     )
     return block or None

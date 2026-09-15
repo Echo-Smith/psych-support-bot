@@ -161,8 +161,8 @@ def generate_exercise_feedback(
             system_prompt, user_content, expected_language, mode="support", fallback=_deterministic_fallback
         )
         return _sanitize_output(feedback, expected_language), "llm"
-    except Exception:
-        logger.exception("Exercise feedback generation failed; serving deterministic fallback.")
+    except Exception:  # noqa: BLE001 - user-facing exercise path has a safe fallback
+        logger.warning("Exercise feedback generation failed; serving deterministic fallback")
         return _deterministic_fallback(), "fallback"
 
 
@@ -230,8 +230,8 @@ def generate_exercise_guidance(
         # 不走主对话的长模板装配——保持轻量、独立于图状态。
         reply = _invoke(system_prompt, user_message, expected_language, mode="intervention")
         return _sanitize_output(reply, expected_language), "ok"
-    except Exception:
-        logger.exception("Exercise guidance generation failed; serving step guide echo.")
+    except Exception:  # noqa: BLE001 - user-facing exercise path has a safe fallback
+        logger.warning("Exercise guidance generation failed; serving step guide echo")
         fallback = (
             f"这一步慢慢来：{step_guide[:80]} 如果你愿意，说说刚才写下时心里冒出的第一个念头。"
             if zh

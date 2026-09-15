@@ -24,6 +24,8 @@ from psych_support_bot.ai.profile.display_dict import (
 from psych_support_bot.ai.profile.renderer import L4_RENDER_THRESHOLD
 from psych_support_bot.ai.tools.exercises import get_exercise_by_tag
 from psych_support_bot.infra.db.profile_repositories import (
+    has_profile_memory_data,
+    is_profile_memory_enabled,
     list_active_beliefs,
     list_rejected_beliefs,
 )
@@ -66,6 +68,7 @@ def _item_for(belief, language: str) -> dict | None:
 
 def build_profile_panel(session: Session, user_id: str, *, language: str = "zh") -> dict:
     """「画像」面板数据：拟人形象状态 + 友善分类点（已过滤敏感维度）。"""
+    enabled = is_profile_memory_enabled(session, user_id)
     sections: list[dict] = []
     seen_dimensions: set[str] = set()
 
@@ -102,6 +105,10 @@ def build_profile_panel(session: Session, user_id: str, *, language: str = "zh")
     # 未知维度防御：DIMENSIONS 之外的 section 不该存在（闭集一致性）。
     sections = [s for s in sections if s["dimension"] in DIMENSIONS]
     return {
+        "profile_memory": {
+            "enabled": enabled,
+            "has_data": has_profile_memory_data(session, user_id),
+        },
         "avatar": {
             # 拟人形象边界：只表达"系统对你的了解程度"，不做人格化演绎。
             "familiarity": len(seen_dimensions),

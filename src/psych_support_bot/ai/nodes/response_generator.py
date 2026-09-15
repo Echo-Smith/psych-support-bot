@@ -144,8 +144,8 @@ def _generate_normal_reply(state: GraphState, risk_level: str, no_question_mode:
                 history=[dict(turn) for turn in (state.get("slice_context") or state.get("recent_history") or [])],
             )
             state["consultation_opinions"] = []
-        except Exception:
-            logger.exception("LLM generation failed for high-risk; using crisis template fallback.")
+        except Exception:  # noqa: BLE001 - crisis path must always return a safe response
+            logger.warning("LLM generation failed for high-risk; using crisis template fallback")
             state["fallback_used"] = True
             reply_text = build_crisis_reply(
                 state["risk_result"],
@@ -230,8 +230,8 @@ def _generate_normal_reply(state: GraphState, risk_level: str, no_question_mode:
             else:
                 reply_text = generate_clinically_bounded_reply(**gen_kwargs)
             state["consultation_opinions"] = []
-    except Exception:
-        logger.exception("LLM generation failed; using template fallback.")
+    except Exception:  # noqa: BLE001 - response path must always return a safe response
+        logger.warning("LLM generation failed; using template fallback")
         state["fallback_used"] = True
         is_zh = state.get("expected_language", "") == "zh" or (
             not state.get("expected_language")

@@ -90,13 +90,11 @@ def should_create_new_slice(
 
     if sleep_crossed:
         # 跨睡眠边界：几乎确定是新对话
-        logger.info(
-            f"Sleep boundary detected for user {user_id}: {last_slice.updated_at} -> {utcnow()}, window={sleep_window}"
-        )
+        logger.info("Sleep boundary detected; window=%s", sleep_window)
         return True, "sleep_boundary", 0.95
     elif hours_since > long_threshold:
         # 超过长间隔阈值：高置信度新对话
-        logger.info(f"Long gap detected for user {user_id}: {hours_since:.1f}h > {long_threshold:.1f}h")
+        logger.info("Long gap detected: %.1fh > %.1fh", hours_since, long_threshold)
         return True, f"time_gap_{int(hours_since)}h", 0.9
     elif hours_since > short_threshold:
         # 超过短间隔阈值：中等置信度，需结合其他信号
@@ -108,7 +106,7 @@ def should_create_new_slice(
     message_lower = user_message.lower()
     for marker in EXPLICIT_SWITCH_MARKERS:
         if marker in message_lower:
-            logger.info(f"Explicit switch detected for user {user_id}: '{marker}' in message")
+            logger.info("Explicit topic switch detected")
             return True, "explicit_switch", 0.9
 
     # 3. 主题相似度（TODO：Phase 3 实现主题提取）
@@ -128,15 +126,13 @@ def should_create_new_slice(
     if last_messages:
         last_content = last_messages[-1].content.lower() if last_messages else ""
         if any(marker in last_content for marker in GOODBYE_MARKERS):
-            logger.info(f"After goodbye detected for user {user_id}")
+            logger.info("New message after goodbye detected")
             return True, "after_goodbye", 0.85
 
     # 综合判定（时间信号权重提升）
     combined_score = max(time_signal, topic_signal)
     if combined_score > 0.6:
-        logger.info(
-            f"Topic shift detected for user {user_id}: time_signal={time_signal:.2f}, topic_signal={topic_signal:.2f}"
-        )
+        logger.info("Topic shift detected: time_signal=%.2f topic_signal=%.2f", time_signal, topic_signal)
         return True, "topic_shift", combined_score
 
     return False, "continue", 1.0 - combined_score
@@ -245,17 +241,14 @@ class SliceManager:
             session.add(new_slice)
             session.commit()
 
-            logger.info(
-                f"Created new slice {new_slice.id} for user {user_id} in session {session_id}, "
-                f"reason={reason}, confidence={confidence:.2f}"
-            )
+            logger.info("Created conversation slice: reason=%s confidence=%.2f", reason, confidence)
             return new_slice
         else:
             # 复用现有切片
             last_slice.turn_count += 1
             last_slice.updated_at = utcnow()
             session.commit()
-            logger.debug(f"Reusing slice {last_slice.id} for user {user_id}, turn_count={last_slice.turn_count}")
+            logger.debug("Reusing conversation slice: turn_count=%d", last_slice.turn_count)
             return last_slice
 
     @staticmethod
@@ -281,12 +274,8 @@ class SliceManager:
             from psych_support_bot.services.slice_summary import generate_slice_summary
 
             generate_slice_summary(session, completed.id)
-        except Exception:
-            logger.warning(
-                "Slice summary hook failed for slice %s; slice lifecycle unaffected.",
-                completed.id,
-                exc_info=True,
-            )
+        except Exception:  # noqa: BLE001 - optional slice summary is fail-open
+            logger.warning("Slice summary hook failed; slice lifecycle unaffected")
             session.rollback()
         try:
             last_msg = session.query(Message).filter_by(slice_id=completed.id).order_by(Message.id.desc()).first()
@@ -295,5 +284,5 @@ class SliceManager:
                 first_msg = session.query(Message).filter_by(slice_id=completed.id).order_by(Message.id.asc()).first()
                 if first_msg is not None:
                     completed.start_message_id = first_msg.id
-        except Exception:
-            logger.warning("Slice boundary message backfill failed for %s.", completed.id, exc_info=True)
+        except Exception:  # noqa: BLE001 - boundary backfill must not break the turn
+            logger.warning("Slice boundary message backfill failed")

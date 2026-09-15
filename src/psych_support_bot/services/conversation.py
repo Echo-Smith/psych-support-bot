@@ -290,9 +290,9 @@ class ConversationService:
             }
             slice_id = current_slice.id
             logger.info(
-                f"Context slicing enabled: slice_id={slice_id}, "
-                f"is_new_slice={slice_metadata['is_new_slice']}, "
-                f"reason={slice_metadata['boundary_reason']}"
+                "Context slicing enabled: is_new_slice=%s reason=%s",
+                slice_metadata["is_new_slice"],
+                slice_metadata["boundary_reason"],
             )
         else:
             # 禁用时使用空值（保留 recent_history）
@@ -334,8 +334,8 @@ class ConversationService:
                 if history_block:
                     memory_summary = f"{memory_summary}\n\n{history_block}" if memory_summary else history_block
                     slice_metadata["relevant_slice_ids"] = [s.slice_id for s in relevant]
-            except Exception:
-                logger.warning("Slice history retrieval failed; continuing without relevant history.", exc_info=True)
+            except Exception:  # noqa: BLE001 - retrieval is optional and fail-open
+                logger.warning("Slice history retrieval failed; continuing without relevant history")
 
         state: GraphState = {
             "user_id": payload.user_id,
@@ -436,17 +436,18 @@ class ConversationService:
                 "mode": "support",
             },
             metadata={"memory_summary": state["memory_summary"]},
+            content_input=payload.message,
             session_id=session_id,
             user_id=payload.user_id,
         ) as root_obs:
             try:
                 raw_result = cast(Any, conversation_graph.invoke(cast(Any, state)))
-            except Exception:
+            except Exception:  # noqa: BLE001 - final safety fallback must catch graph failures
                 # 最后一道防线：graph 内部任何未捕获异常（LLM 故障、节点 bug）
                 # 都不能以 500 形式暴露给处于脆弱状态的用户。
                 # Langfuse 巡检（2026-08-23）：越狱输入触发上游 403 后
                 # graph 输出为空，用户端收到错误响应。
-                logger.exception("Conversation graph failed; serving static safety fallback reply.")
+                logger.warning("Conversation graph failed; serving static safety fallback reply")
                 update_span_output(root_obs, {"error": "graph_invoke_failed", "fallback": True})
                 fallback_zh = expected_language == "zh"
                 reply_text = (
@@ -496,15 +497,7 @@ class ConversationService:
             done_state: GraphState = cast(GraphState, raw_result)
             # Root-level output so the Langfuse UI shows a usable summary row
             # per conversation turn instead of a null output.
-            update_span_output(
-                root_obs,
-                {
-                    "session_id": session_id,
-                    "mode": done_state["mode"],
-                    "risk_level": done_state["risk_result"].risk_level,
-                    "reply_text": done_state["generated_reply"].text[:200],
-                },
-            )
+            update_span_output(root_obs, done_state["generated_reply"].text, include_content=True)
         result: GraphState = cast(GraphState, raw_result)
         return self._finalize(result, payload, session, session_id)
 
@@ -535,37 +528,47 @@ class ConversationService:
         pending = ""
         spoken: list[str] = []
         final_state: GraphState | None = None
-        try:
-            for mode, chunk in conversation_graph.stream(cast(Any, state), stream_mode=["custom", "values"]):
-                if mode == "custom":
-                    text = chunk.get("text", "") if isinstance(chunk, dict) else ""
-                    if not text:
-                        continue
-                    pending += text
-                    sentences, pending = _split_complete_sentences(pending, first=not spoken)
-                    for sent in sentences:
-                        spoken.append(sent)
-                        if scan_sentence_speakable(sent, challenge_allowed=False, expected_language=expected_language):
-                            yield {"type": "sentence", "text": sent}
-                elif mode == "values":
-                    final_state = cast(GraphState, chunk)
-        except Exception:
-            logger.exception("respond_stream graph failed; falling back to non-streaming respond.")
-            yield {"type": "final", "response": self.respond(payload, session)}
-            return
+        with trace_span(
+            "conversation_graph.stream",
+            content_input=payload.message,
+            session_id=session_id,
+            user_id=payload.user_id,
+        ) as root_obs:
+            try:
+                for mode, chunk in conversation_graph.stream(cast(Any, state), stream_mode=["custom", "values"]):
+                    if mode == "custom":
+                        text = chunk.get("text", "") if isinstance(chunk, dict) else ""
+                        if not text:
+                            continue
+                        pending += text
+                        sentences, pending = _split_complete_sentences(pending, first=not spoken)
+                        for sent in sentences:
+                            if scan_sentence_speakable(
+                                sent, challenge_allowed=False, expected_language=expected_language
+                            ):
+                                spoken.append(sent)
+                                yield {"type": "sentence", "text": sent}
+                    elif mode == "values":
+                        final_state = cast(GraphState, chunk)
+            except Exception:  # noqa: BLE001 - streaming must degrade to the safe response path
+                logger.warning("respond_stream graph failed; falling back to non-streaming respond")
+                update_span_output(root_obs, {"failed": True, "fallback_used": True})
+                yield {"type": "final", "response": self.respond(payload, session)}
+                return
 
-        if final_state is None:
-            yield {"type": "final", "response": self.respond(payload, session)}
-            return
+            if final_state is None:
+                update_span_output(root_obs, {"failed": True, "fallback_used": True})
+                yield {"type": "final", "response": self.respond(payload, session)}
+                return
 
-        # 收尾残留（无句末标点结束的尾句）
-        tail = pending.strip()
-        if tail:
-            spoken.append(tail)
-            if scan_sentence_speakable(tail, challenge_allowed=False, expected_language=expected_language):
+            # 收尾残留（无句末标点结束的尾句）
+            tail = pending.strip()
+            if tail and scan_sentence_speakable(tail, challenge_allowed=False, expected_language=expected_language):
+                spoken.append(tail)
                 yield {"type": "sentence", "text": tail}
 
-        response = self._finalize(final_state, payload, session, session_id)
+            response = self._finalize(final_state, payload, session, session_id)
+            update_span_output(root_obs, response.reply.text, include_content=True)
 
         # 全文兜底审查差异 → revise（前端停读并用审查后文本替换气泡）
         reviewed = (response.reply.text or "").strip()
@@ -642,8 +645,8 @@ class ConversationService:
                 turn_count=int(result.get("turn_count") or 0),
                 slice_id=str(result.get("slice_id") or ""),  # P4: 提取溯源至切片
             )
-        except Exception:  # pragma: no cover - run_turn_extraction 内部已兜底
-            logger.exception("Profile extraction hook raised; conversation response unaffected.")
+        except Exception:  # noqa: BLE001  # pragma: no cover - optional extraction hook
+            logger.warning("Profile extraction hook failed; conversation response unaffected")
         # K2c 干预→反应事件（动作元数据 only，fail-open）。
         try:
             record_turn_interventions(
@@ -658,8 +661,8 @@ class ConversationService:
                 mode=str(result["mode"]),
                 risk_level=str(result["risk_result"].risk_level),
             )
-        except Exception:  # pragma: no cover - record_turn_interventions 内部已兜底
-            logger.exception("Intervention event hook raised; conversation response unaffected.")
+        except Exception:  # noqa: BLE001  # pragma: no cover - optional intervention hook
+            logger.warning("Intervention event hook failed; conversation response unaffected")
         return response
 
 

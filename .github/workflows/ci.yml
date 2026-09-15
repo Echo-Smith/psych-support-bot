@@ -48,8 +48,8 @@ jobs:
         env:
           DATABASE_URL: sqlite:///./data/test.db
 
-      - name: Run unit tests
-        run: uv run pytest tests/unit/ -v --tb=short
+      - name: Run unit and privacy-boundary tests
+        run: uv run pytest tests/unit/ tests/integration/test_privacy_lifecycle.py -v --tb=short
         env:
           DATABASE_URL: sqlite:///./data/test.db
 

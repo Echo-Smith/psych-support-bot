@@ -29,6 +29,7 @@ from psych_support_bot.ai.profile.semantic import run_semantic_extraction, run_v
 from psych_support_bot.infra.config.settings import get_settings
 from psych_support_bot.infra.db.models import Message
 from psych_support_bot.infra.db.profile_repositories import (
+    is_profile_memory_enabled,
     record_claim,
     record_extraction_stats,
     update_belief_value,
@@ -230,7 +231,7 @@ def run_turn_extraction(
     顺序：确定性提取（K1，零成本）→ LLM 语义提取（K2，节流触发、
     危机轮跳过）。两层各自独立提交、独立统计，互不阻断。
     """
-    if not get_settings().profile_extraction_enabled:
+    if not get_settings().profile_extraction_enabled or not is_profile_memory_enabled(session, user_id):
         return
     crisis = risk_level in _CRISIS_LEVELS
     trigger = "crisis_guard" if crisis else ("practice_event" if exercise_tag else "topic_flow")
@@ -277,8 +278,8 @@ def run_turn_extraction(
                 )
         stats.claims_out = len(claims)
         session.commit()
-    except Exception:
-        logger.warning("Profile extraction failed for user %s; skipping turn.", user_id, exc_info=True)
+    except Exception:  # noqa: BLE001 - profile extraction must not block the response
+        logger.warning("Profile extraction failed; skipping turn")
         session.rollback()
         try:
             # 失败也要留 P2 统计痕迹（error 行），但统计写入自身失败则放弃。
@@ -336,6 +337,9 @@ def record_turn_interventions(
         has_unanswered_injection,
         record_intervention_event,
     )
+
+    if not is_profile_memory_enabled(session, user_id):
+        return
 
     if practice_action in {"offer", "start", "complete"}:
         record_intervention_event(

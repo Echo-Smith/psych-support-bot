@@ -1,6 +1,7 @@
 import os
 from functools import lru_cache
 from pathlib import Path
+from urllib.parse import urlsplit
 
 from pydantic import Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -22,6 +23,15 @@ class Settings(BaseSettings):
     langfuse_public_key: str = Field(default="", alias="LANGFUSE_PUBLIC_KEY")
     langfuse_secret_key: str = Field(default="", alias="LANGFUSE_SECRET_KEY")
     langfuse_host: str = Field(default="https://cloud.langfuse.com", alias="LANGFUSE_HOST")
+    # Explicit deployment switch for the consented product-analysis copy:
+    # current user input + final user-facing reply, redacted locally first.
+    langfuse_content_analytics: bool = Field(default=True, alias="LANGFUSE_CONTENT_ANALYTICS")
+    # Stable HMAC key for unlinkable external subject IDs and later erasure.
+    # Falls back to JWT_SECRET_KEY for compatibility; production should set it.
+    langfuse_pseudonym_key: str = Field(default="", alias="LANGFUSE_PSEUDONYM_KEY")
+    # Keep true for deployments that ever uploaded personal traces. Set false
+    # only after verifying that no historical personal traces exist.
+    langfuse_delete_history: bool = Field(default=True, alias="LANGFUSE_DELETE_HISTORY")
     # 流量环境标记：生产入口保持默认 "production"；eval/测试入口在进程
     # 早期覆盖为 "eval"/"test"（见 evals/runner.py 与 tests/conftest.py），
     # 使 Langfuse 仪表盘与巡检可按环境过滤——基线巡检（2026-09-06）显示
@@ -74,6 +84,21 @@ class Settings(BaseSettings):
     # 商业化部署置 AUTH_ENABLED=true 并显式配置 JWT_SECRET_KEY。
     auth_enabled: bool = Field(default=False, alias="AUTH_ENABLED")
     jwt_secret_key: str = Field(default="", alias="JWT_SECRET_KEY")
+    auth_identity_hash_key: str = Field(default="", alias="AUTH_IDENTITY_HASH_KEY")
+    auth_access_token_minutes: int = Field(default=15, alias="AUTH_ACCESS_TOKEN_MINUTES")
+    auth_refresh_token_days: int = Field(default=30, alias="AUTH_REFRESH_TOKEN_DAYS")
+    auth_token_issuer: str = Field(default="psych-support-bot", alias="AUTH_TOKEN_ISSUER")
+    auth_token_audience: str = Field(default="psych-support-api", alias="AUTH_TOKEN_AUDIENCE")
+    # Passkey remains off until both a durable RP ID and exact HTTPS origins are
+    # configured. A comma-separated origin list supports web and native bridges.
+    auth_passkey_rp_id: str = Field(default="", alias="AUTH_PASSKEY_RP_ID")
+    auth_passkey_origins: str = Field(default="", alias="AUTH_PASSKEY_ORIGINS")
+    # Comma-separated allowlists. Keeping them empty leaves the provider off;
+    # adding iOS/Android/Web client IDs does not change internal account IDs.
+    auth_google_client_ids: str = Field(default="", alias="AUTH_GOOGLE_CLIENT_IDS")
+    auth_apple_client_ids: str = Field(default="", alias="AUTH_APPLE_CLIENT_IDS")
+    auth_huawei_client_ids: str = Field(default="", alias="AUTH_HUAWEI_CLIENT_IDS")
+    auth_allowed_origins: str = Field(default="", alias="AUTH_ALLOWED_ORIGINS")
 
     # ── 语音 I/O（与主 LLM 完全分离的供应商配置，便于独立换模型）────────
     # STT：provider = "openai"（multipart /audio/transcriptions，OpenAI/兼容
@@ -108,6 +133,24 @@ class Settings(BaseSettings):
             self.openai_base_url = os.getenv("DASHSCOPE_BASE_URL", "")
         if self.openai_model in {"", "gpt-4.1-mini"}:
             self.openai_model = os.getenv("DASHSCOPE_MODEL", self.openai_model)
+        production = self.environment.lower() == "production"
+        authentication_configured = self.auth_enabled or any(
+            value.strip()
+            for value in (
+                self.auth_google_client_ids,
+                self.auth_apple_client_ids,
+                self.auth_huawei_client_ids,
+                self.auth_passkey_rp_id,
+            )
+        )
+        configured_jwt_secret = self.jwt_secret_key
+        configured_identity_key = self.auth_identity_hash_key
+        if production and authentication_configured and len(configured_jwt_secret) < 32:
+            raise ValueError("Production authentication requires JWT_SECRET_KEY (32+ chars)")
+        if production and authentication_configured and len(configured_identity_key) < 32:
+            raise ValueError("Production authentication requires AUTH_IDENTITY_HASH_KEY (32+ chars)")
+        if production and authentication_configured and configured_identity_key == configured_jwt_secret:
+            raise ValueError("JWT_SECRET_KEY and AUTH_IDENTITY_HASH_KEY must be independent")
         if not self.jwt_secret_key:
             # 未显式配置时生成随机临时密钥（注册/登录端点始终可用，需可签发）：
             # AUTH_ENABLED=true 的部署重启后所有已签发 token 失效——
@@ -115,6 +158,40 @@ class Settings(BaseSettings):
             import secrets
 
             self.jwt_secret_key = secrets.token_urlsafe(48)
+        if not self.auth_identity_hash_key:
+            self.auth_identity_hash_key = self.jwt_secret_key
+        if bool(self.auth_passkey_rp_id) != bool(self.auth_passkey_origins.strip()):
+            raise ValueError("AUTH_PASSKEY_RP_ID and AUTH_PASSKEY_ORIGINS must be configured together")
+        passkey_origins = [value.strip() for value in self.auth_passkey_origins.split(",") if value.strip()]
+        for origin in passkey_origins:
+            parsed = urlsplit(origin)
+            if (
+                parsed.scheme != "https"
+                or not parsed.hostname
+                or parsed.path not in {"", "/"}
+                or parsed.query
+                or parsed.fragment
+            ):
+                raise ValueError("AUTH_PASSKEY_ORIGINS must contain exact HTTPS origins")
+            if parsed.hostname != self.auth_passkey_rp_id and not parsed.hostname.endswith(
+                "." + self.auth_passkey_rp_id
+            ):
+                raise ValueError("Every Passkey origin must belong to AUTH_PASSKEY_RP_ID")
+        allowed_origins = [value.strip() for value in self.auth_allowed_origins.split(",") if value.strip()]
+        if production and any(urlsplit(origin).scheme != "https" for origin in allowed_origins):
+            raise ValueError("Production AUTH_ALLOWED_ORIGINS must use HTTPS")
+        if self.auth_access_token_minutes < 1 or self.auth_access_token_minutes > 60:
+            raise ValueError("AUTH_ACCESS_TOKEN_MINUTES must be between 1 and 60")
+        if self.auth_refresh_token_days < 1 or self.auth_refresh_token_days > 365:
+            raise ValueError("AUTH_REFRESH_TOKEN_DAYS must be between 1 and 365")
+        if (
+            self.environment.lower() == "production"
+            and self.langfuse_public_key
+            and self.langfuse_secret_key
+            and self.langfuse_content_analytics
+            and len(self.langfuse_pseudonym_key) < 32
+        ):
+            raise ValueError("Production Langfuse content analytics requires LANGFUSE_PSEUDONYM_KEY (32+ chars)")
         return self
 
 

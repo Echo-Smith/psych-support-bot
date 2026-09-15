@@ -25,18 +25,25 @@ from psych_support_bot.infra.db.me_repositories import (
     export_user_data,
     me_summary,
 )
+from psych_support_bot.infra.db.models import ProfileMemoryPreference
+from psych_support_bot.infra.db.profile_repositories import (
+    delete_user_profile_beliefs,
+    has_profile_memory_data,
+    is_profile_memory_enabled,
+    set_profile_memory_enabled,
+)
 from psych_support_bot.infra.db.repositories import record_usage_event
 from psych_support_bot.infra.db.session import get_db_session
 
 router = APIRouter(prefix="/v1/me", tags=["me"])
 
-CONFIRM_ACTIONS = ("clear_records", "delete_account")
+CONFIRM_ACTIONS = ("clear_records", "delete_account", "clear_profile_memory")
 CONFIRM_TOKEN_TTL_SECONDS = 600
 
 
 class ConfirmIntentRequest(BaseModel):
     user_id: str = Field("", max_length=64)
-    action: str = Field(..., pattern="^(clear_records|delete_account)$")
+    action: str = Field(..., pattern="^(clear_records|delete_account|clear_profile_memory)$")
 
 
 class ConfirmIntentResponse(BaseModel):
@@ -88,6 +95,17 @@ class MeSummaryResponse(BaseModel):
     counts_30d: dict[str, int]
 
 
+class ProfileMemoryPreferenceRequest(BaseModel):
+    user_id: str = Field("", max_length=64)
+    enabled: bool
+
+
+class ProfileMemoryPreferenceResponse(BaseModel):
+    enabled: bool
+    has_data: bool
+    updated_at: str | None
+
+
 @router.get("/summary", response_model=MeSummaryResponse)
 def get_me_summary(
     request: Request,
@@ -114,6 +132,55 @@ def get_profile_panel(
     """
     uid = request_user_id(request, user_id)
     return build_profile_panel(session, uid, language=language)
+
+
+@router.get("/profile-memory", response_model=ProfileMemoryPreferenceResponse)
+def get_profile_memory_preference(
+    request: Request,
+    user_id: str = Query(""),
+    session: Session = Depends(get_db_session),
+) -> ProfileMemoryPreferenceResponse:
+    """Read the account-level inferred-profile memory setting."""
+    uid = request_user_id(request, user_id)
+    row = session.get(ProfileMemoryPreference, uid)
+    return ProfileMemoryPreferenceResponse(
+        enabled=is_profile_memory_enabled(session, uid),
+        has_data=has_profile_memory_data(session, uid),
+        updated_at=row.updated_at.isoformat() if row is not None else None,
+    )
+
+
+@router.put("/profile-memory", response_model=ProfileMemoryPreferenceResponse)
+def update_profile_memory_preference(
+    payload: ProfileMemoryPreferenceRequest,
+    request: Request,
+    session: Session = Depends(get_db_session),
+) -> ProfileMemoryPreferenceResponse:
+    """Pause or resume inferred profile collection and use without deleting data."""
+    uid = request_user_id(request, payload.user_id)
+    row = set_profile_memory_enabled(session, uid, payload.enabled)
+    session.commit()
+    return ProfileMemoryPreferenceResponse(
+        enabled=row.enabled,
+        has_data=has_profile_memory_data(session, uid),
+        updated_at=row.updated_at.isoformat(),
+    )
+
+
+@router.delete("/profile-memory")
+def clear_profile_memory(
+    request: Request,
+    user_id: str = Query(""),
+    confirm_token: str = Query(..., min_length=8),
+    session: Session = Depends(get_db_session),
+) -> dict[str, object]:
+    """Disable and permanently erase inferred profile memory. Requires confirmation token."""
+    uid = request_user_id(request, user_id)
+    _verify_intent_token(uid, "clear_profile_memory", confirm_token)
+    set_profile_memory_enabled(session, uid, False)
+    counts = delete_user_profile_beliefs(session, uid)
+    session.commit()
+    return {"status": "profile_memory_cleared", "enabled": False, "deleted": counts}
 
 
 @router.get("/export")
@@ -167,8 +234,15 @@ def delete_my_account(
     """注销：级联删除身份与全部数据（含聊天）。需确认令牌。"""
     user_id = request_user_id(request, user_id)
     _verify_intent_token(user_id, "delete_account", confirm_token)
+    from psych_support_bot.services.privacy_deletion import enqueue_external_deletion
+
+    job = enqueue_external_deletion(session, user_id)
     counts = delete_user_account(session, user_id)
     # 审计事件会随用户数据一并删除（usage_events 属于删除范围），
     # 只保留服务端日志作为注销动作的痕迹。
     session.commit()
-    return {"status": "account_deleted", "deleted": counts}
+    return {
+        "status": "account_deleted",
+        "deleted": counts,
+        "external_cleanup": {"receipt": job.id, "status": job.status},
+    }

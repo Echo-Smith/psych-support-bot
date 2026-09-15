@@ -1,3 +1,4 @@
+import asyncio
 import logging
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -21,6 +22,7 @@ from psych_support_bot.api.routes.system import router as system_router
 from psych_support_bot.api.routes.users import router as users_router
 from psych_support_bot.api.routes.voice import router as voice_router
 from psych_support_bot.api.routes.voice import ws_router as voice_ws_router
+from psych_support_bot.infra.config.settings import get_settings
 from psych_support_bot.infra.db.init_db import init_db
 from psych_support_bot.infra.telemetry.tracing import flush_langfuse, get_langfuse
 
@@ -32,8 +34,16 @@ async def lifespan(_: FastAPI):
     _run_migrations()
     init_db()
     get_langfuse()
-    yield
-    flush_langfuse()
+    from psych_support_bot.services.privacy_deletion import deletion_worker
+
+    stop = asyncio.Event()
+    worker = asyncio.create_task(deletion_worker(stop))
+    try:
+        yield
+    finally:
+        stop.set()
+        await worker
+        flush_langfuse()
 
 
 def _run_migrations() -> None:
@@ -77,6 +87,7 @@ INDEX_FILE = STATIC_DIR / "index.html"
 
 
 def create_app() -> FastAPI:
+    settings = get_settings()
     app = FastAPI(
         title="AI Psychological Support Bot API",
         version="0.1.0",
@@ -84,17 +95,24 @@ def create_app() -> FastAPI:
         lifespan=lifespan,
     )
 
+    configured_origins = [origin.strip() for origin in settings.auth_allowed_origins.split(",") if origin.strip()]
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=["*"],
-        allow_credentials=True,
+        allow_origins=configured_origins or ["*"],
+        allow_credentials=bool(configured_origins),
         allow_methods=["*"],
         allow_headers=["*"],
     )
+    from psych_support_bot.api.lifecycle import UserLifecycleMiddleware
+
+    app.add_middleware(UserLifecycleMiddleware)
 
     app.include_router(health_router)
     app.include_router(system_router)
     app.include_router(auth_router)
+    from psych_support_bot.api.routes.privacy import router as privacy_router
+
+    app.include_router(privacy_router)
 
     # JWT 认证守卫：数据端点统一挂载（api/auth.py）。AUTH_ENABLED=false 时
     # 守卫为 no-op（本地开发 / 既有测试），true 时无/坏 token 一律 401。
@@ -102,8 +120,9 @@ def create_app() -> FastAPI:
     from fastapi import Depends
 
     from psych_support_bot.api.auth import require_auth
+    from psych_support_bot.api.privacy import require_privacy_consent
 
-    data_router_guard = [Depends(require_auth)]
+    data_router_guard = [Depends(require_auth), Depends(require_privacy_consent)]
     for guarded in (
         conversation_router,
         assessments_router,

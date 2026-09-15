@@ -14,15 +14,43 @@ class User(Base):
     __tablename__ = "users"
 
     id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    status: Mapped[str] = mapped_column(String(32), default="active")
+    token_version: Mapped[int] = mapped_column(Integer, default=1)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+
+class PrivacyConsent(Base):
+    __tablename__ = "privacy_consents"
+
+    user_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    version: Mapped[str] = mapped_column(String(32))
+    accepted_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+
+class PrivacyDeletionJob(Base):
+    """Durable external erasure receipt; no conversation content.
+
+    Temporary lookup identifiers are erased after verified cleanup. The random
+    receipt remains usable after account credentials have been deleted.
+    """
+
+    __tablename__ = "privacy_deletion_jobs"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    user_id: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+    session_ids_json: Mapped[str] = mapped_column(Text, default="[]")
+    status: Mapped[str] = mapped_column(String(32), default="pending")
+    error_code: Mapped[str] = mapped_column(String(48), default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, onupdate=utcnow)
 
 
 class UserCredential(Base):
     """登录凭据（JWT 认证）。
 
     密码只存 pbkdf2_sha256 哈希（api/auth.py），绝不明文落库。
-    user_id 同时是 users.id / 全库数据关联键：注册即建同值 User，
-    既有客户端自报 user_id 的历史数据不受影响。
+    user_id 是 users.id / 全库数据关联键。新账户使用随机内部 ID；username
+    只是可替换的登录句柄。历史账户保留原 user_id，避免业务数据批量改写。
     """
 
     __tablename__ = "user_credentials"
@@ -31,6 +59,79 @@ class UserCredential(Base):
     username: Mapped[str] = mapped_column(String(64), unique=True, index=True)
     password_hash: Mapped[str] = mapped_column(String(256))
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+
+class AuthIdentity(Base):
+    """A verified external identity mapped to one internal account.
+
+    subject_hash is a keyed digest of provider issuer + subject. Raw provider
+    subjects, profile claims, and tokens are deliberately not persisted here.
+    """
+
+    __tablename__ = "auth_identities"
+    __table_args__ = (UniqueConstraint("provider", "issuer", "subject_hash", name="uq_auth_identity_subject"),)
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    user_id: Mapped[str] = mapped_column(String(64), index=True)
+    provider: Mapped[str] = mapped_column(String(32), index=True)
+    issuer: Mapped[str] = mapped_column(String(256))
+    subject_hash: Mapped[str] = mapped_column(String(64))
+    status: Mapped[str] = mapped_column(String(32), default="active")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+    last_used_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+    disabled_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+
+
+class AuthSession(Base):
+    """Rotating refresh session; raw refresh and CSRF secrets never reach storage."""
+
+    __tablename__ = "auth_sessions"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    user_id: Mapped[str] = mapped_column(String(64), index=True)
+    refresh_token_hash: Mapped[str] = mapped_column(String(64), unique=True)
+    csrf_token_hash: Mapped[str] = mapped_column(String(64))
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+    last_used_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+    expires_at: Mapped[datetime] = mapped_column(DateTime, index=True)
+    revoked_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    replaced_by_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+
+
+class PasskeyCredential(Base):
+    """WebAuthn credential storage, dormant until a stable RP ID is configured."""
+
+    __tablename__ = "passkey_credentials"
+
+    credential_id_hash: Mapped[str] = mapped_column(String(64), primary_key=True)
+    user_id: Mapped[str] = mapped_column(String(64), index=True)
+    credential_id: Mapped[str] = mapped_column(Text)
+    public_key_cose: Mapped[str] = mapped_column(Text)
+    user_handle_hash: Mapped[str] = mapped_column(String(64), index=True)
+    sign_count: Mapped[int] = mapped_column(Integer, default=0)
+    transports_json: Mapped[str] = mapped_column(Text, default="[]")
+    aaguid: Mapped[str] = mapped_column(String(64), default="")
+    backup_eligible: Mapped[bool] = mapped_column(Boolean, default=False)
+    backup_state: Mapped[bool] = mapped_column(Boolean, default=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+    last_used_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    revoked_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+
+
+class AuthChallenge(Base):
+    """Short-lived, single-use authentication ceremony state."""
+
+    __tablename__ = "auth_challenges"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    user_id: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+    flow: Mapped[str] = mapped_column(String(32), index=True)
+    challenge_hash: Mapped[str] = mapped_column(String(64), unique=True)
+    expected_origin: Mapped[str] = mapped_column(String(512), default="")
+    expected_rp_id: Mapped[str] = mapped_column(String(253), default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+    expires_at: Mapped[datetime] = mapped_column(DateTime, index=True)
+    used_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
 
 class UserProfile(Base):
@@ -42,6 +143,22 @@ class UserProfile(Base):
     goals: Mapped[str] = mapped_column(Text, default="")
     support_preferences: Mapped[str] = mapped_column(Text, default="")
     risk_notes: Mapped[str] = mapped_column(Text, default="")
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, onupdate=utcnow)
+
+
+class ProfileMemoryPreference(Base):
+    """User-owned switch for inferred long-term profile memory.
+
+    A missing row means enabled so existing accounts keep their current behavior.
+    Disabling pauses collection and use without deleting existing profile data;
+    deletion is a separate explicit action.
+    """
+
+    __tablename__ = "profile_memory_preferences"
+
+    user_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    disabled_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, onupdate=utcnow)
 
 

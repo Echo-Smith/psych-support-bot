@@ -247,8 +247,8 @@ def _build_exercise_feedback(*, exercise: dict, step_responses: list[str], user_
             step_responses=step_responses,
             expected_language="zh",
         )
-    except Exception:
-        logger.exception("Exercise feedback pipeline failed for user %s", user_id)
+    except Exception:  # noqa: BLE001 - exercise feedback has a deterministic fallback
+        logger.warning("Exercise feedback pipeline failed; deterministic fallback served")
         feedback, generated_by = "", "fallback"
     risk_level = "elevated" if generated_by == "safety_pause" else "low"
     return feedback, generated_by, risk_level

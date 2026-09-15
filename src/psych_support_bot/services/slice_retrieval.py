@@ -63,7 +63,10 @@ def _days_ago(created_at, now) -> int:
 
 def _profile_signals(session: Session, user_id: str) -> tuple[set[str], set[str]]:
     """画像驱动的两个匹配集：D1 主题 keys、D4 worked 练习 tags。"""
-    from psych_support_bot.infra.db.profile_repositories import list_active_beliefs
+    from psych_support_bot.infra.db.profile_repositories import is_profile_memory_enabled, list_active_beliefs
+
+    if not is_profile_memory_enabled(session, user_id):
+        return set(), set()
 
     d1_topics: set[str] = set()
     worked_tags: set[str] = set()
@@ -144,16 +147,15 @@ def retrieve_relevant_slices(
         )
         top = scored[:max_slices]
         logger.info(
-            "Slice retrieval: user=%s pool=%d matched_topics=%d worked=%d returned=%d",
-            user_id,
+            "Slice retrieval: pool=%d matched_topics=%d worked=%d returned=%d",
             len(candidates),
             len(match_topics),
             len(worked_tags),
             len(top),
         )
         return top
-    except Exception:
-        logger.warning("Slice retrieval failed for user %s; skipping relevant history.", user_id, exc_info=True)
+    except Exception:  # noqa: BLE001 - optional retrieval is fail-open
+        logger.warning("Slice retrieval failed; skipping relevant history")
         return []
 
 

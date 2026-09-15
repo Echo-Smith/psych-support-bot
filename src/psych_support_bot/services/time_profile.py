@@ -53,7 +53,7 @@ def calculate_time_profile(session: Session, user_id: str) -> dict[str, float | 
 
     if len(messages) < MIN_MESSAGES_FOR_PROFILE:
         # 新用户：使用保守默认值
-        logger.debug(f"User {user_id} has < {MIN_MESSAGES_FOR_PROFILE} messages, using default profile")
+        logger.debug("Insufficient messages for time profile; using defaults")
         return {
             "short_gap_threshold": 1.0,  # 1 小时
             "long_gap_threshold": 12.0,  # 12 小时
@@ -72,7 +72,7 @@ def calculate_time_profile(session: Session, user_id: str) -> dict[str, float | 
 
     if len(valid_gaps) < MIN_VALID_GAPS_FOR_PROFILE:
         # 有效样本不足
-        logger.debug(f"User {user_id} has < {MIN_VALID_GAPS_FOR_PROFILE} valid gaps, using default profile")
+        logger.debug("Insufficient valid gaps for time profile; using defaults")
         return {
             "short_gap_threshold": 1.0,
             "long_gap_threshold": 12.0,
@@ -124,7 +124,7 @@ def calculate_time_profile(session: Session, user_id: str) -> dict[str, float | 
     confidence = min(1.0, len(valid_gaps) / 50)  # 50+ 样本达到满置信度
 
     logger.info(
-        f"User {user_id} time profile: p25={p25:.1f}h, median={median:.1f}h, p75={p75:.1f}h, "
+        f"Time profile: p25={p25:.1f}h, median={median:.1f}h, p75={p75:.1f}h, "
         f"tier={frequency_tier}, short={short_threshold:.1f}h, long={long_threshold:.1f}h, "
         f"confidence={confidence:.2f}"
     )
@@ -150,6 +150,16 @@ def get_user_time_profile(session: Session, user_id: str) -> dict[str, float | t
     - 每 50 条新会话重新计算一次
     - 缓存到 UserTimeProfile 表
     """
+    from psych_support_bot.infra.db.profile_repositories import is_profile_memory_enabled
+
+    if not is_profile_memory_enabled(session, user_id):
+        return {
+            "short_gap_threshold": 1.0,
+            "long_gap_threshold": 12.0,
+            "sleep_window": (23, 7),
+            "frequency_tier": "disabled",
+            "confidence": 0.0,
+        }
     profile = session.get(UserTimeProfile, user_id)
 
     # 判断是否需要更新
@@ -189,7 +199,7 @@ def get_user_time_profile(session: Session, user_id: str) -> dict[str, float | t
         profile.frequency_tier = computed["frequency_tier"]
         profile.total_sessions = current_sessions
         session.commit()
-        logger.info(f"Updated time profile for user {user_id} after {current_sessions} sessions")
+        logger.info("Updated time profile after %d sessions", current_sessions)
         return computed
 
     # 使用缓存

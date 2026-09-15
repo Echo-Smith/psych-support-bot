@@ -36,8 +36,10 @@ def pytest_sessionstart(session) -> None:  # type: ignore[no-untyped-def]
 
 @pytest.fixture(autouse=True)
 def _no_langfuse_export(monkeypatch):
-    monkeypatch.delenv("LANGFUSE_PUBLIC_KEY", raising=False)
-    monkeypatch.delenv("LANGFUSE_SECRET_KEY", raising=False)
+    # Empty env overrides .env; deleting env vars would load production keys
+    # straight back from .env on the next Settings construction.
+    monkeypatch.setenv("LANGFUSE_PUBLIC_KEY", "")
+    monkeypatch.setenv("LANGFUSE_SECRET_KEY", "")
 
     # Drop cached settings/singleton created before (or outside) this fixture.
     monkeypatch.setattr("psych_support_bot.infra.telemetry.tracing._langfuse_client", None)
@@ -48,6 +50,24 @@ def _no_langfuse_export(monkeypatch):
     from psych_support_bot.infra.telemetry import tracing
 
     tracing._langfuse_client = None
+
+
+@pytest.fixture(autouse=True)
+def _existing_feature_tests_assume_consent(request, monkeypatch):
+    """Legacy feature fixtures predate the consent gate and test downstream logic.
+
+    Privacy boundary tests use real guards and explicit acceptance instead.
+    This override exists only in pytest, never as a runtime configuration flag.
+    """
+    if request.node.get_closest_marker("privacy_boundary"):
+        yield
+        return
+    from psych_support_bot.api.privacy import require_privacy_consent
+    from psych_support_bot.app import app
+
+    monkeypatch.setitem(app.dependency_overrides, require_privacy_consent, lambda: None)
+    monkeypatch.setattr("psych_support_bot.api.privacy.check_privacy_consent", lambda *_: None)
+    yield
 
 
 @pytest.fixture

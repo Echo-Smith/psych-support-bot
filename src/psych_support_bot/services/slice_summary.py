@@ -154,6 +154,6 @@ def _generate_summary_text_via_llm(messages: list) -> str | None:
         if len(text) > MAX_SUMMARY_CHARS:
             text = text[: MAX_SUMMARY_CHARS - 1] + "…"
         return text
-    except Exception:
-        logger.warning("Slice summary LLM failed; falling back to deterministic.", exc_info=True)
+    except Exception:  # noqa: BLE001 - optional summary has a deterministic fallback
+        logger.warning("Slice summary LLM failed; falling back to deterministic")
         return None

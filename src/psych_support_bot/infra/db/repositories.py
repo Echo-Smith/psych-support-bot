@@ -232,13 +232,16 @@ def build_memory_snapshot(
     latest_summary = get_latest_summary(session, user_id)
     recent_messages = get_recent_messages(session, user_id)
     profile = get_user_profile(session, user_id)
+    from psych_support_bot.infra.db.profile_repositories import is_profile_memory_enabled
+
+    profile_memory_enabled = is_profile_memory_enabled(session, user_id)
 
     # Last five turns with speaker labels — thin excerpts were the root cause
     # of the bot forgetting events like "we just finished a breathing exercise"
     # and re-asking the user whether they wanted to start one.
     recent_excerpt = "\n".join(_safe(msg) for msg in reversed(recent_messages[-5:])) if recent_messages else ""
     profile_summary = ""
-    if profile is not None:
+    if profile is not None and profile_memory_enabled:
         profile_summary = " || ".join(
             _safe(piece)
             for piece in [
@@ -387,8 +390,8 @@ def record_usage_event(session: Session, user_id: str, event_type: str, **metada
                     metadata_json=json.dumps(metadata or {}, ensure_ascii=False, default=str),
                 )
             )
-    except Exception:
-        logger.warning("Usage event recording failed (non-blocking): %s", event_type, exc_info=True)
+    except Exception:  # noqa: BLE001 - analytics recording is intentionally non-blocking
+        logger.warning("Usage event recording failed (non-blocking): %s", event_type)
 
 
 def create_questionnaire_session(
