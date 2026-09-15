@@ -665,6 +665,15 @@ class ConversationService:
             )
         except Exception:  # noqa: BLE001  # pragma: no cover - optional intervention hook
             logger.warning("Intervention event hook failed; conversation response unaffected")
+
+        # 通路 C：异步画像综合——K1 已同步落库，触发异步 Worker 处理 K2/K3。
+        try:
+            from psych_support_bot.services.profile_evolution import enqueue_evolution_job
+
+            enqueue_evolution_job(session, payload.user_id)
+        except Exception:  # noqa: BLE001 — evolution trigger must not block conversation
+            pass
+
         return response
 
 

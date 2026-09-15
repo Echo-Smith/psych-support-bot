@@ -516,3 +516,37 @@ class UserTimeProfile(Base):
     long_gap_threshold_minutes: Mapped[float] = mapped_column(Float, default=720.0)
     total_sessions: Mapped[int] = mapped_column(Integer, default=0)
     last_updated: Mapped[datetime] = mapped_column(DateTime, default=utcnow, onupdate=utcnow)
+
+
+class ProfileEvolutionJob(Base):
+    """异步画像综合任务：按用户合并、幂等、单用户互斥。"""
+
+    __tablename__ = "profile_evolution_jobs"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    user_id: Mapped[str] = mapped_column(String(64), index=True)
+    evidence_watermark: Mapped[str] = mapped_column(Text, default="{}")
+    prompt_version: Mapped[str] = mapped_column(String(32), default="")
+    idempotency_key: Mapped[str] = mapped_column(String(128), unique=True)
+    status: Mapped[str] = mapped_column(String(16), default="pending")
+    attempt_count: Mapped[int] = mapped_column(Integer, default=0)
+    error_code: Mapped[str] = mapped_column(String(64), default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+    started_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+
+
+class ProfileSnapshot(Base):
+    """画像快照：版本化、可回退的结构化理解 + 支持策略。"""
+
+    __tablename__ = "profile_snapshots"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    user_id: Mapped[str] = mapped_column(String(64), index=True)
+    version: Mapped[int] = mapped_column(Integer, default=1)
+    status: Mapped[str] = mapped_column(String(16), default="shadow")
+    content_json: Mapped[str] = mapped_column(Text, default="{}")
+    support_policy_json: Mapped[str] = mapped_column(Text, default="{}")
+    evidence_watermark: Mapped[str] = mapped_column(Text, default="{}")
+    prompt_version: Mapped[str] = mapped_column(String(32), default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)

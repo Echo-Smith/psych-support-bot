@@ -35,14 +35,17 @@ async def lifespan(_: FastAPI):
     init_db()
     get_langfuse()
     from psych_support_bot.services.privacy_deletion import deletion_worker
+    from psych_support_bot.services.profile_evolution import profile_evolution_worker
 
     stop = asyncio.Event()
-    worker = asyncio.create_task(deletion_worker(stop))
+    deletion_task = asyncio.create_task(deletion_worker(stop))
+    evolution_task = asyncio.create_task(profile_evolution_worker(stop))
     try:
         yield
     finally:
         stop.set()
-        await worker
+        await deletion_task
+        await evolution_task
         flush_langfuse()
 
 

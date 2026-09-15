@@ -1,0 +1,321 @@
+"""异步画像综合工作流（工作单元 C）。
+
+复用 privacy_deletion.py 的 Worker 模式：应用内持久后台线程、
+数据库任务表、幂等键、单用户互斥。Celery/Redis 作为规模化替换层，
+不作为首版运行前提。
+
+五节点流程：
+1. load_evidence   读取新增证据
+2. formulate       一次 LLM 调用生成候选理解
+3. validate        代码校验证据、敏感性与生效资格
+4. compile_policy  生成 Agent 可消费的支持策略
+5. persist_snapshot 保存版本化快照
+"""
+
+from __future__ import annotations
+
+import asyncio
+import json
+import logging
+import uuid
+from contextlib import suppress
+from datetime import UTC, datetime
+
+from sqlalchemy.orm import Session
+
+from psych_support_bot.infra.db.models import (
+    ProfileBelief,
+    ProfileEvolutionJob,
+    ProfileSnapshot,
+    UserProfile,
+)
+from psych_support_bot.infra.db.session import SessionLocal
+
+logger = logging.getLogger(__name__)
+
+POLL_INTERVAL_SECONDS = 60
+JOB_LEASE_SECONDS = 300  # 5 分钟租约，防止并发处理
+MAX_ATTEMPTS = 3
+PROMPT_VERSION = "v1"
+
+
+def enqueue_evolution_job(session: Session, user_id: str) -> ProfileEvolutionJob | None:
+    """写入/合并画像综合任务（幂等：同一用户同一水位只产生一个 pending 任务）。"""
+    from psych_support_bot.infra.db.profile_repositories import is_profile_memory_enabled
+
+    if not is_profile_memory_enabled(session, user_id):
+        return None
+
+    # 幂等键：user_id + 当前证据水位（belief 最后更新时间）。
+    latest = (
+        session.query(ProfileBelief.updated_at)
+        .filter(ProfileBelief.user_id == user_id, ProfileBelief.status == "active")
+        .order_by(ProfileBelief.updated_at.desc())
+        .limit(1)
+        .scalar()
+    )
+    watermark = latest.isoformat() if latest else "none"
+    idempotency_key = f"{user_id}:{watermark}:{PROMPT_VERSION}"
+
+    # 检查是否已有相同水位的 pending/running 任务。
+    existing = (
+        session.query(ProfileEvolutionJob)
+        .filter(
+            ProfileEvolutionJob.user_id == user_id,
+            ProfileEvolutionJob.status.in_(("pending", "running")),
+        )
+        .first()
+    )
+    if existing:
+        return existing
+
+    job = ProfileEvolutionJob(
+        id=uuid.uuid4().hex[:16],
+        user_id=user_id,
+        evidence_watermark=json.dumps({"latest_update": watermark}),
+        prompt_version=PROMPT_VERSION,
+        idempotency_key=idempotency_key,
+        status="pending",
+    )
+    session.add(job)
+    session.commit()
+    return job
+
+
+def process_pending_evolutions() -> None:
+    """处理所有 pending 任务（同步，由 Worker 线程调用）。"""
+    with SessionLocal() as session:
+        jobs = (
+            session.query(ProfileEvolutionJob)
+            .filter(ProfileEvolutionJob.status == "pending")
+            .order_by(ProfileEvolutionJob.created_at)
+            .limit(5)
+            .all()
+        )
+        if not jobs:
+            return
+        for job in jobs:
+            _process_single_job(session, job)
+
+
+def _process_single_job(session: Session, job: ProfileEvolutionJob) -> None:
+    """处理单个画像综合任务。"""
+    now = datetime.now(UTC)
+    job.status = "running"
+    job.started_at = now
+    job.attempt_count += 1
+    session.commit()
+
+    try:
+        # Node 1: load_evidence
+        evidence = _load_evidence(session, job.user_id)
+
+        # Node 2: formulate (LLM)
+        candidate = _formulate(session, job.user_id, evidence)
+
+        # Node 3: validate
+        validated = _validate(candidate)
+
+        # Node 4: compile_policy
+        policy = _compile_policy(validated)
+
+        # Node 5: persist_snapshot
+        _persist_snapshot(session, job.user_id, validated, policy, job.evidence_watermark)
+
+        job.status = "completed"
+        job.completed_at = datetime.now(UTC)
+        job.error_code = ""
+        session.commit()
+        logger.info("Profile evolution completed for user %s", job.user_id)
+
+    except Exception as exc:  # noqa: BLE001 — worker must not crash; retry on next tick
+        job.status = "failed" if job.attempt_count >= MAX_ATTEMPTS else "pending"
+        job.error_code = type(exc).__name__
+        session.commit()
+        logger.warning("Profile evolution failed for user %s: %s", job.user_id, exc)
+
+
+# ── Node 1: load_evidence ────────────────────────────────────────────
+
+def _load_evidence(session: Session, user_id: str) -> dict:
+    """读取用户的活跃信念、背景、最近切片摘要作为综合输入。"""
+    beliefs = (
+        session.query(ProfileBelief)
+        .filter(ProfileBelief.user_id == user_id, ProfileBelief.status == "active")
+        .order_by(ProfileBelief.last_evidence_at.desc())
+        .limit(30)
+        .all()
+    )
+    belief_data = []
+    for b in beliefs:
+        belief_data.append({
+            "dimension": b.dimension,
+            "key": b.key,
+            "claim_text": b.claim_text,
+            "confidence": b.confidence,
+            "layer": b.layer,
+            "value": b.value_json,
+        })
+
+    profile = session.get(UserProfile, user_id)
+    background = {}
+    if profile and profile.background_json and profile.background_json != "{}":
+        with suppress(TypeError, ValueError):
+            background = json.loads(profile.background_json)
+
+    return {"beliefs": belief_data, "background": background, "user_id": user_id}
+
+
+# ── Node 2: formulate (LLM) ─────────────────────────────────────────
+
+def _formulate(session: Session, user_id: str, evidence: dict) -> dict:
+    """一次 LLM 调用生成候选理解。"""
+    from psych_support_bot.infra.llm.generation import generate_profile_extraction
+
+    beliefs_text = "\n".join(
+        f"- [{b['dimension']}] {b['key']} (confidence={b['confidence']:.2f}): {b['claim_text']}"
+        for b in evidence["beliefs"]
+        if b["confidence"] >= 0.3
+    )
+    bg_text = json.dumps(evidence["background"], ensure_ascii=False) if evidence["background"] else "(none)"
+
+    system_prompt = (
+        "You are building a psychological understanding of a user through their "
+        "conversation history and profile data. Output STRICT JSON:\n"
+        '{"patterns": [{"description": "...", "situations": ["..."], "what_happens": "...", '
+        '"why_possibly": "...", "confidence": 0.0-1.0, "needs_verification": true/false}], '
+        '"how_to_be_with_them": "...", "open_questions": ["..."], '
+        '"support_policy": {"response_length": "brief|normal", "pacing": "...", '
+        '"preferred_knowledge_paths": ["act|cbt|dbt"]}}\n\n'
+        "Rules:\n"
+        "- At most 3 patterns. Only from provided evidence.\n"
+        "- Mark uncertain patterns with needs_verification=true.\n"
+        "- Never use clinical labels (personality disorder, attachment style).\n"
+        "- 'how_to_be_with_them' is about interaction style, not diagnosis.\n"
+        "- support_policy uses controlled enums only."
+    )
+
+    user_content = f"[Beliefs]\n{beliefs_text}\n\n[Background]\n{bg_text}"
+    raw = generate_profile_extraction(system_prompt=system_prompt, payload_text=user_content)
+
+    # Parse
+    text = raw.strip()
+    if text.startswith("```"):
+        text = text.strip("`")
+        if text.startswith("json"):
+            text = text[4:]
+    start, end = text.find("{"), text.rfind("}")
+    if start < 0 or end <= start:
+        return {"patterns": [], "how_to_be_with_them": "", "open_questions": [], "support_policy": {}}
+    try:
+        return json.loads(text[start : end + 1])
+    except json.JSONDecodeError:
+        return {"patterns": [], "how_to_be_with_them": "", "open_questions": [], "support_policy": {}}
+
+
+# ── Node 3: validate ─────────────────────────────────────────────────
+
+_FORBIDDEN_LABELS = (
+    "personality disorder", "narcissist", "borderline", "avoidant",
+    "attachment style", "anxious attachment", "secure attachment",
+    "disorder", "diagnosis", "pathological",
+)
+
+
+def _validate(candidate: dict) -> dict:
+    """确定性校验：禁止诊断标签、敏感信息、无证据断言。"""
+    patterns = candidate.get("patterns", [])
+    validated = []
+    for p in patterns:
+        desc = p.get("description", "")
+        # 禁止诊断标签
+        if any(label in desc.lower() for label in _FORBIDDEN_LABELS):
+            continue
+        # 禁止空描述
+        if not desc.strip():
+            continue
+        validated.append(p)
+    candidate["patterns"] = validated[:3]
+    return candidate
+
+
+# ── Node 4: compile_policy ───────────────────────────────────────────
+
+_DEFAULT_POLICY = {
+    "response_length": "normal",
+    "pacing": "validate_before_suggestions",
+    "question_budget": 2,
+    "avoid_topics": [],
+    "preferred_knowledge_paths": [],
+    "exercise_constraints": [],
+}
+
+
+def _compile_policy(candidate: dict) -> dict:
+    """将候选理解编译为有限指令（受控枚举，不直接暴露原始画像）。"""
+    raw_policy = candidate.get("support_policy", {})
+    policy = dict(_DEFAULT_POLICY)
+    if isinstance(raw_policy, dict):
+        if raw_policy.get("response_length") in ("brief", "normal"):
+            policy["response_length"] = raw_policy["response_length"]
+        if raw_policy.get("pacing"):
+            policy["pacing"] = raw_policy["pacing"]
+        if isinstance(raw_policy.get("preferred_knowledge_paths"), list):
+            policy["preferred_knowledge_paths"] = [
+                p for p in raw_policy["preferred_knowledge_paths"] if p in ("act", "cbt", "dbt", "mi", "sfbt")
+            ]
+    return policy
+
+
+# ── Node 5: persist_snapshot ─────────────────────────────────────────
+
+def _persist_snapshot(
+    session: Session,
+    user_id: str,
+    content: dict,
+    policy: dict,
+    evidence_watermark: str,
+) -> ProfileSnapshot:
+    """保存版本化快照，旧快照标记为 retired。"""
+    # 计算新版本号。
+    latest = (
+        session.query(ProfileSnapshot)
+        .filter(ProfileSnapshot.user_id == user_id)
+        .order_by(ProfileSnapshot.version.desc())
+        .limit(1)
+        .first()
+    )
+    new_version = (latest.version + 1) if latest else 1
+
+    # 旧 active/snapshot 标记为 retired。
+    session.query(ProfileSnapshot).filter(
+        ProfileSnapshot.user_id == user_id,
+        ProfileSnapshot.status.in_(("active", "shadow")),
+    ).update({"status": "retired"}, synchronize_session=False)
+
+    snapshot = ProfileSnapshot(
+        id=uuid.uuid4().hex[:16],
+        user_id=user_id,
+        version=new_version,
+        status="active",
+        content_json=json.dumps(content, ensure_ascii=False),
+        support_policy_json=json.dumps(policy, ensure_ascii=False),
+        evidence_watermark=evidence_watermark,
+        prompt_version=PROMPT_VERSION,
+    )
+    session.add(snapshot)
+    session.commit()
+    return snapshot
+
+
+# ── Worker ───────────────────────────────────────────────────────────
+
+async def profile_evolution_worker(stop: asyncio.Event) -> None:
+    """应用内持久后台 Worker：轮询 pending 任务并处理。"""
+    while not stop.is_set():
+        try:
+            await asyncio.to_thread(process_pending_evolutions)
+        except Exception:  # noqa: BLE001 — database outages are retried on the next tick
+            logger.warning("Profile evolution worker will retry")
+        with suppress(TimeoutError):
+            await asyncio.wait_for(stop.wait(), timeout=POLL_INTERVAL_SECONDS)
