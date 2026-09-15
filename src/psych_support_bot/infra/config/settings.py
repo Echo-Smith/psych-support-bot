@@ -71,6 +71,9 @@ class Settings(BaseSettings):
     # 提取（D1 图内 topics + D4 练习效果信号），无额外 LLM 调用。fail-open：
     # 提取异常只记统计不阻断对话；危机轮零提取（高危内容不入画像层）。
     profile_extraction_enabled: bool = Field(default=True, alias="PROFILE_EXTRACTION_ENABLED")
+    # 画像支持策略生效开关（工作单元 F）：关闭时画像快照不影响回复，
+    # 回退到默认支持体验。用于影子评估、灰度发布和紧急回退。
+    profile_policy_enabled: bool = Field(default=False, alias="PROFILE_POLICY_ENABLED")
     # ===== Context Slicing (Phase 3) =====
     # 上下文切片系统：自动按话题切分对话，避免上下文污染
     enable_context_slicing: bool = Field(default=False, alias="ENABLE_CONTEXT_SLICING")

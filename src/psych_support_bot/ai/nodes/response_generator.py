@@ -280,35 +280,39 @@ def _generate_normal_reply(state: GraphState, risk_level: str, no_question_mode:
                 pass
 
             # 工作单元 E：从画像快照读取支持策略，注入 turn context。
+            # profile_policy_enabled=False 时跳过（影子模式/紧急回退）。
             try:
-                from psych_support_bot.infra.db.models import ProfileSnapshot
-                from psych_support_bot.infra.db.session import SessionLocal as _PS
+                from psych_support_bot.infra.config.settings import get_settings as _gs
 
-                with _PS() as _s:
-                    snapshot = (
-                        _s.query(ProfileSnapshot)
-                        .filter(
-                            ProfileSnapshot.user_id == state["user_id"],
-                            ProfileSnapshot.status == "active",
+                if _gs().profile_policy_enabled:
+                    from psych_support_bot.infra.db.models import ProfileSnapshot
+                    from psych_support_bot.infra.db.session import SessionLocal as _PS
+
+                    with _PS() as _s:
+                        snapshot = (
+                            _s.query(ProfileSnapshot)
+                            .filter(
+                                ProfileSnapshot.user_id == state["user_id"],
+                                ProfileSnapshot.status == "active",
+                            )
+                            .order_by(ProfileSnapshot.version.desc())
+                            .limit(1)
+                            .first()
                         )
-                        .order_by(ProfileSnapshot.version.desc())
-                        .limit(1)
-                        .first()
-                    )
-                if snapshot and snapshot.support_policy_json:
-                    import json as _json
+                    if snapshot and snapshot.support_policy_json:
+                        import json as _json
 
-                    policy = _json.loads(snapshot.support_policy_json)
-                    policy_parts = []
-                    if policy.get("response_length") == "brief":
-                        policy_parts.append("Keep responses brief and direct.")
-                    if policy.get("pacing") == "validate_before_suggestions":
-                        policy_parts.append("Validate the user's experience before offering suggestions.")
-                    paths = policy.get("preferred_knowledge_paths", [])
-                    if paths:
-                        policy_parts.append(f"Prefer knowledge from: {', '.join(paths)}.")
-                    if policy_parts:
-                        loop_hint_with_slice = f"{loop_hint_with_slice}\n\nSupport policy: {' '.join(policy_parts)}"
+                        policy = _json.loads(snapshot.support_policy_json)
+                        policy_parts = []
+                        if policy.get("response_length") == "brief":
+                            policy_parts.append("Keep responses brief and direct.")
+                        if policy.get("pacing") == "validate_before_suggestions":
+                            policy_parts.append("Validate the user's experience before offering suggestions.")
+                        paths = policy.get("preferred_knowledge_paths", [])
+                        if paths:
+                            policy_parts.append(f"Prefer knowledge from: {', '.join(paths)}.")
+                        if policy_parts:
+                            loop_hint_with_slice = f"{loop_hint_with_slice}\n\nSupport policy: {' '.join(policy_parts)}"
             except Exception:  # noqa: BLE001
                 pass
 
