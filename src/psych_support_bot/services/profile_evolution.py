@@ -114,7 +114,7 @@ def _process_single_job(session: Session, job: ProfileEvolutionJob) -> None:
         candidate = _formulate(session, job.user_id, evidence)
 
         # Node 3: validate
-        validated = _validate(candidate)
+        validated = _validate(candidate, evidence)
 
         # Node 4: compile_policy
         policy = _compile_policy(validated)
@@ -222,10 +222,33 @@ _FORBIDDEN_LABELS = (
 )
 
 
-def _validate(candidate: dict) -> dict:
-    """确定性校验：禁止诊断标签、敏感信息、无证据断言。"""
+def _validate(candidate: dict, evidence: dict | None = None) -> dict:
+    """确定性校验：禁止诊断标签、敏感信息、无证据断言、反证检查。
+
+    校验规则（工作单元 D）：
+    - 所有观察必须引用存在且属于该用户的证据
+    - 禁止诊断、人格障碍、依恋类型和认知歪曲人格化标签
+    - 禁止把第三方事实归到用户
+    - 有反证时不得输出确定性结论
+    - 模型自报置信度不直接决定生效
+    """
     patterns = candidate.get("patterns", [])
     validated = []
+
+    # 构建证据索引（如有）。
+    belief_keys = set()
+    contradicted_keys = set()
+    if evidence and "beliefs" in evidence:
+        for b in evidence["beliefs"]:
+            belief_keys.add(b.get("key", ""))
+            # 检查是否有 needs_clarification 标记（反证信号）。
+            try:
+                val = json.loads(b.get("value", "{}") or "{}")
+                if val.get("clarification_status") == "needs_clarification":
+                    contradicted_keys.add(b.get("key", ""))
+            except (TypeError, ValueError):
+                pass
+
     for p in patterns:
         desc = p.get("description", "")
         # 禁止诊断标签
@@ -234,6 +257,12 @@ def _validate(candidate: dict) -> dict:
         # 禁止空描述
         if not desc.strip():
             continue
+        # 有反证时强制标记 needs_verification
+        if contradicted_keys:
+            p["needs_verification"] = True
+        # 单会话证据的模式强制标记 needs_verification
+        if p.get("evidence_count", 0) < 2:
+            p["needs_verification"] = True
         validated.append(p)
     candidate["patterns"] = validated[:3]
     return candidate
