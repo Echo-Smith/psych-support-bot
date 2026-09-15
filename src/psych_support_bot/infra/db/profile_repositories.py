@@ -33,15 +33,15 @@ from psych_support_bot.infra.db.models import (
 logger = logging.getLogger(__name__)
 
 # belief 行上只保留最近 N 条证据 message id；完整史在事件表。
-MAX_EVIDENCE_REFS = 8
+from psych_support_bot.ai.profile.constants import (
+    CONFIDENCE_CEILING,
+    L4_QUESTION_THRESHOLD,
+    MAX_EVIDENCE_REFS,
+    SUPPORT_GAIN,
+)
 
-# 置信度更新的确定性参数（K2 接入质询闭环后按 eval 数据再校准）。
-SUPPORT_GAIN = 0.15
+# 向后兼容：旧代码可能直接引用 CONTRADICT_FACTOR。
 CONTRADICT_FACTOR = 0.5
-CONFIDENCE_CEILING = 0.95
-
-# 质询候选水位：≥此值且跨会话证据 ≥2 才允许被质询（升级 L2 仍需用户确认）。
-L4_QUESTION_THRESHOLD = 0.7
 
 _VALID_DIMENSIONS = {f"D{i}" for i in range(1, 9)}
 

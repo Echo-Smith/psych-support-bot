@@ -122,7 +122,9 @@ def build_profile_panel(session: Session, user_id: str, *, language: str = "zh")
         },
         "avatar": {
             # 拟人形象边界：只表达"系统对你的了解程度"，不做人格化演绎。
-            "familiarity": len(seen_dimensions) + (1 if understanding_section else 0) + (1 if background_section else 0),
+            "familiarity": len(seen_dimensions)
+            + (1 if understanding_section else 0)
+            + (1 if background_section else 0),
             "known_dimensions": sorted(seen_dimensions),
         },
         "sections": sections,

@@ -50,13 +50,26 @@ BASE_MULTIPLIER_LOW = 0.8  # pressure=1 时的收缩系数
 W_TAIL = 0.7  # 历史负载权重
 W_KNOWLEDGE = 0.3  # 本轮主题命中权重
 MAX_KNOWLEDGE_PROXY = 3  # 主题命中数封顶（与 detect_topics 返回上限一致）
-MAX_D8_ITEMS = 5  # D8 负记忆条数上限（保证固定首槽自身有界）
-L4_RENDER_THRESHOLD = 0.55  # L4 渲染水位（0.4 起步 + 一次 SUPPORT_GAIN）
+
+from psych_support_bot.ai.profile.constants import (
+    ACTIVITY_HALF_LIFE_DAYS,
+    CURIOSITY_SIGNAL_THRESHOLD,
+    D5_POSITION_THRESHOLD,
+    D6_TONE_THRESHOLD,
+    L4_RENDER_THRESHOLD,
+    LOW_CONFIDENCE_PATTERN_CEIL,
+    LOW_CONFIDENCE_PATTERN_FLOOR,
+    MAX_D8_ITEMS,
+    MAX_LIFE_EVENTS,
+    TIME_LABEL_ACTIVE_DAYS,
+    TIME_LABEL_MONTHLY_DAYS,
+    TIME_LABEL_WEEKLY_DAYS,
+)
 
 # ── 活性排序（信息增益调度）────────────────────────────────────────────
 # 活性 = 置信度 × 时间衰减 × 确认强度，只决定装箱排序，不参与红线门控
 # （L4 水位 / D3 未认领门控仍看原始字段，避免旧信念被衰减"偷偷隐藏"）。
-ACTIVITY_HALF_LIFE_DAYS = 60.0  # 证据半衰期：60 天无新证据活性减半
+_CONFIRMED_LAYER_ACTIVITY = 1.0  # L1/L2 用户已认领：活性不打折
 _CONFIRMED_LAYER_ACTIVITY = 1.0  # L1/L2 用户已认领：活性不打折
 _HYPOTHESIS_LAYER_ACTIVITY = 0.7  # L4 待验证假设：天然弱于已认领
 
@@ -128,12 +141,12 @@ def _time_ago_label(belief, language: str = "") -> str:
     if ts.tzinfo is None:
         ts = ts.replace(tzinfo=UTC)
     days = max(0, (now - ts).days)
-    if days > 90:
+    if days > TIME_LABEL_MONTHLY_DAYS:
         return ""
     is_en = _is_en(language)
-    if days <= 7:
+    if days <= TIME_LABEL_ACTIVE_DAYS:
         return "active" if is_en else "活跃"
-    if days <= 30:
+    if days <= TIME_LABEL_WEEKLY_DAYS:
         weeks = max(1, days // 7)
         return f"{weeks}w ago" if is_en else f"{weeks}周前"
     months = max(1, days // 30)
@@ -298,11 +311,11 @@ def _d5_position_summary(session: Session, user_id: str, language: str = "") -> 
     best_tier = 0
     has_sustain = False
     for b in beliefs:
-        if b.key == "sustain_talk" and b.confidence >= 0.4:
+        if b.key == "sustain_talk" and b.confidence >= D5_POSITION_THRESHOLD:
             has_sustain = True
             continue
         tier = _MI_GRADIENT.get(b.key, 0)
-        if tier > best_tier and b.confidence >= 0.4:
+        if tier > best_tier and b.confidence >= D5_POSITION_THRESHOLD:
             best_tier = tier
     if best_tier == 0:
         return None
@@ -343,7 +356,7 @@ def d6_tone_directives(session: Session, user_id: str, language: str = "") -> st
     is_en = _is_en(language)
     directives: list[str] = []
     for b in beliefs:
-        if b.confidence < 0.35:
+        if b.confidence < D6_TONE_THRESHOLD:
             continue
         zh, en = _D6_TONE_DIRECTIVES.get(b.key, ("", ""))
         directives.append(en if is_en else zh)
@@ -378,12 +391,16 @@ def curiosity_signal(session: Session, user_id: str, language: str = "") -> str 
             val = json.loads(b.value_json or "{}")
         except (TypeError, ValueError):
             continue
-        if val.get("clarification_status") == "needs_clarification" and b.confidence >= 0.4:
+        if val.get("clarification_status") == "needs_clarification" and b.confidence >= CURIOSITY_SIGNAL_THRESHOLD:
             return signals["needs_clarification"]
 
     # 2. 有低置信度但接近阈值的模式信念（D3/D5，隐约感知到但不确定）
     for b in beliefs:
-        if b.dimension in ("D3", "D5") and 0.35 <= b.confidence < 0.5 and b.layer == "L4":
+        if (
+            b.dimension in ("D3", "D5")
+            and LOW_CONFIDENCE_PATTERN_FLOOR <= b.confidence < LOW_CONFIDENCE_PATTERN_CEIL
+            and b.layer == "L4"
+        ):
             return signals["low_confidence_pattern"]
 
     return None
@@ -408,9 +425,6 @@ def curiosity_signal_with_topics(
         is_en = language == "en"
         return CURIOSITY_SIGNALS_EN["new_topic"] if is_en else CURIOSITY_SIGNALS_ZH["new_topic"]
     return None
-
-
-MAX_LIFE_EVENTS = 3
 
 
 def _render_life_events(session: Session, user_id: str, language: str, now: datetime) -> str | None:

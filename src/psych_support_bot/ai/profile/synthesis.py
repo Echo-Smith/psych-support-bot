@@ -18,6 +18,8 @@ import logging
 
 from sqlalchemy.orm import Session
 
+from psych_support_bot.ai.profile.constants import K3_MAX_BELIEFS, K3_MAX_SUMMARIES
+
 logger = logging.getLogger(__name__)
 
 _K3_SYSTEM_PROMPT = """\
@@ -128,7 +130,7 @@ def run_k3_synthesis(
         # 收集输入。
         from psych_support_bot.infra.db.profile_repositories import list_active_beliefs
 
-        beliefs = list_active_beliefs(session, user_id, limit=30)
+        beliefs = list_active_beliefs(session, user_id, limit=K3_MAX_BELIEFS)
         if len(beliefs) < 2:
             return None  # 数据太少，不做综合
 
@@ -138,7 +140,7 @@ def run_k3_synthesis(
             session.query(SliceSummary)
             .filter(SliceSummary.user_id == user_id)
             .order_by(SliceSummary.created_at.desc())
-            .limit(5)
+            .limit(K3_MAX_SUMMARIES)
             .all()
         )
         checkins = get_recent_checkins(session, user_id, limit=7)
@@ -179,9 +181,13 @@ def run_k3_synthesis(
             from psych_support_bot.infra.db.repositories import upsert_user_profile
 
             upsert_user_profile(
-                session, user_id,
-                display_name="", primary_concerns="", goals="",
-                support_preferences="", risk_notes="",
+                session,
+                user_id,
+                display_name="",
+                primary_concerns="",
+                goals="",
+                support_preferences="",
+                risk_notes="",
                 understanding_json=json.dumps(understanding, ensure_ascii=False),
             )
         else:

@@ -38,8 +38,13 @@ from psych_support_bot.infra.db.profile_repositories import (
 
 logger = logging.getLogger(__name__)
 
-# 单次提取的 claim 总量上限（知识提炼 §5 契约）。
-MAX_CLAIMS_PER_TURN = 3
+from psych_support_bot.ai.profile.constants import (
+    GOAL_INITIAL_CONFIDENCE,
+    LIFE_EVENT_EXPIRY_DAYS,
+    LIFE_EVENT_INITIAL_CONFIDENCE,
+    MAX_CLAIMS_PER_TURN,
+    PROFILE_SIGNAL_THRESHOLD,
+)
 
 # 危机轮不提取（与 fixture neg_crisis 金标准一致）。
 _CRISIS_LEVELS = {"high", "critical"}
@@ -117,7 +122,7 @@ def d1_topic_claims(topics: list[str], *, evidence_message_id: int | None) -> li
             key=topic,
             claim_text=f"对话中出现主题信号：{topic}",
             value={"via": "graph_topics"},
-            confidence=0.4,
+            confidence=PROFILE_SIGNAL_THRESHOLD,
             evidence_message_ids=evidence,
         )
         for topic in topics
@@ -209,9 +214,9 @@ def d1_life_event_claim(
             "via": "life_event",
             "event_type": "life_event",
             "summary": event_summary,
-            "expires_at": (datetime.now(UTC) + timedelta(days=30)).isoformat(),
+            "expires_at": (datetime.now(UTC) + timedelta(days=LIFE_EVENT_EXPIRY_DAYS)).isoformat(),
         },
-        confidence=0.3,
+        confidence=LIFE_EVENT_INITIAL_CONFIDENCE,
         evidence_message_ids=evidence,
     )
 
@@ -444,7 +449,7 @@ def d5_goal_claim(goal_text: str, *, evidence_message_id: int | None) -> Profile
         key=key,
         claim_text=f"用户表达了目标：{goal_text}",
         value={"goal": goal_text, "status": "active"},
-        confidence=0.5,
+        confidence=GOAL_INITIAL_CONFIDENCE,
         evidence_message_ids=evidence,
     )
 
@@ -501,7 +506,7 @@ def d7_protective_claim(
         key=d7_key,
         claim_text=f"用户提到了保护因素：{summary}",
         value={"summary": summary},
-        confidence=0.4,
+        confidence=PROFILE_SIGNAL_THRESHOLD,
         evidence_message_ids=evidence,
     )
 
