@@ -23,15 +23,39 @@ def detect_behavioral_signals(
     user_message_timestamp: datetime | None = None,
     recent_message_lengths: list[int] | None = None,
     session_hour: int = -1,
+    vad_metadata: dict | None = None,
 ) -> list[dict[str, Any]]:
     """检测当前轮次的行为异常信号。
 
     返回信号列表，每个信号是 {"type": str, "detail": str, "question_zh": str, "question_en": str}。
     不做推断——只提供"可以问什么"的建议。
+
+    vad_metadata 来自前端 VAD：{startAt, endAt, speechDurationMs, pauseCount}。
     """
     signals: list[dict[str, Any]] = []
 
-    # 1. 回复延迟异常（>5 分钟，排除网络噪声的阈值）
+    # 1. VAD 信号：语音中的停顿（比文本延迟更精确的行为信号）
+    if vad_metadata:
+        pause_count = vad_metadata.get("pauseCount", 0)
+        speech_ms = vad_metadata.get("speechDurationMs", 0)
+        # 说话中多次停顿（≥3 次）：可能在犹豫或组织语言
+        if pause_count >= 3 and speech_ms > 5000:
+            signals.append({
+                "type": "speech_hesitation",
+                "detail": f"pauses={pause_count}, duration={speech_ms}ms",
+                "question_zh": "你刚才说的时候好像停了好几次，是有些地方不太好表达吗？",
+                "question_en": "You paused several times while speaking — is something hard to put into words?",
+            })
+        # 说话时间异常短（<2 秒且有内容）：可能是回避或敷衍
+        elif speech_ms > 0 and speech_ms < 2000 and len(user_message or "") > 5:
+            signals.append({
+                "type": "brief_speech",
+                "detail": f"duration={speech_ms}ms, len={len(user_message)}",
+                "question_zh": "你刚才说得很快，是不太想聊这个吗？",
+                "question_en": "You spoke very quickly — are you not in the mood to talk about this?",
+            })
+
+    # 2. 回复延迟异常（>5 分钟，排除网络噪声的阈值）
     if bot_message_timestamp and user_message_timestamp:
         if bot_message_timestamp.tzinfo is None:
             bot_message_timestamp = bot_message_timestamp.replace(tzinfo=UTC)
@@ -46,7 +70,7 @@ def detect_behavioral_signals(
                 "question_en": "You seem to have paused for a moment — did something happen?",
             })
 
-    # 2. 消息长度突变（比近期平均短 60%+）
+    # 3. 消息长度突变（比近期平均短 60%+）
     if recent_message_lengths and len(recent_message_lengths) >= 3:
         avg_len = sum(recent_message_lengths) / len(recent_message_lengths)
         current_len = len(user_message or "")
@@ -58,7 +82,7 @@ def detect_behavioral_signals(
                 "question_en": "Your message is shorter than usual — are you tired or not in the mood to talk about this?",
             })
 
-    # 3. 深夜来访（23:00-05:00）
+    # 4. 深夜来访（23:00-05:00）
     if session_hour >= 23 or session_hour <= 4:
         signals.append({
             "type": "late_night",

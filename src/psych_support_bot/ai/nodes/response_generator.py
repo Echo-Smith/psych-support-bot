@@ -251,6 +251,7 @@ def _generate_normal_reply(state: GraphState, risk_level: str, no_question_mode:
                     user_message_timestamp=user_ts,
                     recent_message_lengths=recent_lens,
                     session_hour=session_hour,
+                    vad_metadata=state.get("vad_metadata") or None,
                 )
 
                 is_en = state.get("expected_language", "") != "zh"

@@ -375,6 +375,8 @@ class ConversationService:
             "no_question_mode": classify_disengage(payload.message) == "quiet",
             # Depth of this conversation; feeds stage-floor escalation.
             "turn_count": len(prior_messages),
+            # VAD 元数据：前端语音输入的起止时间、停顿次数（行为信号层使用）。
+            "vad_metadata": payload.vad_metadata or {},
             # 逐字近史（标准 API 格式，追加在消息末尾）
             "recent_history": recent_history,
             # A recent flagged screening (PHQ-9 item 9 etc.) raises the risk

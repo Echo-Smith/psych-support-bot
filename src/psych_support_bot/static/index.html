@@ -3617,9 +3617,15 @@
       // 同时重置 WS 降级标志——朗读唯一通道是 live WS，失败只影响当轮，
       // 下一轮自动重试探路（不做运行时 HTTP 逐句回退，见 speakRound）。
       const sendBody = () => JSON.stringify({ user_id: USER_ID, session_id: SESSION_ID, message });
+      // VAD 元数据：语音输入时的起止时间、停顿次数，随请求头发送给服务端。
+      const headers = authHeaders();
+      if (VOICE.pendingVadMeta) {
+        headers['X-Vad-Metadata'] = JSON.stringify(VOICE.pendingVadMeta);
+        VOICE.pendingVadMeta = null;
+      }
       let res = await fetch(API_BASE + '/v1/conversations/respond/stream', {
         method: 'POST',
-        headers: authHeaders(),
+        headers,
         body: sendBody(),
       });
       if (res.status === 401 || res.status === 403) {
@@ -3628,7 +3634,7 @@
         await ensureGuestAuth();
         res = await fetch(API_BASE + '/v1/conversations/respond/stream', {
           method: 'POST',
-          headers: authHeaders(),
+          headers,
           body: sendBody(),
         });
       }
@@ -3751,16 +3757,21 @@
       showTyping(ECHO_WAIT_TEXT);
       try {
         const sendBody = () => JSON.stringify({ user_id: USER_ID, session_id: SESSION_ID, message });
+        const headers = authHeaders();
+        if (VOICE.pendingVadMeta) {
+          headers['X-Vad-Metadata'] = JSON.stringify(VOICE.pendingVadMeta);
+          VOICE.pendingVadMeta = null;
+        }
         let res = await fetch(API_BASE + '/v1/conversations/respond', {
           method: 'POST',
-          headers: authHeaders(),
+          headers,
           body: sendBody()
         });
         if (res.status === 401 || res.status === 403) {
           await ensureGuestAuth(); // 同流式路径：401/403 当场修复身份，重发一次
           res = await fetch(API_BASE + '/v1/conversations/respond', {
             method: 'POST',
-            headers: authHeaders(),
+            headers,
             body: sendBody()
           });
         }
@@ -4662,8 +4673,19 @@
         return;
       }
       // 录音中：说完（静音 1.5s）自动发送；超长强制切段
-      if (voiced) vad.lastVoiceAt = now;
+      if (voiced) {
+        vad.lastVoiceAt = now;
+        if (VOICE.vadMeta) VOICE.vadMeta.lastSpeechAt = now;
+      }
       const voicedMs = now - vad.utterStartAt;
+      // 检测停顿：用户曾开口（lastSpeechAt > startAt）后沉默超过 500ms
+      if (!voiced && VOICE.vadMeta && VOICE.vadMeta.lastSpeechAt > VOICE.vadMeta.startAt
+          && now - vad.lastVoiceAt >= 500 && now - vad.lastVoiceAt < VAD.END_SILENCE_MS
+          && !VOICE.vadMeta._pauseCounted) {
+        VOICE.vadMeta.pauseCount++;
+        VOICE.vadMeta._pauseCounted = true;  // 本段静音只计一次
+      }
+      if (voiced && VOICE.vadMeta) VOICE.vadMeta._pauseCounted = false;
       if (now - vad.lastVoiceAt >= VAD.END_SILENCE_MS) {
         // 有效语音过短（咳嗽/碰撞）→ 丢弃不上传
         VOICE.discardUtterance = voicedMs < VAD.MIN_UTTERANCE_MS;
@@ -4713,6 +4735,8 @@
         recorder.onstop = onUtteranceStop;
         recorder.start();
         VOICE.recording = true;
+        // VAD 元数据：记录本次发言的起止时间和停顿次数，供行为信号层使用。
+        VOICE.vadMeta = { startAt: Date.now(), endAt: 0, pauseCount: 0, lastSpeechAt: Date.now() };
         appendDebug('asr: utt start (' + (mime || 'default') + ')');
       } catch (err) {
         VOICE.recording = false;
@@ -4732,6 +4756,16 @@
     function onUtteranceStop() {
       VOICE.recording = false;
       syncVoiceUI(); // 收起波形
+      // VAD 元数据定稿。
+      const vadMeta = VOICE.vadMeta || null;
+      if (vadMeta) {
+        vadMeta.endAt = Date.now();
+        vadMeta.speechDurationMs = Math.max(0, vadMeta.endAt - vadMeta.startAt);
+        delete vadMeta._pauseCounted;  // 内部标记不上传
+      }
+      VOICE.vadMeta = null;
+      // 存储 VAD 元数据供 sendMessage 时附带。
+      VOICE.pendingVadMeta = vadMeta;
       const blob = new Blob(VOICE.chunks, { type: VOICE.mime || 'audio/webm' });
       appendDebug('asr: utt stop bytes=' + blob.size);
       if (VOICE.mode === 'idle' || VOICE.mode === 'paused') return; // 暂停/退出时不上传刚截的段
@@ -4749,7 +4783,7 @@
       VOICE.preRoll = null;
       transcodeToWav(blob, preRoll, preRollRate)
         .then((wav) => {
-          if (wav.size > 1000) return uploadForTranscribe(wav, 'audio/wav');
+          if (wav.size > 1000) return uploadForTranscribe(wav, 'audio/wav', vadMeta);
           setVoiceMode('listening');
         })
         .catch(() => {
@@ -4889,7 +4923,7 @@
       return new Blob([buf], { type: 'audio/wav' });
     }
 
-    async function uploadForTranscribe(blob, mime) {
+    async function uploadForTranscribe(blob, mime, vadMeta) {
       showTyping('正在转写');
       try {
         const ext = mime.includes('wav') ? 'wav' : mime.includes('ogg') ? 'ogg' : (mime.includes('mp4') || mime.includes('m4a')) ? 'm4a' : 'webm';
