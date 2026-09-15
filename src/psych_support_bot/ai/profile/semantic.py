@@ -61,10 +61,18 @@ ALLOWED_KEYS: dict[str, frozenset[str]] = {
 _SYSTEM_PROMPT = (
     "You are the profile-extraction module of a psych-support bot: a quiet, "
     "cautious observer maintaining a belief stream about the user. Output "
-    'STRICT JSON only, no prose, no code fences: {"claims": [{"dimension": '
-    '"D1"|"D2"|"D3"|"D5"|"D6"|"D7", "key": "<from the allowed list>", "claim_zh": '
+    'STRICT JSON only, no prose, no code fences:\n'
+    '{"claims": [{"dimension": "D1"|"D2"|"D3"|"D5"|"D6"|"D7", "key": '
+    '"<from the allowed list>", "claim_zh": '
     '"<one clinical-neutral observation sentence in Chinese>", "confidence": '
-    '<0.0-1.0>, "relation": "supports|contradicts"}]}\n'
+    '<0.0-1.0>, "relation": "supports|contradicts"}],\n'
+    '"background": {"occupation": "", "family": "", "living": "", "medical": "", '
+    '"cultural": "", "religion": "", "support_network": ""},\n'
+    '"life_events": [{"summary": "<brief description>", "confidence": 0.0-1.0}],\n'
+    '"context_tags": ["工作"|"关系"|"家庭"|"健康"|"学业"|"社交"],\n'
+    '"protective_factors": [{"key": "protective.support_people"|'
+    '"protective.coping_strategies"|"protective.professional_contacts"|'
+    '"protective.reasons_for_living", "detail": "<brief description>"}]}\n\n'
     "Rules:\n"
     '- At most 3 claims. Output {"claims": []} when nothing is solid — '
     "absence is a valid, often correct answer.\n"
@@ -112,7 +120,22 @@ _SYSTEM_PROMPT = (
     "reasons to keep going, output a D7 claim with the matching key. D7 claims "
     "are positive resources — never infer from absence or difficulty.\n"
     "- claim_zh must be an observation ('用户在社交场合常想先躲开'), never an "
-    "identity label ('用户是回避型人格')."
+    "identity label ('用户是回避型人格').\n"
+    "- Background: ONLY fill fields the user explicitly stated about themselves "
+    "(e.g. '我是做IT的' → occupation: 'IT'). Never infer from context. Leave "
+    "empty if not mentioned. Sensitive fields (trauma, substance, family history) "
+    "are NOT extracted here — only occupation, family, living situation, medical, "
+    "cultural, religion, support network.\n"
+    "- Life events: when the user describes a concrete life change (new job, "
+    "moved, breakup, loss, illness), output it in life_events with a brief "
+    "summary and confidence. Do NOT extract routine topics as life events.\n"
+    "- Context tags: identify the conversation context from the user's message. "
+    "Pick from the allowed set. Multiple tags are allowed. Leave empty if the "
+    "context is ambiguous.\n"
+    "- Protective factors: when the user mentions supportive people, effective "
+    "coping strategies, professional contacts, or reasons to keep going, output "
+    "them in protective_factors with the matching key. Only from explicit "
+    "mentions — never infer."
 )
 
 
@@ -203,6 +226,93 @@ def parse_extraction_json(raw: str) -> list[dict]:
             }
         )
     return validated
+
+
+def _parse_background(data: dict) -> dict[str, str]:
+    """从 K2 输出中提取背景信息（仅用户显式声明的字段）。"""
+    raw = data.get("background")
+    if not isinstance(raw, dict):
+        return {}
+    _BG_KEYS = ("occupation", "family", "living", "medical", "cultural", "religion", "support_network")
+    return {k: str(raw.get(k) or "").strip()[:40] for k in _BG_KEYS if raw.get(k)}
+
+
+def _parse_life_events(data: list | None) -> list[dict]:
+    """从 K2 输出中提取生活事件。"""
+    if not isinstance(data, list):
+        return []
+    events: list[dict] = []
+    for item in data[:3]:  # 最多 3 条
+        if not isinstance(item, dict):
+            continue
+        summary = str(item.get("summary") or "").strip()[:60]
+        if not summary:
+            continue
+        try:
+            confidence = min(1.0, max(0.0, float(item.get("confidence") or 0.3)))
+        except (TypeError, ValueError):
+            confidence = 0.3
+        events.append({"summary": summary, "confidence": confidence})
+    return events
+
+
+def _parse_context_tags(data: list | None) -> list[str]:
+    """从 K2 输出中提取情境标签（闭集校验）。"""
+    _ALLOWED_TAGS = {"工作", "关系", "家庭", "健康", "学业", "社交"}
+    if not isinstance(data, list):
+        return []
+    return [str(t) for t in data[:3] if str(t) in _ALLOWED_TAGS]
+
+
+def _parse_protective_factors(data: list | None) -> list[dict]:
+    """从 K2 输出中提取保护因素。"""
+    _ALLOWED_KEYS = {
+        "protective.support_people",
+        "protective.coping_strategies",
+        "protective.professional_contacts",
+        "protective.reasons_for_living",
+    }
+    if not isinstance(data, list):
+        return []
+    factors: list[dict] = []
+    for item in data[:3]:
+        if not isinstance(item, dict):
+            continue
+        key = str(item.get("key") or "")
+        if key not in _ALLOWED_KEYS:
+            continue
+        detail = str(item.get("detail") or "").strip()[:40]
+        if detail:
+            factors.append({"key": key, "detail": detail})
+    return factors
+
+
+def parse_extraction_full(raw: str) -> dict:
+    """解析 K2 完整输出：claims + background + life_events + context_tags + protective_factors。
+
+    返回 {"claims": [...], "background": {...}, "life_events": [...],
+           "context_tags": [...], "protective_factors": [...]}。
+    """
+    text = (raw or "").strip()
+    if text.startswith("```"):
+        text = text.strip("`\n")
+        if text.startswith("json"):
+            text = text[4:]
+    start, end = text.find("{"), text.rfind("}")
+    if start < 0 or end <= start:
+        return {"claims": [], "background": {}, "life_events": [], "context_tags": [], "protective_factors": []}
+    try:
+        data = json.loads(text[start : end + 1])
+    except json.JSONDecodeError:
+        return {"claims": [], "background": {}, "life_events": [], "context_tags": [], "protective_factors": []}
+
+    return {
+        "claims": parse_extraction_json(raw),
+        "background": _parse_background(data),
+        "life_events": _parse_life_events(data.get("life_events")),
+        "context_tags": _parse_context_tags(data.get("context_tags")),
+        "protective_factors": _parse_protective_factors(data.get("protective_factors")),
+    }
 
 
 def _parse_cycle(item: dict, dimension: str) -> dict:
@@ -526,6 +636,85 @@ def _should_llm_extract(
     return base
 
 
+def _apply_k2_extras(
+    session: Session,
+    user_id: str,
+    parsed: dict,
+    message_id: int | None,
+    stats_id: int | None,
+) -> None:
+    """K2 扩展输出：背景/生活事件/情境标签/保护因素 → 写入对应存储。"""
+    from datetime import UTC, datetime, timedelta
+
+    # 背景 → UserProfile.background_json
+    bg = parsed.get("background", {})
+    if bg:
+        try:
+            from psych_support_bot.infra.db.repositories import get_user_profile
+
+            profile = get_user_profile(session, user_id)
+            existing_bg = {}
+            if profile and profile.background_json and profile.background_json != "{}":
+                existing_bg = json.loads(profile.background_json)
+            changed = False
+            for k, v in bg.items():
+                if v and not existing_bg.get(k):
+                    existing_bg[k] = v
+                    changed = True
+            if changed and profile:
+                profile.background_json = json.dumps(existing_bg, ensure_ascii=False)
+        except Exception:  # noqa: BLE001
+            pass
+
+    # 生活事件 → D1 life_event.* claims
+    for event in parsed.get("life_events", []):
+        summary = event.get("summary", "")
+        if not summary:
+            continue
+        import hashlib
+
+        event_hash = hashlib.sha256(summary.encode()).hexdigest()[:12]
+        from psych_support_bot.infra.db.profile_repositories import record_claim
+
+        record_claim(
+            session,
+            user_id,
+            dimension="D1",
+            key=f"life_event.{event_hash}",
+            claim_text=f"用户描述了近期生活事件：{summary}",
+            value={
+                "via": "life_event",
+                "event_type": "life_event",
+                "summary": summary,
+                "expires_at": (datetime.now(UTC) + timedelta(days=30)).isoformat(),
+            },
+            confidence=event.get("confidence", 0.3),
+            session_id=None,
+            evidence_message_ids=[message_id] if message_id else [],
+            stats_id=stats_id,
+        )
+
+    # 情境标签 → 存储到最近一条 claim 的 context_tags（如果有的话）
+    # 这个通过 extractor 的 context_tags 路径已经处理，此处仅做补充
+
+    # 保护因素 → D7 claims
+    from psych_support_bot.infra.db.profile_repositories import record_claim as rc
+
+    for factor in parsed.get("protective_factors", []):
+        rc(
+            session,
+            user_id,
+            dimension="D7",
+            key=factor["key"],
+            claim_text=f"用户提到了保护因素：{factor['detail']}",
+            value={"summary": factor["detail"]},
+            confidence=0.4,
+            session_id=None,
+            evidence_message_ids=[message_id] if message_id else [],
+            stats_id=stats_id,
+        )
+
+
 def run_semantic_extraction(
     session: Session,
     *,
@@ -603,6 +792,10 @@ def run_semantic_extraction(
                 origin_slice_id=(slice_id or None),
             )
         stats.claims_out = len(claims)
+
+        # K2 扩展：语义提取替代正则——背景/生活事件/情境/保护因素。
+        parsed = parse_extraction_full(raw)
+        _apply_k2_extras(session, user_id, parsed, message_id, stats.id)
         session.commit()
     except Exception:  # noqa: BLE001 - semantic extraction must not block the response
         logger.warning("Semantic profile extraction failed; skipping")
