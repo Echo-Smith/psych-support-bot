@@ -389,6 +389,27 @@ def curiosity_signal(session: Session, user_id: str, language: str = "") -> str 
     return None
 
 
+def curiosity_signal_with_topics(
+    session: Session, user_id: str, current_topics: list[str], language: str = ""
+) -> str | None:
+    """好奇心信号 + 新话题检测（需要当前轮次的 topics 输入）。"""
+    # 先检查基础好奇心信号。
+    base = curiosity_signal(session, user_id, language)
+    if base:
+        return base
+
+    # 新话题检测：当前轮次的话题中，有没有用户从未提过的？
+    if not current_topics:
+        return None
+    beliefs = list_active_beliefs(session, user_id, dimensions=("D1",), limit=20)
+    known_topics = {b.key for b in beliefs}
+    new_topics = [t for t in current_topics if t not in known_topics]
+    if new_topics:
+        is_en = language == "en"
+        return CURIOSITY_SIGNALS_EN["new_topic"] if is_en else CURIOSITY_SIGNALS_ZH["new_topic"]
+    return None
+
+
 MAX_LIFE_EVENTS = 3
 
 

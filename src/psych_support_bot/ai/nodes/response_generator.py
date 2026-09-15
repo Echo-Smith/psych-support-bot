@@ -228,14 +228,17 @@ def _generate_normal_reply(state: GraphState, risk_level: str, no_question_mode:
             except Exception:  # noqa: BLE001
                 pass
 
-            # 好奇心注入：不确定时自然提问 + 行为信号异常时主动关心。
+            # 好奇心注入：不确定时自然提问 + 新话题探索 + 行为信号异常时主动关心。
             try:
                 from psych_support_bot.ai.profile.behavioral import detect_behavioral_signals
-                from psych_support_bot.ai.profile.renderer import curiosity_signal
+                from psych_support_bot.ai.profile.renderer import curiosity_signal_with_topics
                 from psych_support_bot.infra.db.session import SessionLocal as _CS
 
+                current_topics = list(state.get("topics") or [])
                 with _CS() as _s:
-                    cue = curiosity_signal(_s, state["user_id"], state.get("expected_language", ""))
+                    cue = curiosity_signal_with_topics(
+                        _s, state["user_id"], current_topics, state.get("expected_language", "")
+                    )
 
                 # 行为信号检测（从 graph state 中提取时间戳）。
                 bot_ts = state.get("bot_message_timestamp")
