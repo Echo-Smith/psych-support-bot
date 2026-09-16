@@ -25,7 +25,9 @@ from psych_support_bot.ai.profile.renderer import L4_RENDER_THRESHOLD
 from psych_support_bot.ai.tools.exercises import get_exercise_by_tag
 from psych_support_bot.infra.db.profile_repositories import (
     has_profile_memory_data,
+    is_profile_beta_accepted,
     is_profile_memory_enabled,
+    is_sensitive_background_enabled,
     list_active_beliefs,
     list_rejected_beliefs,
 )
@@ -130,6 +132,8 @@ def build_profile_panel(session: Session, user_id: str, *, language: str = "zh")
         "profile_memory": {
             "enabled": enabled,
             "has_data": has_profile_memory_data(session, user_id),
+            "beta_accepted": is_profile_beta_accepted(session, user_id),
+            "sensitive_background_enabled": is_sensitive_background_enabled(session, user_id),
         },
         "avatar": {
             # 拟人形象边界：只表达"系统对你的了解程度"，不做人格化演绎。
@@ -197,16 +201,19 @@ def _build_background_section(session: Session, user_id: str, language: str) -> 
     is_en = _is_en(language)
     header = "背景信息" if not is_en else "Background"
     # 友善化键名映射。
+    # religion 不在前端展示（使用代号存储，此处不映射）。
+    # medical 仅在用户开启敏感背景授权时展示。
+    sensitive_bg = is_sensitive_background_enabled(session, user_id)
     key_labels = {
         "occupation": ("职业", "Occupation"),
         "age": ("年龄", "Age"),
         "family": ("家庭", "Family"),
         "living": ("居住", "Living situation"),
-        "medical": ("健康", "Health"),
         "cultural": ("文化背景", "Cultural background"),
-        "religion": ("信仰", "Belief"),
         "support_network": ("支持网络", "Support network"),
     }
+    if sensitive_bg:
+        key_labels["medical"] = ("健康", "Health")
     items: list[dict] = []
     for key, (zh_label, en_label) in key_labels.items():
         val = bg.get(key)

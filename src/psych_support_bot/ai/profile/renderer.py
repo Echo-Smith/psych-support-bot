@@ -18,9 +18,12 @@
 - 任何条目 label 查词典查无（friendly_label 返回 None）即整条跳过——
   把存储层 key 透出到 prompt 等于术语泄漏。
 
-排序规则（信息增益调度）：
-- 条目按活性（``belief_activity``）装箱：置信度 × 时间衰减（60 天半衰期）
-  × 确认强度（L1/L2=1.0，L4=0.7）。活性只影响排序，**不影响门控**——
+检索规则（加权打分 + 多样性，借鉴知识库检索机制）：
+- 每条信念经 ``score_belief`` 多信号加权打分：主题命中(+5)、风险感知(+4)、
+  用户确认(+3)、活性(+2)、多证据(+1)、时新性(+1)。
+- 零分信念直接过滤（不相关），不再全量渲染后裁剪。
+- 多样性限制：每维度最多 _MAX_PER_DIMENSION 条，防止单维度占满槽位。
+- 活性（置信度 × 60天半衰衰减 × 确认强度）只影响排序，不影响门控——
   旧信念不会因衰减被隐藏，只是在预算竞争中自然下沉。
 """
 
@@ -96,6 +99,66 @@ def belief_activity(belief, *, now: datetime | None = None, half_life_days: floa
     decay = 0.5 ** (age_days / max(half_life_days, 1e-6))
     layer_factor = _CONFIRMED_LAYER_ACTIVITY if belief.layer in {"L1", "L2"} else _HYPOTHESIS_LAYER_ACTIVITY
     return round(float(belief.confidence) * decay * layer_factor, 6)
+
+
+# ── 加权打分（借鉴知识库 retrieve_knowledge_entries） ─────────────────
+
+# 每个维度最多渲染条目数（多样性防止单维度占满槽位）。
+_MAX_PER_DIMENSION = 3
+
+_SCORE_TOPIC_HIT = 5.0       # D1 key 命中当前消息主题
+_SCORE_RISK_D7_BOOST = 4.0   # 风险升高时 D7 保护因素加权
+_SCORE_LAYER_CONFIRMED = 3.0 # L1/L2 用户确认的信念
+_SCORE_ACTIVITY_WEIGHT = 2.0 # 活性分数权重（置信度×衰减×确认强度）
+_SCORE_EVIDENCE_BONUS = 1.0  # 多证据支持（evidence_count >= 3）
+_SCORE_FRESHNESS = 1.0       # 最近一轮有新证据
+
+
+def score_belief(
+    belief,
+    *,
+    topics: set[str],
+    risk_boost: bool,
+    now: datetime | None = None,
+) -> float:
+    """多信号加权打分（知识库风格）。返回 >= 0 的分数，0 = 不相关。"""
+    score = 0.0
+
+    # Topic hit：D1 主题信念的 key 命中当前消息主题。
+    if belief.dimension == "D1" and belief.key in topics:
+        score += _SCORE_TOPIC_HIT
+
+    # 风险感知：D7 保护因素在危机/高风险时加权。
+    if risk_boost and belief.dimension == "D7":
+        score += _SCORE_RISK_D7_BOOST
+
+    # 确认层级：用户明确确认的信念比自动提取的更重要。
+    if belief.layer in ("L1", "L2"):
+        score += _SCORE_LAYER_CONFIRMED
+
+    # 活性分数（置信度 × 时间衰减 × 确认强度）。
+    activity = belief_activity(belief, now=now)
+    score += activity * _SCORE_ACTIVITY_WEIGHT
+
+    # 多证据支持：跨轮多次确认的信念更可靠。
+    try:
+        val = json.loads(belief.value_json or "{}") or {}
+        evidence_count = len(val.get("evidence_ids") or [])
+        if evidence_count >= 3:
+            score += _SCORE_EVIDENCE_BONUS
+    except (TypeError, ValueError):
+        pass
+
+    # 时新性：最近一轮有新证据的信念加权。
+    if now and belief.last_evidence_at:
+        last = belief.last_evidence_at
+        if last.tzinfo is None:
+            last = last.replace(tzinfo=UTC)
+        hours_since = (now - last).total_seconds() / 3600
+        if hours_since < 2:
+            score += _SCORE_FRESHNESS
+
+    return round(score, 4)
 
 
 def _is_en(language: str) -> bool:
@@ -514,19 +577,27 @@ def render_profile_block(
     if life_events:
         items.append(life_events)
 
-    def _sort_key(belief):
-        topic_match = 1 if belief.dimension == "D1" and belief.key in topics else 0
-        d7_boost = 1 if risk_boost and belief.dimension == "D7" else 0
-        # 活性取代旧的（layer_bonus, last_evidence_at）二元组：置信度 ×
-        # 时间衰减 × 确认强度的连续排序，旧信念自然下沉；时近仍作同分时的
-        # 确定性末位 tiebreak，保证渲染可复现。
-        return (topic_match, d7_boost, belief_activity(belief, now=render_now), belief.last_evidence_at)
+    # 加权打分 + 过滤零相关 + 多样性限制（借鉴知识库检索机制）。
+    topic_set = set(topics)
+    all_beliefs = list_active_beliefs(session, user_id)
+    scored = []
+    for belief in all_beliefs:
+        s = score_belief(belief, topics=topic_set, risk_boost=risk_boost, now=render_now)
+        if s > 0:
+            scored.append((s, belief))
+    scored.sort(key=lambda x: (x[0], x[1].last_evidence_at or ""), reverse=True)
 
-    candidates = sorted(list_active_beliefs(session, user_id), key=_sort_key, reverse=True)
-    for belief in candidates:
+    # 多样性：每个维度最多 _MAX_PER_DIMENSION 条，防止单维度占满槽位。
+    dim_counts: dict[str, int] = {}
+    for _score, belief in scored:
+        dim = belief.dimension
+        count = dim_counts.get(dim, 0)
+        if count >= _MAX_PER_DIMENSION:
+            continue
         text = _belief_item(belief, language)
         if text:
             items.append(text)
+            dim_counts[dim] = count + 1
 
     # 整条装箱：D8 首槽豁免，其余条目放不下整条就停，绝不截断。
     rendered: list[str] = []

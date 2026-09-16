@@ -70,6 +70,26 @@ def _existing_feature_tests_assume_consent(request, monkeypatch):
     yield
 
 
+@pytest.fixture(autouse=True)
+def _assume_profile_beta_consent(request, monkeypatch):
+    """Legacy profile tests predate the beta consent gate.
+
+    Tests marked with ``beta_consent_boundary`` opt out and test real guards.
+    """
+    if request.node.get_closest_marker("beta_consent_boundary"):
+        yield
+        return
+    monkeypatch.setattr(
+        "psych_support_bot.infra.db.profile_repositories.is_profile_beta_accepted",
+        lambda *_a, **_kw: True,
+    )
+    monkeypatch.setattr(
+        "psych_support_bot.infra.db.profile_repositories.is_sensitive_background_enabled",
+        lambda *_a, **_kw: False,
+    )
+    yield
+
+
 @pytest.fixture
 def db_session():
     """Provide a database session for tests."""

@@ -37,7 +37,9 @@ def test_missing_preference_preserves_existing_enabled_behavior() -> None:
     with SessionLocal() as session:
         assert is_profile_memory_enabled(session, user_id) is True
         panel = build_profile_panel(session, user_id)
-        assert panel["profile_memory"] == {"enabled": True, "has_data": False}
+        pm = panel["profile_memory"]
+        assert pm["enabled"] is True
+        assert pm["has_data"] is False
 
 
 def test_disabled_profile_memory_blocks_collection_use_and_time_profile() -> None:

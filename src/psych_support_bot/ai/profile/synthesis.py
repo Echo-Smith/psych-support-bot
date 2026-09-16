@@ -97,7 +97,7 @@ def _format_beliefs_for_k3(beliefs: list) -> str:
 def _format_slice_summaries(summaries: list) -> str:
     lines: list[str] = []
     for s in summaries[:5]:
-        lines.append(f"- {s.created_at.strftime('%Y-%m-%d') if s.created_at else '?'}: {s.summary}")
+        lines.append(f"- {s.created_at.strftime('%Y-%m-%d') if s.created_at else '?'}: {s.summary_text}")
     return "\n".join(lines)
 
 

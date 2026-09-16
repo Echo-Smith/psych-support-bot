@@ -92,6 +92,21 @@ def is_profile_memory_enabled(session: Session, user_id: str) -> bool:
     return preference.enabled if preference is not None else True
 
 
+def is_profile_beta_accepted(session: Session, user_id: str) -> bool:
+    """画像 Beta 知悉协议是否已确认。缺少行 = 未确认。"""
+    from psych_support_bot.infra.db.models import ProfileBetaConsent
+
+    return session.get(ProfileBetaConsent, user_id) is not None
+
+
+def is_sensitive_background_enabled(session: Session, user_id: str) -> bool:
+    """敏感背景提取是否被用户授权。缺少行或未确认 Beta = 未授权。"""
+    from psych_support_bot.infra.db.models import ProfileBetaConsent
+
+    consent = session.get(ProfileBetaConsent, user_id)
+    return consent is not None and consent.sensitive_background_enabled
+
+
 def set_profile_memory_enabled(session: Session, user_id: str, enabled: bool) -> ProfileMemoryPreference:
     preference = session.get(ProfileMemoryPreference, user_id)
     if preference is None:

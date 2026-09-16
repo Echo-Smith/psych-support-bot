@@ -148,6 +148,23 @@ class UserProfile(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, onupdate=utcnow)
 
 
+class ProfileBetaConsent(Base):
+    """画像 Beta 知悉协议确认记录。
+
+    独立于 PrivacyConsent——用户必须先同意隐私协议，再单独确认画像 Beta 功能。
+    sensitive_background_enabled 控制是否允许提取健康/生活经历等敏感背景。
+    缺少行 = 未确认（画像功能不可用）。
+    """
+
+    __tablename__ = "profile_beta_consents"
+
+    user_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    version: Mapped[str] = mapped_column(String(32))
+    accepted_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+    sensitive_background_enabled: Mapped[bool] = mapped_column(Boolean, default=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, onupdate=utcnow)
+
+
 class ProfileMemoryPreference(Base):
     """User-owned switch for inferred long-term profile memory.
 

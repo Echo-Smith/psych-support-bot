@@ -10,6 +10,7 @@
 
 DISCLAIMER_VERSION = "20260904.1"
 PRIVACY_CONSENT_VERSION = "20260915.2"
+PROFILE_BETA_VERSION = "20260916.1"
 
 
 def processing_services() -> list[dict[str, str]]:
@@ -143,5 +144,34 @@ ASSESSMENT_DISCLAIMER_EN = [
     "This is a screening questionnaire — results reflect recent state, not a diagnosis; interpretation is for reference only.",
     "It takes a few minutes; your answers are visible only to you.",
     'If you feel strong discomfort while answering, you can reply "pause" anytime to save progress.',
-    "If you are in crisis right now, please use the crisis resources at the bottom of the page first.",
+    "If you are in crisis now, please use the crisis resources at the bottom of the page first.",
+]
+
+
+# ---------------------------------------------------------------------------
+# 画像（个性化记忆）Beta 知悉协议（独立于隐私协议，可选勾选）
+# ---------------------------------------------------------------------------
+
+PROFILE_BETA_POINTS_ZH = [
+    "Beta 功能：个性化记忆是实验性功能（Beta）。系统会从你的对话和记录中提取观察，形成对你持续更新的理解，用于调整回复方式。这些观察不构成诊断或人格推断。",
+    "数据范围：系统可能记住你提到的困扰、目标、支持偏好、生活背景等信息。所有记忆仅你本人可见，可在「我 → 画像」中查看、暂停或清除。",
+    "敏感背景（可选）：如果你同意，系统还可以记住你的健康状况、生活经历等背景信息，以提供更个性化的支持。你可以在下方选择是否开启。宗教和信仰信息如被提及，系统会使用代号存储，不在前端展示。",
+    "暂停与删除：你可以随时暂停画像功能（暂停后不再提取或使用记忆，已有记忆保留），也可以关闭并永久删除所有画像数据。",
+]
+
+PROFILE_BETA_POINTS_EN = [
+    "Beta feature: personalized memory is experimental (Beta). The system extracts observations from your conversations and records, building a continuously updated understanding to adjust how it responds. These observations are not diagnoses or personality profiling.",
+    "Data scope: the system may remember concerns, goals, support preferences, life context and similar information. All memory is visible only to you, and can be reviewed, paused or erased under Me → Profile.",
+    "Sensitive background (optional): with your consent, the system can also remember health and life-experience details for more personalized support. You can choose whether to enable this below. Religious and faith information, if mentioned, is stored using codenames and not displayed on the frontend.",
+    "Pause and erase: you can pause the profile feature at any time (pausing stops extraction and use while retaining existing data), or disable and permanently erase all profile data.",
+]
+
+PROFILE_BETA_SENSITIVE_ZH = [
+    "允许系统记住我的健康状况、生活经历等背景信息。",
+    "我了解宗教和信仰信息将使用代号存储，不在前端展示。",
+]
+
+PROFILE_BETA_SENSITIVE_EN = [
+    "Allow the system to remember my health and life-experience background.",
+    "I understand that religious and faith information will be stored using codenames and not displayed on the frontend.",
 ]

@@ -134,7 +134,6 @@ def test_throttle_rules() -> None:
 # --- 端到端（monkeypatch LLM） ---
 
 
-@pytest.mark.skip(reason="K2 已异步化：语义提取移至 profile_evolution Worker，不再同步执行")
 def test_semantic_extraction_merges_llm_claims(monkeypatch) -> None:
     user_id = _uid()
     session_id = f"s-{uuid4().hex[:8]}"
@@ -161,7 +160,6 @@ def test_semantic_extraction_merges_llm_claims(monkeypatch) -> None:
         assert any(r.trigger == "topic_flow" for r in rows)  # 确定性层照常记录
 
 
-@pytest.mark.skip(reason="K2 已异步化：语义提取移至 profile_evolution Worker，不再同步执行")
 def test_llm_unavailable_records_error_and_does_not_crash(monkeypatch) -> None:
     user_id = _uid()
     session_id = f"s-{uuid4().hex[:8]}"

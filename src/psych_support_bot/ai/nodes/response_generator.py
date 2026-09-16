@@ -297,7 +297,7 @@ def _generate_normal_reply(state: GraphState, risk_level: str, no_question_mode:
                                 _s.query(ProfileSnapshot)
                                 .filter(
                                     ProfileSnapshot.user_id == state["user_id"],
-                                    ProfileSnapshot.status == "active",
+                                    ProfileSnapshot.status.in_(("active", "shadow")),
                                 )
                                 .order_by(ProfileSnapshot.version.desc())
                                 .limit(1)

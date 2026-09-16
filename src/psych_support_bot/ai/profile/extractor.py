@@ -26,7 +26,7 @@ from dataclasses import dataclass, field
 from sqlalchemy import desc, select
 from sqlalchemy.orm import Session
 
-from psych_support_bot.ai.profile.semantic import run_verification_judgment
+from psych_support_bot.ai.profile.semantic import run_semantic_extraction, run_verification_judgment
 from psych_support_bot.infra.config.settings import get_settings
 from psych_support_bot.infra.db.models import Message
 from psych_support_bot.infra.db.profile_repositories import (
@@ -563,11 +563,12 @@ _BACKGROUND_SUPPORT_PREF = re.compile(
 _BACKGROUND_GOAL = re.compile(r"(?:我想|我希望|我的目标|我希望(?:能|可以))(.{2,30}?)(?:，|。|$)")
 
 
-def _extract_background_info(text: str) -> dict[str, str]:
-    """K1 身份背景检测：11 个心理学常见维度。
+def _extract_background_info(text: str, *, sensitive_background_enabled: bool = False) -> dict[str, str]:
+    """K1 身份背景检测。
 
     只从用户主动提供的信息中提取，不主动追问敏感话题。
-    目标（goal）不在这里提取——改用 D5 goal.* 命名空间。
+    敏感字段（医疗/创伤/家族史）仅在 sensitive_background_enabled=True 时提取。
+    宗教/信仰始终以代号存储，不保存具体内容。
     """
     result: dict[str, str] = {}
     if not text or len(text) < 4:
@@ -597,12 +598,17 @@ def _extract_background_info(text: str) -> dict[str, str]:
     # 社会支持
     if _BACKGROUND_SUPPORT_NETWORK.search(text):
         result["support_network"] = _BACKGROUND_SUPPORT_NETWORK.search(text).group(0)[:30]
-    # 敏感字段（医疗/宗教/创伤/家族史/物质使用）不做长期保存，
-    # 除非有单独、明确的同意机制。K1 提取结果中过滤掉。
-    # 这些正则仍可用于当轮 LLM 上下文（不持久化）。
-    # 物质使用
-    if _BACKGROUND_SUBSTANCE.search(text):
-        result["substance"] = _BACKGROUND_SUBSTANCE.search(text).group(0)[:30]
+    # 宗教/信仰：检测到即存为代号，不保存具体内容，前端不展示。
+    if _BACKGROUND_RELIGION.search(text):
+        result["religion"] = "faith"
+    # 敏感背景（需用户授权）：医疗/创伤/家族史。
+    if sensitive_background_enabled:
+        if _BACKGROUND_MEDICAL.search(text):
+            result["medical"] = _BACKGROUND_MEDICAL.search(text).group(0)[:30]
+        if _BACKGROUND_TRAUMA.search(text):
+            result["trauma"] = "noted"  # 不存具体内容，只标记存在
+        if _BACKGROUND_FAMILY_HISTORY.search(text):
+            result["family_history"] = "noted"
     # 关切
     for m in _BACKGROUND_CONCERN.finditer(text):
         val = m.group(1).strip()
@@ -693,6 +699,11 @@ def run_turn_extraction(
     """
     if not get_settings().profile_extraction_enabled or not is_profile_memory_enabled(session, user_id):
         return
+    # 画像 Beta 知悉协议未确认时，不进行画像提取。
+    from psych_support_bot.infra.db.profile_repositories import is_profile_beta_accepted
+
+    if not is_profile_beta_accepted(session, user_id):
+        return
     crisis = risk_level in _CRISIS_LEVELS
     trigger = "crisis_guard" if crisis else ("practice_event" if exercise_tag else "topic_flow")
     try:
@@ -744,7 +755,10 @@ def run_turn_extraction(
         # 写入 UserProfile（已在 build_memory_snapshot 中被读取渲染）。
         if not crisis and not exercise_tag:
             try:
-                bg = _extract_background_info(valence_text)
+                from psych_support_bot.infra.db.profile_repositories import is_sensitive_background_enabled
+
+                sensitive_ok = is_sensitive_background_enabled(session, user_id)
+                bg = _extract_background_info(valence_text, sensitive_background_enabled=sensitive_ok)
                 _apply_background_to_profile(session, user_id, bg)
             except Exception:  # noqa: BLE001 — background extraction must not block
                 pass
@@ -772,15 +786,27 @@ def run_turn_extraction(
     # 驱动 confirm/reject；质询判定占用本轮时跳过常规语义提取（该轮的
     # 信号属于"对假设的回应"，不是新主题）。
     # 注：用户确认/否决保持同步（立即生效），K2 语义提取异步化（Worker）。
-    run_verification_judgment(
+    verification_handled = run_verification_judgment(
         session,
         user_id=user_id,
         session_id=session_id,
         user_text=valence_text,
     )
 
-    # K2 LLM 语义提取已移至异步 Worker（profile_evolution.py）。
-    # 用户明确确认/否决仍同步执行（run_verification_judgment 保留）。
+    # K2 LLM 语义提取：质询判定占用本轮时不执行（该轮信号属于
+    # "对假设的回应"而非新主题）。自身已有 _should_llm_extract 节流，
+    # 实际每 session 仅触发 1-3 次 LLM 调用。
+    if not verification_handled:
+        run_semantic_extraction(
+            session,
+            user_id=user_id,
+            session_id=session_id,
+            user_text=valence_text,
+            turn_count=turn_count,
+            risk_level=risk_level,
+            practice_event=bool(exercise_tag),
+            message_id=_latest_user_message_id(session, session_id),
+        )
 
 
 def record_turn_interventions(

@@ -4,12 +4,16 @@
 数据库任务表、幂等键、单用户互斥。Celery/Redis 作为规模化替换层，
 不作为首版运行前提。
 
-五节点流程：
-1. load_evidence   读取新增证据
-2. formulate       一次 LLM 调用生成候选理解
-3. validate        代码校验证据、敏感性与生效资格
-4. compile_policy  生成 Agent 可消费的支持策略
-5. persist_snapshot 保存版本化快照
+K1 确定性提取 + K2 LLM 语义提取在同步链路（extractor.py）完成，
+本 Worker 负责综合与快照生成。
+
+六节点流程：
+1. load_evidence       读取新增证据
+2. formulate           一次 LLM 调用生成候选理解（patterns + support_policy）
+3. validate            代码校验证据、敏感性与生效资格
+4. compile_policy      生成 Agent 可消费的支持策略
+4.5. K3 synthesis      综合理解（patterns/how_to_be_with_them → UserProfile.understanding_json）
+5. persist_snapshot    保存版本化快照
 """
 
 from __future__ import annotations
@@ -41,9 +45,11 @@ PROMPT_VERSION = "v1"
 
 def enqueue_evolution_job(session: Session, user_id: str) -> ProfileEvolutionJob | None:
     """写入/合并画像综合任务（幂等：同一用户同一水位只产生一个 pending 任务）。"""
-    from psych_support_bot.infra.db.profile_repositories import is_profile_memory_enabled
+    from psych_support_bot.infra.db.profile_repositories import is_profile_beta_accepted, is_profile_memory_enabled
 
     if not is_profile_memory_enabled(session, user_id):
+        return None
+    if not is_profile_beta_accepted(session, user_id):
         return None
 
     # 幂等键：user_id + 当前证据水位（belief 最后更新时间）。
@@ -57,7 +63,7 @@ def enqueue_evolution_job(session: Session, user_id: str) -> ProfileEvolutionJob
     watermark = latest.isoformat() if latest else "none"
     idempotency_key = f"{user_id}:{watermark}:{PROMPT_VERSION}"
 
-    # 检查是否已有相同水位的 pending/running 任务。
+    # 检查是否已有 pending/running 任务；如有，更新水位让 Worker 处理最新证据。
     existing = (
         session.query(ProfileEvolutionJob)
         .filter(
@@ -67,7 +73,34 @@ def enqueue_evolution_job(session: Session, user_id: str) -> ProfileEvolutionJob
         .first()
     )
     if existing:
+        existing.evidence_watermark = json.dumps({"latest_update": watermark})
+        existing.idempotency_key = idempotency_key
+        session.commit()
         return existing
+
+    # Shadow → Active 升级：最新快照是 shadow 且证据已跨多会话时直接升级，
+    # 不需要等 Worker 重新生成快照。
+    _promote_shadow_if_ready(session, user_id)
+
+    # 水位未变时复用已完成/失败的旧任务（避免 idempotency_key 唯一约束冲突）。
+    stale = (
+        session.query(ProfileEvolutionJob)
+        .filter(
+            ProfileEvolutionJob.user_id == user_id,
+            ProfileEvolutionJob.idempotency_key == idempotency_key,
+            ProfileEvolutionJob.status.in_(("completed", "failed")),
+        )
+        .first()
+    )
+    if stale:
+        stale.status = "pending"
+        stale.attempt_count = 0
+        stale.error_code = ""
+        stale.started_at = None
+        stale.completed_at = None
+        stale.evidence_watermark = json.dumps({"latest_update": watermark})
+        session.commit()
+        return stale
 
     job = ProfileEvolutionJob(
         id=uuid.uuid4().hex[:16],
@@ -80,6 +113,33 @@ def enqueue_evolution_job(session: Session, user_id: str) -> ProfileEvolutionJob
     session.add(job)
     session.commit()
     return job
+
+
+def _promote_shadow_if_ready(session: Session, user_id: str) -> None:
+    """如果最新快照是 shadow 且证据已跨多会话，直接升级为 active。"""
+    latest_snap = (
+        session.query(ProfileSnapshot)
+        .filter(
+            ProfileSnapshot.user_id == user_id,
+            ProfileSnapshot.status == "shadow",
+        )
+        .order_by(ProfileSnapshot.version.desc())
+        .limit(1)
+        .first()
+    )
+    if not latest_snap:
+        return
+
+    distinct_sessions = (
+        session.query(ProfileBelief.origin_session_id)
+        .filter(ProfileBelief.user_id == user_id, ProfileBelief.status == "active")
+        .distinct()
+        .count()
+    )
+    if distinct_sessions >= 2:
+        latest_snap.status = "active"
+        session.commit()
+        logger.info("Shadow snapshot promoted to active (user=%s, version=%d)", user_id[:8], latest_snap.version)
 
 
 def process_pending_evolutions() -> None:
@@ -140,8 +200,19 @@ def _process_single_job(session: Session, job: ProfileEvolutionJob) -> None:
         # Node 4: compile_policy
         policy = _compile_policy(validated)
 
+        # Node 4.5: K3 synthesis（理解综合，写入 UserProfile.understanding_json）。
+        # run_k3_synthesis 自身有 belief < 2 条 / 开关门控，fail-open。
+        try:
+            from psych_support_bot.ai.profile.synthesis import run_k3_synthesis
+
+            run_k3_synthesis(session, job.user_id)
+        except Exception:  # noqa: BLE001 — K3 failure must not block snapshot
+            logger.warning("K3 synthesis skipped in worker (job=%s)", job.id[:8])
+
         # Node 5: persist_snapshot
-        _persist_snapshot(session, job.user_id, validated, policy, job.evidence_watermark)
+        # 单会话证据 → shadow（待更多会话确认）；多会话 → active。
+        is_shadow = evidence.get("distinct_sessions", 1) < 2
+        _persist_snapshot(session, job.user_id, validated, policy, job.evidence_watermark, shadow=is_shadow)
 
         job.status = "completed"
         job.completed_at = datetime.now(UTC)
@@ -185,7 +256,20 @@ def _load_evidence(session: Session, user_id: str) -> dict:
         with suppress(TypeError, ValueError):
             background = json.loads(profile.background_json)
 
-    return {"beliefs": belief_data, "background": background, "user_id": user_id}
+    # 统计证据来自多少个不同会话，用于决定快照状态（shadow vs active）。
+    distinct_sessions = (
+        session.query(ProfileBelief.origin_session_id)
+        .filter(ProfileBelief.user_id == user_id, ProfileBelief.status == "active")
+        .distinct()
+        .count()
+    )
+
+    return {
+        "beliefs": belief_data,
+        "background": background,
+        "user_id": user_id,
+        "distinct_sessions": distinct_sessions,
+    }
 
 
 # ── Node 2: formulate (LLM) ─────────────────────────────────────────
@@ -238,9 +322,26 @@ def _formulate(session: Session, user_id: str, evidence: dict) -> dict:
 # ── Node 3: validate ─────────────────────────────────────────────────
 
 _FORBIDDEN_LABELS = (
+    # English
     "personality disorder", "narcissist", "borderline", "avoidant",
     "attachment style", "anxious attachment", "secure attachment",
     "disorder", "diagnosis", "pathological",
+    # Chinese equivalents
+    "人格障碍", "自恋", "边缘", "回避型", "依恋风格", "焦虑型依恋",
+    "安全型依恋", "障碍", "诊断", "病态",
+)
+
+# 第三方归属关键词：pattern 描述中出现这些词说明可能把他人事实归到了用户身上。
+_THIRD_PARTY_MARKERS = (
+    "his friend", "her friend", "their friend",
+    "his partner", "her partner", "their partner",
+    "his family", "her family", "their family",
+    "his colleague", "her colleague", "their colleague",
+    "他的朋友", "她的朋友", "他们的朋友",
+    "他的家人", "她的家人", "他们的家人",
+    "他的同事", "她的同事", "他们的同事",
+    "his mother", "his father", "her mother", "her father",
+    "他的妈妈", "他的爸爸", "她的妈妈", "她的爸爸",
 )
 
 
@@ -258,11 +359,16 @@ def _validate(candidate: dict, evidence: dict | None = None) -> dict:
     validated = []
 
     # 构建证据索引（如有）。
-    belief_keys = set()
-    contradicted_keys = set()
+    belief_keys: set[str] = set()
+    contradicted_keys: set[str] = set()
+    distinct_sessions = 0
     if evidence and "beliefs" in evidence:
+        sessions_seen: set[str] = set()
         for b in evidence["beliefs"]:
             belief_keys.add(b.get("key", ""))
+            sid = b.get("origin_session_id") or ""
+            if sid:
+                sessions_seen.add(sid)
             # 检查是否有 needs_clarification 标记（反证信号）。
             try:
                 val = json.loads(b.get("value", "{}") or "{}")
@@ -270,20 +376,29 @@ def _validate(candidate: dict, evidence: dict | None = None) -> dict:
                     contradicted_keys.add(b.get("key", ""))
             except (TypeError, ValueError):
                 pass
+        distinct_sessions = evidence.get("distinct_sessions", len(sessions_seen) or 1)
 
     for p in patterns:
         desc = p.get("description", "")
-        # 禁止诊断标签
+        # 禁止诊断标签（中英文）
         if any(label in desc.lower() for label in _FORBIDDEN_LABELS):
             continue
         # 禁止空描述
         if not desc.strip():
             continue
+        # 第三方归属：pattern 描述不应把他人事实归到用户身上。
+        desc_lower = desc.lower()
+        if any(marker in desc_lower for marker in _THIRD_PARTY_MARKERS):
+            continue
+        # 证据存在性：pattern 引用的 key 必须在用户的 belief 集合中。
+        p_keys = set(p.get("evidence_keys") or [])
+        if p_keys and not p_keys.issubset(belief_keys):
+            continue  # 引用了不存在的 belief，丢弃
         # 有反证时强制标记 needs_verification
         if contradicted_keys:
             p["needs_verification"] = True
-        # 单会话证据的模式强制标记 needs_verification
-        if p.get("evidence_count", 0) < 2:
+        # 单会话证据的模式强制标记 needs_verification（跨会话门槛）
+        if distinct_sessions < 2:
             p["needs_verification"] = True
         validated.append(p)
     candidate["patterns"] = validated[:3]
@@ -326,8 +441,13 @@ def _persist_snapshot(
     content: dict,
     policy: dict,
     evidence_watermark: str,
+    *,
+    shadow: bool = False,
 ) -> ProfileSnapshot:
-    """保存版本化快照，旧快照标记为 retired。"""
+    """保存版本化快照，旧快照标记为 retired。
+
+    shadow=True 时状态为 "shadow"（单会话证据，待更多会话确认后升级为 active）。
+    """
     # 计算新版本号。
     latest = (
         session.query(ProfileSnapshot)
@@ -338,7 +458,7 @@ def _persist_snapshot(
     )
     new_version = (latest.version + 1) if latest else 1
 
-    # 旧 active/snapshot 标记为 retired。
+    # 旧 active/shadow 标记为 retired。
     session.query(ProfileSnapshot).filter(
         ProfileSnapshot.user_id == user_id,
         ProfileSnapshot.status.in_(("active", "shadow")),
@@ -348,7 +468,7 @@ def _persist_snapshot(
         id=uuid.uuid4().hex[:16],
         user_id=user_id,
         version=new_version,
-        status="active",
+        status="shadow" if shadow else "active",
         content_json=json.dumps(content, ensure_ascii=False),
         support_policy_json=json.dumps(policy, ensure_ascii=False),
         evidence_watermark=evidence_watermark,
