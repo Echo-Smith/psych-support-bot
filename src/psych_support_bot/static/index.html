@@ -4508,6 +4508,8 @@
     function abortAllPlayback() {
       stopVoicePlayback();
       if (TTS_LIVE.ws) { ttsLiveSend({ type: 'abort' }); killLiveWs(TTS_LIVE.ws); }
+      // STT WS 打断：取消正在进行的流式转写
+      if (STT_LIVE_ACTIVE) { sttLiveAbort(); STT_LIVE_ACTIVE = false; }
       pcmStopAll(); // PCM 队列即刻噤声（旧路径靠 stopVoicePlayback 掐元素，这里掐 source 队列）
       pcmStopAll();
       ttsLiveBeginTurn(); // 字幕/攒积态清零（含 finalTakeover——残留会让下一轮字幕被静默吞掉）
@@ -4608,6 +4610,10 @@
             if (head.length <= excess) { pre.chunks.shift(); pre.n -= head.length; }
             else { pre.chunks[0] = head.subarray(excess); pre.n = pre.cap; }
           }
+          // STT WS 流式：实时发送 PCM 帧到服务端
+          if (STT_LIVE_ACTIVE && VOICE.recording) {
+            sttLiveSendAudio(d, ctx.sampleRate);
+          }
         };
         // 输出保持静音（不写 outputBuffer）：连接 destination 只为驱动回调，
         // 不回放麦克风（ScriptProcessorNode 已废弃但全平台可用，含 iOS——
@@ -4690,50 +4696,112 @@
     function startUtterance() {
       stopBackchannel(); // 用户抢先开口：应答让位，且不带着短音尾巴进录音
       if (VOICE.recording) return; // 已在采集（防异常路径重入）
-      // voiceStartAt 是上一utterance的残留时间戳：不清零的话，回到聆听态后的
-      // 第一个超阈噪声（TTS 尾音/回声残留）会因 now - voiceStartAt ≥ 200ms
-      // 立即误开录音——第二轮抢在用户真正开口前启动，听感即「绿灯但不转写」
       if (VOICE.vad) VOICE.vad.voiceStartAt = null;
-      // 取走预滚（此刻环形缓冲尾 = 判定开口的瞬间，MediaRecorder 从这之后
-      // 才开始编码——两段首尾相接、无重叠）
       VOICE.preRoll = takePreRoll();
       VOICE.preRollRate = (VOICE.vad && VOICE.vad.ctx && VOICE.vad.ctx.sampleRate) || 16000;
-      // 编码优先级：MiniMax ASR 支持 mp4/aac 与 ogg/opus，不支持 webm 容器
+      VOICE.discardUtterance = false;
+      VOICE.recording = true;
+      VOICE.vadMeta = { startAt: Date.now(), endAt: 0, pauseCount: 0, lastSpeechAt: Date.now() };
+      if (VOICE.vad) {
+        VOICE.vad.utterStartAt = Date.now();
+        VOICE.vad.lastVoiceAt = Date.now();
+      }
+
+      // 优先尝试 STT WS 流式路径
+      sttLiveConnect()
+        .then(() => {
+          if (!VOICE.recording) return; // 已被 stopUtterance 取消
+          STT_LIVE_ACTIVE = true;
+          // 发送预滚 PCM（找回 VAD 判阈期间丢掉的开头音素）
+          if (VOICE.preRoll && VOICE.preRoll.length) {
+            const merged = new Float32Array(
+              VOICE.preRoll.reduce((s, c) => s + c.length, 0)
+            );
+            let off = 0;
+            for (const chunk of VOICE.preRoll) { merged.set(chunk, off); off += chunk.length; }
+            sttLiveSendAudio(merged, VOICE.preRollRate);
+          }
+          VOICE.preRoll = null;
+          appendDebug('asr: stt live connected');
+        })
+        .catch(() => {
+          // STT WS 连接失败：降级到 MediaRecorder 路径
+          if (!VOICE.recording) return;
+          _startMediaRecorder();
+        });
+
+      syncVoiceUI();
+      showTyping('正在聆听');
+    }
+
+    // MediaRecorder 降级路径（STT WS 不可用时）
+    function _startMediaRecorder() {
       const mime = ['audio/mp4', 'audio/ogg;codecs=opus', 'audio/webm']
         .find((m) => MediaRecorder.isTypeSupported(m)) || '';
-      // MediaRecorder 构造/start 对轨道态敏感（采集流被系统半杀时抛
-      // NotReadableError 等）：不接住的话异常死在 VAD 定时器里，录音链静默
-      // 永久失效而 UI 仍是绿框。失败即重建采集流自愈。
       try {
         const recorder = new MediaRecorder(VOICE.stream, mime ? { mimeType: mime } : undefined);
         VOICE.chunks = [];
-        VOICE.discardUtterance = false;
         VOICE.recorder = recorder;
         VOICE.mime = mime;
-        if (VOICE.vad) {
-          VOICE.vad.utterStartAt = Date.now();
-          VOICE.vad.lastVoiceAt = Date.now();
-        }
         recorder.ondataavailable = (e) => { if (e.data.size) VOICE.chunks.push(e.data); };
         recorder.onstop = onUtteranceStop;
         recorder.start();
-        VOICE.recording = true;
-        // VAD 元数据：记录本次发言的起止时间和停顿次数，供行为信号层使用。
-        VOICE.vadMeta = { startAt: Date.now(), endAt: 0, pauseCount: 0, lastSpeechAt: Date.now() };
-        appendDebug('asr: utt start (' + (mime || 'default') + ')');
+        appendDebug('asr: fallback MediaRecorder (' + (mime || 'default') + ')');
       } catch (err) {
         VOICE.recording = false;
         VOICE.chunks = [];
         appendDebug('asr: recorder start failed -> ' + err.name + ': ' + err.message);
         if (VOICE.mode === 'listening' || VOICE.mode === 'thinking') restartMic('recorder start failed');
-        return;
       }
-      syncVoiceUI(); // 激活绿框内的白色说话波形（不再用红色录音框）
-      showTyping('正在聆听');
     }
 
     function stopUtterance() {
-      if (VOICE.recorder && VOICE.recorder.state === 'recording') VOICE.recorder.stop();
+      if (STT_LIVE_ACTIVE && sttLiveIsConnected()) {
+        // STT WS 路径：发送 end 信号，等待 stt_final
+        VOICE.recording = false;
+        syncVoiceUI();
+        // VAD 元数据定稿
+        const vadMeta = VOICE.vadMeta || null;
+        if (vadMeta) {
+          vadMeta.endAt = Date.now();
+          vadMeta.speechDurationMs = Math.max(0, vadMeta.endAt - vadMeta.startAt);
+          delete vadMeta._pauseCounted;
+        }
+        VOICE.vadMeta = null;
+        VOICE.pendingVadMeta = vadMeta;
+
+        if (VOICE.discardUtterance) {
+          sttLiveAbort();
+          STT_LIVE_ACTIVE = false;
+          if (VOICE.mode === 'listening') setVoiceMode('listening');
+          return;
+        }
+
+        setVoiceMode('thinking');
+        turnBegin();
+        scheduleBackchannel();
+
+        // 发送 end 信号，等待 stt_final
+        sttLiveEnd();
+        const finalPromise = new Promise((resolve) => { sttResolveFinal = resolve; });
+        finalPromise.then((text) => {
+          STT_LIVE_ACTIVE = false;
+          if (text && text.trim()) {
+            document.getElementById('messageInput').value = text;
+            sendMessage();
+          } else {
+            addMessage('bot', '未识别到语音内容，请再试一次。');
+            scheduleResumeListening();
+          }
+        }).catch(() => {
+          STT_LIVE_ACTIVE = false;
+          if (voiceSttFailed()) return;
+          addMessage('bot', '语音识别失败，请直接打字或再试一次。');
+          scheduleResumeListening();
+        });
+      } else if (VOICE.recorder && VOICE.recorder.state === 'recording') {
+        VOICE.recorder.stop(); // MediaRecorder 降级路径
+      }
     }
 
     function onUtteranceStop() {
@@ -5014,6 +5082,62 @@
         ttsLiveSend = live.ttsLiveSend; ttsLiveEndRound = live.ttsLiveEndRound; killLiveWs = live.killLiveWs;
       }))
       .catch((err) => appendDebug('voice modules load failed: ' + err.message));
+
+    // ---- STT live 管线（/v1/voice/stt/live WS）----
+    // 与 TTS live 对称但独立：前端持续发送 PCM 帧，服务端流式回传转写结果。
+    let sttLiveConnect = () => Promise.reject(new Error('STT module not loaded'));
+    let sttLiveSendAudio = () => {};
+    let sttLiveEnd = () => {};
+    let sttLiveAbort = () => {};
+    let sttLiveIsConnected = () => false;
+    let STT_LIVE_ACTIVE = false; // true = STT WS 活跃，onaudioprocess 同时发送 PCM
+    let STT_LIVE_STREAMING = false; // 服务端声明是否支持流式 delta
+    let sttResolveFinal = null; // Promise resolve 等待 stt_final
+    import('/static/js/voice/stt.js')
+      .then((sm) => {
+        const stt = sm.createSttLive({
+          wsUrl: (path) => {
+            const proto = location.protocol === 'https:' ? 'wss' : 'ws';
+            const qs = '?user_id=' + encodeURIComponent(USER_ID) + (AUTH_TOKEN ? '&token=' + encodeURIComponent(AUTH_TOKEN) : '');
+            return proto + '://' + location.host + '/v1/voice' + path + qs;
+          },
+          timers: { setTimeout, clearTimeout },
+          debug: appendDebug,
+          onReady(ev) {
+            STT_LIVE_STREAMING = !!(ev.stt && ev.stt.streaming);
+            appendDebug('stt: ready provider=' + (ev.stt && ev.stt.provider) + ' streaming=' + STT_LIVE_STREAMING);
+          },
+          onPartial(text) {
+            // 实时显示部分转写结果（灰色临时文字）
+            const input = document.getElementById('messageInput');
+            if (input && text) {
+              input.value = text;
+              input.style.opacity = '0.6'; // 灰色表示识别中
+            }
+          },
+          onFinal(text) {
+            // 最终转写结果：恢复输入框样式，填入文字
+            const input = document.getElementById('messageInput');
+            if (input) {
+              input.value = text;
+              input.style.opacity = '';
+            }
+            STT_LIVE_ACTIVE = false;
+            if (sttResolveFinal) { sttResolveFinal(text); sttResolveFinal = null; }
+          },
+          onError(detail) {
+            appendDebug('stt error: ' + detail);
+            STT_LIVE_ACTIVE = false;
+            if (sttResolveFinal) { sttResolveFinal(null); sttResolveFinal = null; }
+          },
+        });
+        sttLiveConnect = stt.connect;
+        sttLiveSendAudio = stt.sendAudio;
+        sttLiveEnd = stt.end;
+        sttLiveAbort = stt.abort;
+        sttLiveIsConnected = stt.isConnected;
+      })
+      .catch((err) => appendDebug('STT module load failed: ' + err.message));
 
     // 播一句（blob），resolve 于播放结束；带 iOS 打断超时看护。
     // speakText：该句文字在音频真实起播瞬间上屏（眼耳同步的挂点）

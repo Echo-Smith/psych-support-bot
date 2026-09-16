@@ -35,6 +35,7 @@ from psych_support_bot.infra.voice.adapter import (
     synthesize,
     synthesize_stream,
     transcribe,
+    transcribe_stream,
     tts_media_type,
 )
 from psych_support_bot.infra.voice.protocol import (
@@ -49,7 +50,15 @@ from psych_support_bot.infra.voice.protocol import (
     LiveSentenceStart,
     LiveServerEvent,
     LiveTtsProfile,
+    SttAbort,
+    SttEnd,
+    SttError,
+    SttFinal,
+    SttPartial,
+    SttReady,
+    SttServerEvent,
     parse_live_client_message,
+    parse_stt_client_message,
 )
 
 logger = logging.getLogger(__name__)
@@ -542,3 +551,162 @@ async def tts_live(websocket: WebSocket, token: str = Query(default="")):
         await asyncio.gather(*pending, return_exceptions=True)
         with contextlib.suppress(Exception):
             await websocket.close()
+
+
+# ---------------------------------------------------------------------------
+# STT live（/v1/voice/stt/live）—— 流式语音识别
+# ---------------------------------------------------------------------------
+
+
+@ws_router.websocket("/stt/live")
+async def stt_live(websocket: WebSocket, token: str = Query(default="")):
+    """流式 STT WebSocket：前端持续发送 PCM 帧，服务端转写后回传 partial/final。
+
+    协议：
+    - Client → Server：binary PCM 帧（16kHz mono s16le）、text {"type":"end"}、text {"type":"abort"}
+    - Server → Client：ready / stt_partial / stt_final / stt_error
+    """
+    from psych_support_bot.api.auth import validate_account_token
+
+    settings = get_settings()
+    user_id = websocket.query_params.get("user_id", "")
+    if settings.auth_enabled:
+        try:
+            user_id = validate_account_token(token)
+        except Exception:  # noqa: BLE001
+            await websocket.close(code=4401)
+            return
+
+    from psych_support_bot.api.privacy import check_privacy_consent
+    from psych_support_bot.infra.db.session import SessionLocal
+
+    try:
+        with SessionLocal() as session:
+            check_privacy_consent(session, user_id)
+    except HTTPException:
+        await websocket.close(code=4403)
+        return
+
+    config = get_stt_config()
+    await websocket.accept()
+    if config is None:
+        await _send_stt_event(websocket, SttError(detail="STT not configured"))
+        await websocket.close()
+        return
+
+    # 流式供应商（mimo/dots）走 SSE delta；其他走批量降级
+    streaming_capable = config.provider in ("mimo", "dots")
+    await _send_stt_event(websocket, SttReady(provider=config.provider, streaming=streaming_capable))
+
+    audio_buf = bytearray()
+    buf_lock = asyncio.Lock()
+    end_event = asyncio.Event()
+    abort_event = asyncio.Event()
+
+    async def read_client() -> None:
+        """接收客户端 PCM 帧和控制消息。"""
+        try:
+            while True:
+                msg = await websocket.receive()
+                if msg.get("type") == "websocket.receive":
+                    if msg.get("bytes"):
+                        async with buf_lock:
+                            audio_buf.extend(msg["bytes"])
+                    elif msg.get("text"):
+                        try:
+                            parsed = parse_stt_client_message(msg["text"])
+                        except ValueError:
+                            continue
+                        if isinstance(parsed, SttEnd):
+                            end_event.set()
+                            return
+                        elif isinstance(parsed, SttAbort):
+                            abort_event.set()
+                            return
+        except Exception:  # noqa: BLE001 —— 断连不杀会话
+            pass
+        finally:
+            end_event.set()
+
+    async def transcribe_and_send() -> None:
+        """等待 end 信号后转写音频，流式回传结果。"""
+        await end_event.wait()
+        if abort_event.is_set():
+            return
+
+        async with buf_lock:
+            audio_bytes = bytes(audio_buf)
+
+        if not audio_bytes or len(audio_bytes) < 1000:
+            await _send_stt_event(websocket, SttFinal(text=""))
+            return
+
+        filename = "audio.wav"  # 前端发送的是 16kHz mono s16le，适配器按扩展名推断 MIME
+        language = settings.voice_stt_language or ""
+
+        try:
+            if streaming_capable:
+                # 流式路径：在独立线程中消费 transcribe_stream 生成器
+                loop = asyncio.get_running_loop()
+                queue: asyncio.Queue[str | None] = asyncio.Queue()
+
+                def _run_stream():
+                    try:
+                        for chunk in transcribe_stream(audio_bytes, filename, language_hint=language):
+                            loop.call_soon_threadsafe(queue.put_nowait, chunk)
+                    except Exception as exc:  # noqa: BLE001
+                        loop.call_soon_threadsafe(queue.put_nowait, exc)
+                    finally:
+                        loop.call_soon_threadsafe(queue.put_nowait, None)
+
+                thread = asyncio.to_thread(_run_stream)  # noqa: F841
+                # 手动启动线程（to_thread 返回 awaitable，但我们不需要 await）
+                import threading as _threading
+
+                t = _threading.Thread(target=_run_stream, daemon=True)
+                t.start()
+
+                parts: list[str] = []
+                while True:
+                    item = await queue.get()
+                    if item is None:
+                        break
+                    if isinstance(item, Exception):
+                        await _send_stt_event(websocket, SttError(detail=str(item)))
+                        return
+                    parts.append(item)
+                    await _send_stt_event(websocket, SttPartial(text="".join(parts)))
+
+                final_text = "".join(parts).strip()
+                # 剥离可能的思维链痕迹
+                from psych_support_bot.infra.voice.adapter import _strip_reasoning_artifacts
+
+                final_text = _strip_reasoning_artifacts(final_text)
+                await _send_stt_event(websocket, SttFinal(text=final_text))
+            else:
+                # 批量降级：在独立线程中调用 transcribe()
+                result = await asyncio.to_thread(transcribe, audio_bytes, filename, language_hint=language)
+                await _send_stt_event(websocket, SttFinal(text=result))
+        except VoiceNotConfigured:
+            await _send_stt_event(websocket, SttError(detail="STT not configured"))
+        except VoiceProviderError as exc:
+            _stt_fail_note(failed=True)
+            await _send_stt_event(websocket, SttError(detail=str(exc)))
+        except Exception as exc:  # noqa: BLE001
+            await _send_stt_event(websocket, SttError(detail="STT internal error"))
+            logger.warning("STT live error: %s", exc)
+
+    try:
+        read_task = asyncio.create_task(read_client())
+        write_task = asyncio.create_task(transcribe_and_send())
+        await asyncio.gather(read_task, write_task)
+    except Exception:  # noqa: BLE001
+        pass
+    finally:
+        with contextlib.suppress(Exception):
+            await websocket.close()
+
+
+async def _send_stt_event(websocket: WebSocket, event: SttServerEvent) -> None:
+    """发送 STT 服务端事件。"""
+    await websocket.send_text(event.model_dump_json())

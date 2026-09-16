@@ -364,6 +364,153 @@ def transcribe(
     raise VoiceNotConfigured(f"Unknown STT provider: {config.provider}")
 
 
+def transcribe_stream(
+    audio_bytes: bytes,
+    filename: str,
+    *,
+    language_hint: str = "",
+) -> Iterator[str]:
+    """流式转写：逐块产出文本片段。
+
+    mimo/dots 走 chat completions SSE（stream=True），逐 delta.content 产出；
+    openai/minimax 无流式路径，降级为批量转写一次性产出。
+    调用方在独立线程中消费本生成器，通过 asyncio.Queue 桥接到 WebSocket。
+    """
+    if not audio_bytes:
+        raise VoiceProviderError("Empty audio payload")
+    if len(audio_bytes) > MAX_AUDIO_BYTES:
+        raise VoiceProviderError("Audio payload too large")
+    config = get_stt_config()
+    if config is None:
+        raise VoiceNotConfigured("Voice STT is not configured")
+    if config.provider in ("mimo", "dots"):
+        yield from _transcribe_stream_chat(config, audio_bytes, filename, language_hint)
+    else:
+        # openai/minimax 无流式 STT：批量转写后一次性产出
+        yield transcribe(audio_bytes, filename, language_hint=language_hint)
+
+
+def _transcribe_stream_chat(
+    config: SttConfig,
+    audio_bytes: bytes,
+    filename: str,
+    language_hint: str,
+) -> Iterator[str]:
+    """mimo/dots 流式转写：chat completions + stream=True → SSE delta.content。
+
+    复用 _mimo_stream() 的 SSE 消费模式，但提取文本 delta 而非音频。
+    转写指令确保模型输出纯转写文本（不生成对话回复）。
+    """
+    import json as _json
+
+    mime = _audio_media_type(filename)
+    encoded = base64.b64encode(audio_bytes).decode("ascii")
+    data_uri = f"data:{mime};base64,{encoded}"
+    language = (language_hint or config.language or "").strip()
+
+    if config.provider == "mimo":
+        content = [{"type": "input_audio", "input_audio": {"data": data_uri}}]
+        # MiMo ASR 缺省无转写指令——需显式约束为纯转写
+        instruction = (
+            "Transcribe this audio. Output only the transcription text, no explanation."
+            if language == "en"
+            else "请转写这段音频，只输出转写文本，不加任何解释。"
+        )
+        prompt = _stt_prompt_for(config, language)
+        if prompt:
+            instruction += (
+                f" The speaker may use these terms: {prompt}."
+                if language == "en"
+                else f"讲话者可能用到这些词：{prompt}。"
+            )
+        content.append({"type": "text", "text": instruction})
+        payload: dict = {
+            "model": config.model,
+            "messages": [{"role": "user", "content": content}],
+            "stream": True,
+            "max_tokens": 512,
+        }
+        if language in {"zh", "en"}:
+            payload["asr_options"] = {"language": language}
+        headers = {"Authorization": f"Bearer {config.api_key}"}
+    else:
+        # dots
+        instruction = (
+            "Transcribe this audio. Output only the transcription text, no explanation."
+            if language == "en"
+            else "请转写这段音频，只输出转写文本，不加任何解释。"
+        )
+        prompt = _stt_prompt_for(config, language)
+        if prompt:
+            instruction += (
+                f" The speaker may use these terms: {prompt}."
+                if language == "en"
+                else f"讲话者可能用到这些词：{prompt}。"
+            )
+        payload = {
+            "model": config.model,
+            "messages": [
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "audio_url", "audio_url": {"url": data_uri}},
+                        {"type": "text", "text": instruction},
+                    ],
+                }
+            ],
+            "stream": True,
+            "reasoning_effort": "none",
+            "chat_template_kwargs": {"enable_thinking": False},
+            "max_tokens": 512,
+        }
+        headers = {"Content-Type": "application/json", "api-key": config.api_key}
+
+    stream_timeout = httpx.Timeout(30.0, connect=5.0, read=8.0)
+    for attempt in range(2):
+        emitted = 0
+        try:
+            with _client.stream(
+                "POST",
+                f"{config.base_url}/chat/completions",
+                headers=headers,
+                json=payload,
+                timeout=stream_timeout,
+            ) as resp:
+                if resp.status_code == 429 or resp.status_code >= 500:
+                    if attempt == 0:
+                        time.sleep(_UPSTREAM_RETRY_BACKOFF)
+                        continue
+                    raise VoiceProviderError(f"STT upstream {resp.status_code}")
+                if resp.status_code >= 400:
+                    raise VoiceProviderError(f"STT upstream error {resp.status_code}")
+                for line in resp.iter_lines():
+                    line = line.strip()
+                    if not line.startswith("data:"):
+                        continue
+                    data = line[5:].strip()
+                    if data == "[DONE]":
+                        return
+                    try:
+                        ev = _json.loads(data)
+                    except ValueError:
+                        continue
+                    choices = ev.get("choices") or [{}]
+                    delta = choices[0].get("delta") or {}
+                    content = (delta.get("content") or "").strip()
+                    # 剥离思维链痕迹（dots reasoning 模型可能混入）
+                    content = _strip_reasoning_artifacts(content) if content else content
+                    if content:
+                        emitted += 1
+                        yield content
+                return
+        except httpx.HTTPError as exc:
+            if attempt == 0 and emitted == 0:
+                time.sleep(_UPSTREAM_RETRY_BACKOFF)
+                continue
+            raise VoiceProviderError(f"STT stream failed: {exc}") from exc
+    raise VoiceProviderError("STT stream failed")
+
+
 def _transcribe_openai(config: SttConfig, audio_bytes: bytes, filename: str, language_hint: str) -> str:
     """OpenAI 兼容 multipart /audio/transcriptions。"""
     data: dict[str, str] = {"model": config.model, "response_format": "json"}
