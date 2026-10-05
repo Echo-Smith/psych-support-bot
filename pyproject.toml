@@ -38,6 +38,7 @@ dev = [
 [project.scripts]
 psych-support-bot = "psych_support_bot.main:main"
 psych-support-bot-evals = "psych_support_bot.evals.runner:main"
+psych-support-bot-judge = "psych_support_bot.evals.judge:main"
 psych-support-bot-ingest-knowledge = "psych_support_bot.knowledge_ingestion:main"
 
 [build-system]
