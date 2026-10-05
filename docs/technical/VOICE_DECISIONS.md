@@ -82,4 +82,3 @@ TTS_LIVE × prefetch 交织）。
 
 **HTTP 保留的真实用途**：backchannel 预取（`/backchannel/{i}`，短固定语
 闲时取好、播放零延迟）与 `/status` 探测——这是 HTTP 语义的正确场景。
-

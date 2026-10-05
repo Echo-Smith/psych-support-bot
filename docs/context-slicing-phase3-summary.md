@@ -126,7 +126,7 @@ if slice_metadata.get("is_new_slice"):
         slice_hint = "Note: This is a new conversation after sleep. Start fresh..."
     elif boundary_reason.startswith("time_gap"):
         slice_hint = "Note: User returned after a time gap. Acknowledge continuity..."
-    
+
     loop_hint_with_slice = f"{slice_hint}\n\n{base_loop_hint}"
 ```
 
@@ -195,7 +195,7 @@ def run_slice_extraction(session, user_id, slice_id):
     """切片完成时提取画像信念。"""
     messages = get_slice_messages(session, slice_id)
     slice = session.get(ConversationSlice, slice_id)
-    
+
     # 提取 D1：主题（继承切片主题）
     if slice.primary_topic:
         record_claim(
@@ -240,12 +240,12 @@ def retrieve_relevant_slices(session, user_id, current_message, max_slices=3):
     """基于用户画像的智能切片检索。"""
     beliefs = list_active_beliefs(session, user_id)
     user_topics = [b.key for b in beliefs if b.dimension == "D1"]
-    
+
     for summary in summaries:
         time_score = calculate_relevance_score_from_days(days_ago)
         topic_score = len(set(user_topics) & set(summary.topics)) / max(len(user_topics), 1)
         exercise_score = 1.0 if any(ex in summary.text for ex in worked_exercises) else 0.0
-        
+
         final_score = 0.5 * time_score + 0.3 * topic_score + 0.2 * exercise_score
 ```
 
@@ -435,12 +435,12 @@ ENABLE_CONTEXT_SLICING=true
 
 Phase 3 成功实现了上下文切片系统与画像记忆系统的深度集成：
 
-✅ **基础设施完整** - 数据模型、迁移、业务逻辑全部就绪  
-✅ **动态时间阈值** - 自适应不同频率用户的使用模式  
-✅ **智能边界检测** - 时间+显式+睡眠+主题多信号融合  
-✅ **Prompt 优化** - 区分"本次对话"和"历史摘要"  
-✅ **向后兼容** - Feature Flag 控制，可灰度发布  
-✅ **画像联动设计** - 为 Phase 4-5 打好基础  
+✅ **基础设施完整** - 数据模型、迁移、业务逻辑全部就绪\
+✅ **动态时间阈值** - 自适应不同频率用户的使用模式\
+✅ **智能边界检测** - 时间+显式+睡眠+主题多信号融合\
+✅ **Prompt 优化** - 区分"本次对话"和"历史摘要"\
+✅ **向后兼容** - Feature Flag 控制，可灰度发布\
+✅ **画像联动设计** - 为 Phase 4-5 打好基础\
 
 **核心价值**：
 - 解决了"换话题后上下文污染"的痛点
@@ -454,6 +454,6 @@ Phase 3 成功实现了上下文切片系统与画像记忆系统的深度集成
 
 ---
 
-**实施者**: Claude Code (Kiro AI)  
-**审核者**: 待定  
+**实施者**: Claude Code (Kiro AI)\
+**审核者**: 待定\
 **状态**: ✅ Phase 3 完成，可灰度发布

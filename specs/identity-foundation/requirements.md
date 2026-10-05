@@ -50,4 +50,3 @@ available.
 10. While the RP domain is not configured, the system shall keep Passkey
     authentication disabled rather than registering credentials against an
     unstable domain.
-

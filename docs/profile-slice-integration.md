@@ -8,11 +8,11 @@
 - **画像信念无时间衰减**：所有信念平等对待，缺乏"最近聊过"的时效性
 
 ### 1.2 联动后的改进
-✅ **切片 → 画像提取单元**：每个切片是一个完整话题，作为提取的最小语境  
-✅ **切片主题 → 画像维度映射**：D1（主题）可以直接从切片主题继承  
-✅ **切片摘要 → 画像证据**：摘要作为信念的结构化证据来源  
-✅ **画像信念 → 切片检索**：根据用户画像选择最相关的历史切片  
-✅ **切片完成 → 触发提取**：切片 status 变为 completed 时异步触发画像提取  
+✅ **切片 → 画像提取单元**：每个切片是一个完整话题，作为提取的最小语境\
+✅ **切片主题 → 画像维度映射**：D1（主题）可以直接从切片主题继承\
+✅ **切片摘要 → 画像证据**：摘要作为信念的结构化证据来源\
+✅ **画像信念 → 切片检索**：根据用户画像选择最相关的历史切片\
+✅ **切片完成 → 触发提取**：切片 status 变为 completed 时异步触发画像提取\
 
 ## 二、联动设计
 
@@ -63,7 +63,7 @@ def run_slice_extraction(
 ):
     """
     当切片完成时，基于切片内所有消息提取画像信念。
-    
+
     优势：
     - 完整的话题上下文（而非单轮片段）
     - 避免话题切换时的上下文混淆
@@ -71,7 +71,7 @@ def run_slice_extraction(
     """
     messages = get_slice_messages(session, slice_id)
     slice = session.get(ConversationSlice, slice_id)
-    
+
     # 提取 D1：主题（继承切片主题）
     if slice.primary_topic:
         record_claim(
@@ -81,7 +81,7 @@ def run_slice_extraction(
             key=slice.primary_topic,
             ...
         )
-    
+
     # 提取 D2-D8：基于切片内对话
     # （复用现有 build_turn_claims 逻辑，但输入扩展为切片级）
     ...
@@ -92,7 +92,7 @@ def run_slice_extraction(
 def extract_slice_topic(slice_messages: list[Message]) -> str:
     """
     从切片内消息提取主题。
-    
+
     策略：
     1. 如果切片 ≤ 3 轮：简单关键词提取
     2. 如果切片 > 3 轮：LLM 总结主题
@@ -113,7 +113,7 @@ def extract_slice_topic(slice_messages: list[Message]) -> str:
 class ProfileBelief(Base):
     # 现有字段...
     origin_slice_id: Mapped[str | None] = mapped_column(String(64), nullable=True)  # 新增
-    
+
 # 提取时关联切片
 def record_claim_from_slice(
     session: Session,
@@ -142,7 +142,7 @@ def retrieve_relevant_slices(
 ) -> list[SliceSummary]:
     """
     基于用户画像的智能切片检索。
-    
+
     权重计算：
     - 时间衰减：0.5
     - 主题匹配：0.3（基于用户画像 D1）
@@ -152,7 +152,7 @@ def retrieve_relevant_slices(
     beliefs = list_active_beliefs(session, user_id)
     user_topics = [b.key for b in beliefs if b.dimension == "D1"]
     worked_exercises = [b.key for b in beliefs if b.dimension == "D4" and b.value.get("valence") == "worked"]
-    
+
     # 查询所有切片摘要
     summaries = (
         session.query(SliceSummary)
@@ -161,29 +161,29 @@ def retrieve_relevant_slices(
         .limit(20)  # 候选池
         .all()
     )
-    
+
     # 计算每个切片的相关性得分
     scored = []
     for summary in summaries:
         # 1. 时间衰减
         days_ago = (utcnow() - summary.created_at).days
         time_score = calculate_relevance_score_from_days(days_ago)
-        
+
         # 2. 主题匹配
         summary_topics = json.loads(summary.topics)
         topic_score = len(set(user_topics) & set(summary_topics)) / max(len(user_topics), 1)
-        
+
         # 3. 效果反馈（如果切片涉及有效练习，提高权重）
         exercise_score = 0.0
         for ex in worked_exercises:
             if ex in summary.summary_text:
                 exercise_score = 1.0
                 break
-        
+
         # 综合得分
         final_score = 0.5 * time_score + 0.3 * topic_score + 0.2 * exercise_score
         scored.append((summary, final_score))
-    
+
     # 返回 top-k
     scored.sort(key=lambda x: x[1], reverse=True)
     return [s for s, score in scored[:max_slices]]
@@ -226,7 +226,7 @@ def complete_slice(session: Session, slice: ConversationSlice):
     slice.status = "completed"
     slice.end_message_id = get_last_message_id(session, slice.id)
     session.commit()
-    
+
     # 异步任务：生成摘要 + 提取画像（可选）
     if get_settings().enable_slice_based_extraction:
         # TODO: Celery 任务
@@ -362,10 +362,10 @@ ENABLE_PROFILE_SLICE_RETRIEVAL=false  # 画像驱动切片检索（Phase 5）
 - **Prompt 长度**：1200 tokens → 1000 tokens（更精准的上下文）
 
 ### 定性改进
-✅ 机器人能记住"本次对话聊的是焦虑，不要跳到上次聊的睡眠问题"  
-✅ 用户换话题后，机器人不会尴尬地继续旧话题  
-✅ 画像信念有了清晰的来源（哪次对话中提到的）  
-✅ 历史切片检索更智能（基于用户画像过滤）  
+✅ 机器人能记住"本次对话聊的是焦虑，不要跳到上次聊的睡眠问题"\
+✅ 用户换话题后，机器人不会尴尬地继续旧话题\
+✅ 画像信念有了清晰的来源（哪次对话中提到的）\
+✅ 历史切片检索更智能（基于用户画像过滤）\
 
 ## 六、后续扩展（Phase 4-5）
 
@@ -381,6 +381,6 @@ ENABLE_PROFILE_SLICE_RETRIEVAL=false  # 画像驱动切片检索（Phase 5）
 
 ---
 
-**设计者**: Claude Code (Kiro AI)  
-**审核者**: 待定  
+**设计者**: Claude Code (Kiro AI)\
+**审核者**: 待定\
 **状态**: 设计完成，待实施
