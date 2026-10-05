@@ -33,6 +33,7 @@ import time
 from collections import OrderedDict
 from collections.abc import Iterator
 from dataclasses import dataclass
+from pathlib import Path
 from urllib.parse import urlparse
 
 import httpx
@@ -328,7 +329,7 @@ def get_tts_config() -> TtsConfig | None:
             ws_url="",
             api_key=api_key,
             model=s.voice_tts_model or "mimo-v2.5-tts",
-            voice=s.voice_tts_voice or "冰糖",
+            voice=s.voice_tts_voice or "茉莉",
         )
     return None
 
@@ -361,6 +362,153 @@ def transcribe(
     if config.provider == "mimo":
         return _transcribe_mimo(config, audio_bytes, filename, language_hint)
     raise VoiceNotConfigured(f"Unknown STT provider: {config.provider}")
+
+
+def transcribe_stream(
+    audio_bytes: bytes,
+    filename: str,
+    *,
+    language_hint: str = "",
+) -> Iterator[str]:
+    """流式转写：逐块产出文本片段。
+
+    mimo/dots 走 chat completions SSE（stream=True），逐 delta.content 产出；
+    openai/minimax 无流式路径，降级为批量转写一次性产出。
+    调用方在独立线程中消费本生成器，通过 asyncio.Queue 桥接到 WebSocket。
+    """
+    if not audio_bytes:
+        raise VoiceProviderError("Empty audio payload")
+    if len(audio_bytes) > MAX_AUDIO_BYTES:
+        raise VoiceProviderError("Audio payload too large")
+    config = get_stt_config()
+    if config is None:
+        raise VoiceNotConfigured("Voice STT is not configured")
+    if config.provider in ("mimo", "dots"):
+        yield from _transcribe_stream_chat(config, audio_bytes, filename, language_hint)
+    else:
+        # openai/minimax 无流式 STT：批量转写后一次性产出
+        yield transcribe(audio_bytes, filename, language_hint=language_hint)
+
+
+def _transcribe_stream_chat(
+    config: SttConfig,
+    audio_bytes: bytes,
+    filename: str,
+    language_hint: str,
+) -> Iterator[str]:
+    """mimo/dots 流式转写：chat completions + stream=True → SSE delta.content。
+
+    复用 _mimo_stream() 的 SSE 消费模式，但提取文本 delta 而非音频。
+    转写指令确保模型输出纯转写文本（不生成对话回复）。
+    """
+    import json as _json
+
+    mime = _audio_media_type(filename)
+    encoded = base64.b64encode(audio_bytes).decode("ascii")
+    data_uri = f"data:{mime};base64,{encoded}"
+    language = (language_hint or config.language or "").strip()
+
+    if config.provider == "mimo":
+        content = [{"type": "input_audio", "input_audio": {"data": data_uri}}]
+        # MiMo ASR 缺省无转写指令——需显式约束为纯转写
+        instruction = (
+            "Transcribe this audio. Output only the transcription text, no explanation."
+            if language == "en"
+            else "请转写这段音频，只输出转写文本，不加任何解释。"
+        )
+        prompt = _stt_prompt_for(config, language)
+        if prompt:
+            instruction += (
+                f" The speaker may use these terms: {prompt}."
+                if language == "en"
+                else f"讲话者可能用到这些词：{prompt}。"
+            )
+        content.append({"type": "text", "text": instruction})
+        payload: dict = {
+            "model": config.model,
+            "messages": [{"role": "user", "content": content}],
+            "stream": True,
+            "max_tokens": 512,
+        }
+        if language in {"zh", "en"}:
+            payload["asr_options"] = {"language": language}
+        headers = {"Authorization": f"Bearer {config.api_key}"}
+    else:
+        # dots
+        instruction = (
+            "Transcribe this audio. Output only the transcription text, no explanation."
+            if language == "en"
+            else "请转写这段音频，只输出转写文本，不加任何解释。"
+        )
+        prompt = _stt_prompt_for(config, language)
+        if prompt:
+            instruction += (
+                f" The speaker may use these terms: {prompt}."
+                if language == "en"
+                else f"讲话者可能用到这些词：{prompt}。"
+            )
+        payload = {
+            "model": config.model,
+            "messages": [
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "audio_url", "audio_url": {"url": data_uri}},
+                        {"type": "text", "text": instruction},
+                    ],
+                }
+            ],
+            "stream": True,
+            "reasoning_effort": "none",
+            "chat_template_kwargs": {"enable_thinking": False},
+            "max_tokens": 512,
+        }
+        headers = {"Content-Type": "application/json", "api-key": config.api_key}
+
+    stream_timeout = httpx.Timeout(30.0, connect=5.0, read=8.0)
+    for attempt in range(2):
+        emitted = 0
+        try:
+            with _client.stream(
+                "POST",
+                f"{config.base_url}/chat/completions",
+                headers=headers,
+                json=payload,
+                timeout=stream_timeout,
+            ) as resp:
+                if resp.status_code == 429 or resp.status_code >= 500:
+                    if attempt == 0:
+                        time.sleep(_UPSTREAM_RETRY_BACKOFF)
+                        continue
+                    raise VoiceProviderError(f"STT upstream {resp.status_code}")
+                if resp.status_code >= 400:
+                    raise VoiceProviderError(f"STT upstream error {resp.status_code}")
+                for line in resp.iter_lines():
+                    line = line.strip()
+                    if not line.startswith("data:"):
+                        continue
+                    data = line[5:].strip()
+                    if data == "[DONE]":
+                        return
+                    try:
+                        ev = _json.loads(data)
+                    except ValueError:
+                        continue
+                    choices = ev.get("choices") or [{}]
+                    delta = choices[0].get("delta") or {}
+                    content = (delta.get("content") or "").strip()
+                    # 剥离思维链痕迹（dots reasoning 模型可能混入）
+                    content = _strip_reasoning_artifacts(content) if content else content
+                    if content:
+                        emitted += 1
+                        yield content
+                return
+        except httpx.HTTPError as exc:
+            if attempt == 0 and emitted == 0:
+                time.sleep(_UPSTREAM_RETRY_BACKOFF)
+                continue
+            raise VoiceProviderError(f"STT stream failed: {exc}") from exc
+    raise VoiceProviderError("STT stream failed")
 
 
 def _transcribe_openai(config: SttConfig, audio_bytes: bytes, filename: str, language_hint: str) -> str:
@@ -811,13 +959,46 @@ def _synthesize_minimax(config: TtsConfig, cleaned: str) -> bytes:
 # 文本放 assistant 消息；语速/情感无独立参数，用文本标签（(怅然) 等）控制
 # ---------------------------------------------------------------------------
 
+# 音色复刻（MiMo-V2.5-TTS-VoiceClone）：无持久音色 ID——参考音频按请求内联
+# （audio.voice = data:audio/<mime>;base64,...，编码后 ≤10MB，仅 mp3/wav）。
+# VOICE_TTS_VOICE 指向存在的文件即视为复刻样本；否则按预置音色名直传。
+_MIME_BY_EXT = {".mp3": "audio/mpeg", ".wav": "audio/wav"}
+_VOICE_REF_MAX_B64 = 10 * 1024 * 1024
+# 读盘+编码结果按 (路径, mtime) 缓存：live 路径每句一请求，不能每句重读重编码
+_VOICE_REF_CACHE: dict[str, tuple[float, str]] = {}
+
+
+def _mimo_voice_reference(voice: str) -> str:
+    if not voice:
+        return voice
+    path = Path(voice)
+    if not path.is_file():
+        return voice  # 预置音色名（冰糖等）
+    mime = _MIME_BY_EXT.get(path.suffix.lower())
+    if mime is None:
+        raise VoiceProviderError(f"Voice reference must be .mp3 or .wav (got {path.suffix or 'no extension'})")
+    try:
+        mtime = path.stat().st_mtime
+        cached = _VOICE_REF_CACHE.get(str(path))
+        if cached and cached[0] == mtime:
+            return cached[1]
+        raw = path.read_bytes()
+    except OSError as exc:
+        raise VoiceProviderError(f"Voice reference unreadable: {exc}") from exc
+    b64 = base64.b64encode(raw).decode("ascii")
+    if len(b64) > _VOICE_REF_MAX_B64:
+        raise VoiceProviderError(f"Voice reference too large: base64 {len(b64)} bytes > 10MB; trim the sample")
+    uri = f"data:{mime};base64,{b64}"
+    _VOICE_REF_CACHE[str(path)] = (mtime, uri)
+    return uri
+
 
 def _mimo_tts_payload(config: TtsConfig, text: str, *, stream: bool, audio_format: str) -> dict:
     return {
         "model": config.model,
         "messages": [{"role": "assistant", "content": text}],
         "stream": stream,
-        "audio": {"format": audio_format, "voice": config.voice},
+        "audio": {"format": audio_format, "voice": _mimo_voice_reference(config.voice)},
     }
 
 
@@ -853,6 +1034,11 @@ def _mimo_stream(config: TtsConfig, cleaned: str, audio_format: str) -> Iterator
 
     payload = _mimo_tts_payload(config, cleaned, stream=True, audio_format=audio_format)
     last_error: VoiceProviderError | None = None
+    # 复刻模型流式为兼容模式（整句合成完才返回单块）：read 须覆盖整句合成
+    # 时长（长句实测 10s+）；8s 是预置音色「块间隔 <1s」的口径，会掐掉长句
+    # ——20260912 实证：三分句回复只读出最短的一句（长句全被 8s 跳过）
+    clone = "voiceclone" in (config.model or "")
+    stream_timeout = httpx.Timeout(60.0 if clone else 30.0, connect=5.0, read=30.0 if clone else 8.0)
     for attempt in range(2):
         # 本轮已产出的块数：yield 过之后再断流不得整体重试——重试会从头重发，
         # 调用方收到重复前缀（live 路径=音频重复念开头，synthesize_stream=
@@ -864,7 +1050,7 @@ def _mimo_stream(config: TtsConfig, cleaned: str, audio_format: str) -> Iterator
                 f"{config.base_url}/chat/completions",
                 headers={"Authorization": f"Bearer {config.api_key}"},
                 json=payload,
-                timeout=httpx.Timeout(30.0, connect=5.0, read=8.0),
+                timeout=stream_timeout,
             ) as resp:
                 if resp.status_code == 429 or resp.status_code >= 500:
                     last_error = VoiceProviderError(f"TTS upstream {resp.status_code}")

@@ -63,7 +63,10 @@ def test_privacy_consent_records_event(client) -> None:
     resp = client.post(
         "/v1/users/privacy-consent",
         params={"user_id": user_id},
-        json={"acknowledged": True, "consent_version": "20260904.1"},
+        json={
+            "acknowledged": True,
+            "consent_version": client.get("/v1/users/privacy-agreement").json()["consent_version"],
+        },
     )
     assert resp.status_code == 200
     assert resp.json()["status"] == "acknowledged"

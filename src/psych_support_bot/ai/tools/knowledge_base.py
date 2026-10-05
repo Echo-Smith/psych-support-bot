@@ -13,12 +13,25 @@ from psych_support_bot.ai.knowledge.practice_guidance import KNOWLEDGE_SNIPPETS
 
 
 def get_knowledge_context(
-    mode: str, risk_level: str, user_message: str = "", extra_topics: list[str] | None = None
+    mode: str,
+    risk_level: str,
+    user_message: str = "",
+    extra_topics: list[str] | None = None,
+    profile_topics: list[str] | None = None,
+    profile_beliefs: list | None = None,
 ) -> str:
     # LLM 语义 topics（闭集）与关键词 topics 并集：词表外表达（"心情很低落"）
     # 由语义通道补齐。extra_topics 为空时行为与纯关键词通道完全一致。
     topics = list(dict.fromkeys([*detect_topics(user_message), *(extra_topics or [])]))
-    entries = retrieve_knowledge_entries(user_message, mode, risk_level, limit=5, extra_topics=extra_topics)
+    entries = retrieve_knowledge_entries(
+        user_message,
+        mode,
+        risk_level,
+        limit=5,
+        extra_topics=extra_topics,
+        profile_topics=profile_topics,
+        profile_beliefs=profile_beliefs,
+    )
     base_snippets = KNOWLEDGE_SNIPPETS.get(mode, [])
 
     sections = [

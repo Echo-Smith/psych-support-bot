@@ -191,6 +191,7 @@ TOPIC_KEYWORDS = {
         "伴侣",
         "朋友",
         "吵架",
+        "大吵",
         "边界",
         "冲突",
         "孤独",
@@ -401,6 +402,39 @@ def _entry(
     )
 
 
+# 练习库 → 主题闭集映射。键必须与 CBT/ACT/DBT 练习库 dict 键完全一致
+# （test_knowledge_governance 钉住覆盖与词表合法性）：曾出现键带前导空格
+# 导致映射落空、条目主题退化为默认 stress 的事故。
+EXERCISE_TOPIC_MAP: dict[str, tuple[str, ...]] = {
+    "thought_record_full": ("anxiety", "depression", "rumination", "self_worth"),
+    "behavioral_activation": (
+        "depression",
+        "burnout",
+        "motivation",
+        "procrastination",
+    ),
+    "mindfulness_body_scan": ("anxiety", "panic", "stress", "sleep"),
+    "worry_tree": ("anxiety", "rumination"),
+    "downward_arrow": ("anxiety", "self_worth"),
+    "exposure_hierarchy": ("anxiety", "panic", "ocd"),
+    "worst_best_realistic": ("anxiety", "rumination"),
+    "cost_benefit_analysis": ("procrastination", "motivation"),
+    "self_compassion_letter": ("self_worth", "depression"),
+    "values_card_sort": ("motivation", "stress", "burnout"),
+    "commitment_obstacle": ("procrastination", "motivation", "burnout"),
+    "defusion_labeling": ("rumination", "anxiety", "self_worth"),
+    "defusion_tunnel": ("rumination", "anxiety", "self_worth"),
+    "defusion_sing": ("rumination", "anxiety", "self_worth"),
+    "observing_self": ("rumination", "anxiety", "self_worth"),
+    "willingness_choice": ("anxiety", "stress"),
+    "acceptance_leaves": ("grief", "stress", "rumination"),
+    "tipp_full": ("panic", "anger", "stress"),
+    "wise_mind": ("relationships", "anger", "stress"),
+    "radical_acceptance_walkthrough": ("grief", "stress", "relationships"),
+    "dear_man_assertion": ("relationships",),
+}
+
+
 def build_knowledge_index() -> list[KnowledgeEntry]:
     entries: list[KnowledgeEntry] = []
     module_topics = {
@@ -448,27 +482,6 @@ def build_knowledge_index() -> list[KnowledgeEntry]:
             )
         )
 
-    exercise_topic_map = {
-        "thought_record_full": ("anxiety", "depression", "rumination", "self_worth"),
-        "behavioral_activation": (
-            "depression",
-            "burnout",
-            "motivation",
-            "procrastination",
-        ),
-        "mindfulness_body_scan": ("anxiety", "panic", "stress", "sleep"),
-        "worry_tree": ("anxiety", "rumination"),
-        "downward_arrow": ("anxiety", "self_worth"),
-        "values_card_sort": ("motivation", "stress", "burnout"),
-        "commitment_obstacle": ("procrastination", "motivation", "burnout"),
-        "defusion_labeling": ("rumination", "anxiety", "self_worth"),
-        "acceptance_leaves": ("grief", "stress", "rumination"),
-        "tipp_full": ("panic", "anger", "stress"),
-        "wise_mind": ("relationships", "anger", "stress"),
-        "radical_acceptance_walkthrough": ("grief", "stress", "relationships"),
-        "dear_man_assertion": ("relationships",),
-    }
-
     for exercise_id, exercise in CBT_EXERCISES.items():
         title = exercise.name
         description = exercise.description
@@ -477,9 +490,9 @@ def build_knowledge_index() -> list[KnowledgeEntry]:
                 entry_id=f"cbt-exercise:{exercise_id}",
                 title=title,
                 source="cbt_exercise",
-                topics=tuple(exercise_topic_map.get(exercise_id, ("stress",))),
+                topics=tuple(EXERCISE_TOPIC_MAP.get(exercise_id, ("stress",))),
                 modes=("intervention", "planning"),
-                keywords=_topic_keywords(tuple(exercise_topic_map.get(exercise_id, ("stress",)))),
+                keywords=_topic_keywords(tuple(EXERCISE_TOPIC_MAP.get(exercise_id, ("stress",)))),
                 content=description,
                 action_hint=f"Exercise tag: cbt_{exercise_id}",
             )
@@ -491,9 +504,9 @@ def build_knowledge_index() -> list[KnowledgeEntry]:
                 entry_id=f"act-exercise:{exercise_id}",
                 title=str(exercise["name"]),
                 source="act_exercise",
-                topics=tuple(exercise_topic_map.get(exercise_id, ("stress",))),
+                topics=tuple(EXERCISE_TOPIC_MAP.get(exercise_id, ("stress",))),
                 modes=("intervention", "planning"),
-                keywords=_topic_keywords(tuple(exercise_topic_map.get(exercise_id, ("stress",)))),
+                keywords=_topic_keywords(tuple(EXERCISE_TOPIC_MAP.get(exercise_id, ("stress",)))),
                 content=str(exercise["description"]),
                 action_hint=f"Exercise tag: act_{exercise_id}",
             )
@@ -505,9 +518,9 @@ def build_knowledge_index() -> list[KnowledgeEntry]:
                 entry_id=f"dbt-exercise:{exercise_id}",
                 title=str(exercise["name"]),
                 source="dbt_exercise",
-                topics=tuple(exercise_topic_map.get(exercise_id, ("stress",))),
+                topics=tuple(EXERCISE_TOPIC_MAP.get(exercise_id, ("stress",))),
                 modes=("intervention", "planning", "crisis"),
-                keywords=_topic_keywords(tuple(exercise_topic_map.get(exercise_id, ("stress",)))),
+                keywords=_topic_keywords(tuple(EXERCISE_TOPIC_MAP.get(exercise_id, ("stress",)))),
                 content=str(exercise["description"]),
                 action_hint=f"Exercise tag: dbt_{exercise_id}",
             )
@@ -742,6 +755,33 @@ def _source_doc_key(entry_id: str) -> str:
     return ":".join(parts[:2]) if len(parts) >= 2 else entry_id
 
 
+# D3 机制→学派映射：D3 信念对应的首选学派知识来源。
+_D3_SCHOOL_MAP: dict[str, tuple[str, ...]] = {
+    "control_struggle": ("act_exercise", "act_guide"),
+    "cognitive_fusion": ("act_exercise", "act_guide"),
+    "fused_self_concept": ("act_exercise", "act_guide"),
+    "rumination_loop": ("cbt_exercise", "cbt_guide"),
+    "avoidance_maintenance.social": ("cbt_exercise", "cbt_guide"),
+    "behavioral_withdrawal": ("cbt_exercise", "cbt_guide"),
+    "safety_behavior": ("cbt_exercise", "cbt_guide"),
+    "emotional_suppression": ("dbt_exercise", "dbt_guide"),
+}
+
+
+def _d3_school_boost(entry: KnowledgeEntry, beliefs: list) -> int:
+    """D3 信念→学派匹配加分（+3/匹配，最高+6）。"""
+    boost = 0
+    for b in beliefs:
+        if b.dimension != "D3" or b.confidence < 0.4:
+            continue
+        sources = _D3_SCHOOL_MAP.get(b.key, ())
+        if any(entry.source.startswith(s) for s in sources):
+            boost += 3
+            if boost >= 6:
+                break
+    return boost
+
+
 def retrieve_knowledge_entries(
     user_message: str,
     mode: str,
@@ -749,6 +789,8 @@ def retrieve_knowledge_entries(
     *,
     limit: int = 4,
     extra_topics: list[str] | None = None,
+    profile_topics: list[str] | None = None,
+    profile_beliefs: list | None = None,
 ) -> list[KnowledgeEntry]:
     # LLM 语义 topics 排前（闭集校验过，精度更高），关键词 topics 兜底在后。
     topics = list(dict.fromkeys([*(extra_topics or []), *detect_topics(user_message)]))
@@ -807,6 +849,18 @@ def retrieve_knowledge_entries(
         topic_hits = sum(1 for topic in entry.topics if topic in topics)
         score += topic_hits * 5
         topical_relevance += topic_hits
+
+        # 通路5：画像信念话题加权——历史确认的话题低于当轮实时信号（+5），
+        # 但高于关键词命中（+1），反映画像对知识检索的持续影响。
+        profile_boost = sum(2 for topic in entry.topics if topic in (profile_topics or []))
+        score += profile_boost
+        topical_relevance += profile_boost
+
+        # 第二层接出：D3 机制→学派匹配——D3 信念对应学派的知识内容获得加权。
+        if profile_beliefs:
+            school_boost = _d3_school_boost(entry, profile_beliefs)
+            score += school_boost
+            topical_relevance += school_boost
 
         keyword_hits = sum(
             1 for keyword in entry.keywords if keyword and _contains_keyword(normalized, compact, keyword)

@@ -1,7 +1,13 @@
+import pytest
+
 from psych_support_bot.evals.runner import run_eval_cases
+from psych_support_bot.infra.config.settings import get_settings
 
 
+@pytest.mark.slow
 def test_eval_runner_cases_pass() -> None:
+    if not get_settings().openai_api_key:
+        pytest.skip("End-to-end reply evaluation requires OPENAI_API_KEY; real-model acceptance remains open")
     results = run_eval_cases()
     assert results
     failed = [r for r in results if not r["passed"]]

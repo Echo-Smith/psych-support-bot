@@ -235,6 +235,23 @@ def plan_consultation(state: GraphState) -> GraphState:
             loop_hint = contradiction_hint + " " + loop_hint
             logger.info("Cross-turn contradiction detected; loop_hint updated.")
 
+        # K2 质询闭环：待验证画像假设经 loop_hint 注入（与矛盾 hint 同一通道）。
+        # 门控三重：no_question_mode（用户明确不想被提问）/ 危机模式 / 高危风险
+        # ——任何一条命中都不质询；每轮至多一条，且措辞要求"顺路自然求证"。
+        candidates = list(state.get("profile_question_candidates") or [])
+        if (
+            candidates
+            and not bool(state.get("no_question_mode"))
+            and state["mode"] != "crisis"
+            and state["risk_result"].risk_level not in {"high", "critical"}
+        ):
+            question_hint = (
+                "Profile hypothesis you may gently verify this turn (at most this one, "
+                f"only if it flows naturally, never interrogate): {candidates[0]}"
+            )
+            loop_hint = f"{question_hint} {loop_hint}"
+            logger.info("Profile question candidate injected into loop_hint.")
+
         state["loop_hint"] = loop_hint
 
         update_span_output(

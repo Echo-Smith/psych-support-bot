@@ -9,25 +9,97 @@
 """
 
 import json
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 
 from sqlalchemy.orm import Session
 
 from psych_support_bot.infra.db.models import (
     AssessmentRecord,
+    AuthChallenge,
+    AuthIdentity,
+    AuthSession,
     CheckinRecord,
     ConversationSession,
+    ConversationSlice,
     ExerciseRecord,
     Message,
+    PasskeyCredential,
     PlanEnrollment,
+    PracticeSessionRecord,
+    PrivacyConsent,
+    ProfileBelief,
+    ProfileBeliefEvent,
+    ProfileBetaConsent,
+    ProfileEvolutionJob,
+    ProfileExtractionStats,
+    ProfileInterventionEvent,
+    ProfileMemoryPreference,
+    ProfileSnapshot,
     QuestionnaireSessionRecord,
     RiskEvent,
+    SliceSummary,
     UsageEvent,
     User,
     UserCredential,
     UserProfile,
+    UserTimeProfile,
     WeeklyReportRecord,
 )
+from psych_support_bot.infra.db.profile_repositories import delete_user_profile_beliefs
+
+# Explicit inventory, shared by export and deletion; tests compare it against
+# every user-owned ORM table so adding a feature cannot silently leave data out.
+USER_DATA_MODELS = (
+    AuthChallenge,
+    AuthSession,
+    PasskeyCredential,
+    AuthIdentity,
+    PracticeSessionRecord,
+    QuestionnaireSessionRecord,
+    AssessmentRecord,
+    ExerciseRecord,
+    CheckinRecord,
+    RiskEvent,
+    WeeklyReportRecord,
+    PlanEnrollment,
+    UsageEvent,
+    SliceSummary,
+    ConversationSlice,
+    UserTimeProfile,
+    ProfileBeliefEvent,
+    ProfileBelief,
+    ProfileExtractionStats,
+    ProfileInterventionEvent,
+    ProfileMemoryPreference,
+    ProfileBetaConsent,
+    ProfileEvolutionJob,
+    ProfileSnapshot,
+    UserProfile,
+    UserCredential,
+    ConversationSession,
+    PrivacyConsent,
+)
+
+
+def _export_row(record) -> dict:
+    secret_fields = {
+        "password_hash",
+        "refresh_token_hash",
+        "csrf_token_hash",
+        "challenge_hash",
+        "credential_id",
+        "credential_id_hash",
+        "public_key_cose",
+        "subject_hash",
+        "user_handle_hash",
+    }
+    result = {}
+    for column in record.__table__.columns:
+        if column.name in secret_fields:
+            continue  # Authentication secrets and correlatable authenticators are never downloadable.
+        value = getattr(record, column.name)
+        result[column.name] = value.isoformat() if isinstance(value, (date, datetime)) else value
+    return result
 
 
 def _iso(value: datetime | None) -> str | None:
@@ -88,6 +160,7 @@ def export_user_data(session: Session, user_id: str) -> dict:
                 "reflection_note": r.reflection_note,
                 "step_responses": _load_json_array(r.step_responses_json),
                 "ai_feedback": r.ai_feedback,
+                "guidance_transcript": _load_json_array(r.guidance_transcript_json),
                 "risk_flag": r.risk_flag,
                 "completed_at": _iso(r.completed_at),
             }
@@ -157,6 +230,13 @@ def export_user_data(session: Session, user_id: str) -> dict:
             }
             for r in session.query(PlanEnrollment).filter(PlanEnrollment.user_id == user_id).all()
         ],
+        # Lossless table inventory supplements the historical UI-facing shape.
+        # JSON columns intentionally retain their stored JSON representation.
+        "schema_version": 2,
+        "data_tables": {
+            model.__tablename__: [_export_row(row) for row in session.query(model).filter(model.user_id == user_id)]
+            for model in USER_DATA_MODELS
+        },
         "exported_at": datetime.now(UTC).isoformat(),
     }
 
@@ -216,7 +296,11 @@ def me_summary(session: Session, user_id: str) -> dict:
 
 
 def clear_user_records(session: Session, user_id: str) -> dict[str, int]:
-    """清空主动记录（测评/练习/打卡），保留聊天与账号。返回逐表删除行数。"""
+    """清空主动记录（测评/练习/打卡），保留聊天与账号。返回逐表删除行数。
+
+    画像信念一并清空：belief 是从记录与对话推导出的推断，底层数据被
+    用户清空后推断不得残留（删除权 = 级联，见 PROFILE_DECISIONS P1）。
+    """
     counts = {
         "assessments": session.query(AssessmentRecord)
         .filter(AssessmentRecord.user_id == user_id)
@@ -228,6 +312,11 @@ def clear_user_records(session: Session, user_id: str) -> dict[str, int]:
         .filter(CheckinRecord.user_id == user_id)
         .delete(synchronize_session=False),
     }
+    counts.update(delete_user_profile_beliefs(session, user_id))
+    for model in (PracticeSessionRecord, QuestionnaireSessionRecord, WeeklyReportRecord):
+        counts[model.__tablename__] = (
+            session.query(model).filter(model.user_id == user_id).delete(synchronize_session=False)
+        )
     return {key: int(value) for key, value in counts.items()}
 
 
@@ -246,44 +335,9 @@ def delete_user_account(session: Session, user_id: str) -> dict[str, int]:
     else:
         counts["messages"] = 0
 
-    counts["sessions"] = int(
-        session.query(ConversationSession)
-        .filter(ConversationSession.user_id == user_id)
-        .delete(synchronize_session=False)
-    )
-    counts["questionnaire_sessions"] = int(
-        session.query(QuestionnaireSessionRecord)
-        .filter(QuestionnaireSessionRecord.user_id == user_id)
-        .delete(synchronize_session=False)
-    )
-    counts["assessments"] = int(
-        session.query(AssessmentRecord).filter(AssessmentRecord.user_id == user_id).delete(synchronize_session=False)
-    )
-    counts["exercise_records"] = int(
-        session.query(ExerciseRecord).filter(ExerciseRecord.user_id == user_id).delete(synchronize_session=False)
-    )
-    counts["checkins"] = int(
-        session.query(CheckinRecord).filter(CheckinRecord.user_id == user_id).delete(synchronize_session=False)
-    )
-    counts["risk_events"] = int(
-        session.query(RiskEvent).filter(RiskEvent.user_id == user_id).delete(synchronize_session=False)
-    )
-    counts["weekly_reports"] = int(
-        session.query(WeeklyReportRecord)
-        .filter(WeeklyReportRecord.user_id == user_id)
-        .delete(synchronize_session=False)
-    )
-    counts["plan_enrollments"] = int(
-        session.query(PlanEnrollment).filter(PlanEnrollment.user_id == user_id).delete(synchronize_session=False)
-    )
-    counts["usage_events"] = int(
-        session.query(UsageEvent).filter(UsageEvent.user_id == user_id).delete(synchronize_session=False)
-    )
-    counts["user_profiles"] = int(
-        session.query(UserProfile).filter(UserProfile.user_id == user_id).delete(synchronize_session=False)
-    )
-    counts["user_credentials"] = int(
-        session.query(UserCredential).filter(UserCredential.user_id == user_id).delete(synchronize_session=False)
-    )
+    for model in USER_DATA_MODELS:
+        counts[model.__tablename__] = int(
+            session.query(model).filter(model.user_id == user_id).delete(synchronize_session=False)
+        )
     counts["users"] = int(session.query(User).filter(User.id == user_id).delete(synchronize_session=False))
     return counts

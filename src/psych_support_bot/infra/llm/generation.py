@@ -9,16 +9,14 @@ from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 
 from psych_support_bot.ai.consultation import consultation_agents
 from psych_support_bot.ai.prompts.templates import (
-    build_boundary_state_prompt,
     build_consultation_agent_prompt,
     build_consultation_synthesis_prompt,
     build_diagnosis_refusal_prompt,
     build_knowledge_block_prompt,
     build_memory_block_prompt,
-    build_mode_shape_prompt,
-    build_process_state_prompt,
     build_role_prompt,
     build_static_prefix,
+    build_turn_context_prompt,
 )
 from psych_support_bot.ai.routers.intent import DIAGNOSIS_KEYWORDS
 from psych_support_bot.ai.utils.text_matching import _contains_keyword, _normalize_text
@@ -136,6 +134,7 @@ def _usage_details(response: object) -> dict[str, int] | None:
     cache_read = int((usage.get("input_token_details") or {}).get("cache_read") or 0)
     if cache_read:
         details["input_cached"] = cache_read
+        details["cache_hit_rate"] = round(cache_read / details["input"], 3) if details["input"] else 0.0
     return details
 
 
@@ -200,20 +199,20 @@ def _invoke(
                 if attempt >= len(_RETRY_BACKOFF_SECONDS) or not _is_retryable_llm_error(exc):
                     break
                 logger.warning(
-                    "LLM call failed (attempt %d/%d, retryable): %s",
+                    "LLM call failed (attempt %d/%d, retryable, error_type=%s)",
                     attempt + 1,
                     len(_RETRY_BACKOFF_SECONDS) + 1,
-                    exc,
+                    type(exc).__name__,
                 )
                 time.sleep(_RETRY_BACKOFF_SECONDS[attempt])
         if last_exc is not None or response is None:
             update_span_output(gen_obs, {"error": str(last_exc)[:300]})
             if fallback is not None:
-                logger.exception("LLM unavailable after retries; serving caller-declared fallback.")
+                logger.warning("LLM unavailable after retries; serving caller-declared fallback")
                 fallback_text = fallback()
                 update_span_output(gen_obs, {"fallback": fallback_text[:300]})
                 return fallback_text
-            raise LLMUnavailableError(f"LLM unavailable: {last_exc}") from last_exc
+            raise LLMUnavailableError("LLM unavailable") from None
         output = _coerce_content(response.content)
         update_span_output(gen_obs, output)
         if (usage := _usage_details(response)) is not None:
@@ -273,6 +272,8 @@ def _generate_consultation_opinion(
     question_strategy: str,
     challenge_allowed: bool,
     loop_hint: str,
+    conversation_intent: str = "new_request",
+    history: list[dict[str, str]] | None = None,
 ) -> dict[str, str]:
     system_prompt = build_consultation_agent_prompt(
         agent_label=agent["label"],
@@ -287,6 +288,7 @@ def _generate_consultation_opinion(
         question_strategy=question_strategy,
         challenge_allowed=challenge_allowed,
         loop_hint=loop_hint,
+        conversation_intent=conversation_intent,
     )
     fallback_note = (
         f"（{agent['label']}视角暂时不可用。）"
@@ -299,6 +301,7 @@ def _generate_consultation_opinion(
         expected_language,
         mode=mode,
         fallback=lambda: fallback_note,
+        history=history,
     )
     return {
         "agent": agent["label"],
@@ -324,6 +327,8 @@ def generate_multidisciplinary_consultation(
     no_question_mode: bool = False,
     emotional_state: str = "",
     on_token: Callable[[str], None] | None = None,
+    conversation_intent: str = "new_request",
+    history: list[dict[str, str]] | None = None,
 ) -> tuple[str, list[dict[str, str]]]:
     if not expected_language:
         expected_language = _expected_language(user_message)
@@ -352,6 +357,8 @@ def generate_multidisciplinary_consultation(
                     question_strategy=question_strategy,
                     challenge_allowed=challenge_allowed,
                     loop_hint=loop_hint,
+                    conversation_intent=conversation_intent,
+                    history=history,
                 ),
             )
             for agent in agents
@@ -378,6 +385,7 @@ def generate_multidisciplinary_consultation(
         expected_language=expected_language,
         no_question_mode=no_question_mode,
         emotional_state=emotional_state,
+        conversation_intent=conversation_intent,
     )
 
     # Synthesis failure degrades to the raw opinions instead of crashing the
@@ -401,18 +409,20 @@ def generate_multidisciplinary_consultation(
                 expected_language,
                 mode=mode,
                 fallback=_synthesis_fallback,
+                history=history,
             ):
                 pieces.append(chunk)
                 on_token(chunk)
             return "".join(pieces), opinions
-        except Exception:
-            logger.exception("Streaming synthesis failed; falling back to blocking synthesis.")
+        except Exception:  # noqa: BLE001 - streaming falls back to the same bounded blocking path
+            logger.warning("Streaming synthesis failed; falling back to blocking synthesis")
     reply_text = _invoke(
         synthesis_prompt,
         user_message,
         expected_language,
         mode=mode,
         fallback=_synthesis_fallback,
+        history=history,
     )
     return reply_text, opinions
 
@@ -424,14 +434,15 @@ def _stream_invoke(
     *,
     mode: str = "support",
     fallback: Callable[[], str] | None = None,
+    history: list[dict[str, str]] | None = None,
 ) -> Iterator[str]:
     """_invoke 的流式孪生：model.stream 产出文本增量。
 
-    复用 _invoke 的消息组装语义（System + Human 直投，无近史场景）；
+    复用 _invoke 的消息组装语义（System + 逐字近史 + 本轮 Human）；
     任何瞬时错误直接抛出由调用方回退整段合成。
     """
     model = build_chat_model(temperature=get_temperature_for_mode(mode), mode=mode)
-    messages = [SystemMessage(content=system_prompt), HumanMessage(content=user_message)]
+    messages = [SystemMessage(content=system_prompt), *_history_messages(history), HumanMessage(content=user_message)]
     with trace_span(
         "llm.stream",
         input={"system_prompt": system_prompt[:300], "user_message": user_message[:300]},
@@ -464,49 +475,44 @@ def _build_reply_prompt(
     """主回复的 prompt 装配（同步与流式路径共用，逐字一致防行为漂移）。
 
     返回 (system_prompt, user_context, expected_language)。
+
+    缓存优化（2026-09-15）：SystemMessage 只含完全稳定的静态前缀（仅按
+    语言分池，部署期才变），确保前缀缓存 100% 命中。每轮动态上下文
+    （risk/emotion/mode/stage/hint/anti-repeat/diagnosis）合并为
+    turn_context 块，作为 HumanMessage 头部与 memory/knowledge 同层投递。
     """
     if not expected_language:
         expected_language = _expected_language(user_message)
-    # Prompt 分层装配（Phase 1/5）：静态前缀与主回复、会诊 agent、会诊综合
-    # 三条路径逐字共享（同一缓存命中池）——网关前缀缓存 512 块粒度，静态区
-    # 出现任何每轮插值都会从插值点截断缓存。
-    system_prompt = "\n\n".join(
-        [
-            # --- 静态前缀区（仅随语言分池；部署才变）---
-            build_static_prefix(expected_language),
-            # --- 每轮状态区（缓存断点之后）：结构化字段，流程驱动 ---
-            "## Turn context",
-            build_boundary_state_prompt(
-                risk_level=risk_level,
-                emotional_state=emotional_state,
-            ),
-            "## Reply shape",
-            build_mode_shape_prompt(mode, risk_level, no_question_mode=no_question_mode),
-            "## Process frame",
-            build_process_state_prompt(
-                interview_stage=interview_stage,
-                question_strategy=question_strategy,
-                challenge_allowed=challenge_allowed,
-                loop_hint=loop_hint,
-                no_question_mode=no_question_mode,
-            ),
-        ]
+
+    # --- SystemMessage：完全稳定的静态前缀（仅随语言分池）---
+    system_prompt = build_static_prefix(expected_language)
+
+    # Anti-repeat guard 和 diagnosis refusal 条件性追加到 turn context。
+    anti_repeat = anti_repeat_note or ""
+    diagnosis = ""
+    if _is_diagnosis_request(user_message):
+        diagnosis = build_diagnosis_refusal_prompt()
+
+    # --- HumanMessage 数据区：turn context + memory + knowledge ---
+    turn_ctx = build_turn_context_prompt(
+        risk_level=risk_level,
+        emotional_state=emotional_state,
+        mode=mode,
+        no_question_mode=no_question_mode,
+        interview_stage=interview_stage,
+        question_strategy=question_strategy,
+        challenge_allowed=challenge_allowed,
+        loop_hint=loop_hint,
+        anti_repeat_note=anti_repeat,
+        diagnosis_refusal=diagnosis,
     )
-    # --- 数据区（Phase 2 收尾）：memory/knowledge 作为参考数据前缀进
-    # HumanMessage，与用户本轮输入同投递——系统之声纯净，数据贴轮次。
     user_context = "\n\n".join(
         [
+            turn_ctx,
             build_memory_block_prompt(memory_summary),
             build_knowledge_block_prompt(knowledge_context),
         ]
     )
-    # Anti-repeat guard appended last so it sits closest to the output
-    # instruction (复读防线，response_generator 传入)。
-    if anti_repeat_note:
-        system_prompt = system_prompt + "\n\n" + anti_repeat_note
-    # Inject diagnosis refusal prompt if user is asking for a diagnosis
-    if _is_diagnosis_request(user_message):
-        system_prompt = system_prompt + "\n\n" + build_diagnosis_refusal_prompt()
     return system_prompt, user_context, expected_language
 
 
@@ -537,6 +543,7 @@ def generate_clinically_bounded_reply(
     anti_repeat_note: str = "",
     emotional_state: str = "",
     history: list[dict[str, str]] | None = None,
+    conversation_intent: str = "new_request",
 ) -> str:
     system_prompt, user_context, expected_language = _build_reply_prompt(
         user_message,
@@ -578,6 +585,7 @@ async def generate_clinically_bounded_reply_stream(
     anti_repeat_note: str = "",
     emotional_state: str = "",
     history: list[dict[str, str]] | None = None,
+    conversation_intent: str = "new_request",
 ):
     """主回复的异步流式版本：产出文本增量（str chunks）。
 
@@ -633,6 +641,7 @@ def generate_clinically_bounded_reply_stream_sync(
     anti_repeat_note: str = "",
     emotional_state: str = "",
     history: list[dict[str, str]] | None = None,
+    conversation_intent: str = "new_request",
 ) -> Iterator[str]:
     """主回复的同步流式版本（供同步 LangGraph 节点经 get_stream_writer 推块）。
 
@@ -670,6 +679,26 @@ def generate_clinically_bounded_reply_stream_sync(
                 collected.append(text)
                 yield text
         update_span_output(gen_obs, "".join(collected)[:300])
+
+
+def generate_profile_extraction(
+    *,
+    system_prompt: str,
+    payload_text: str,
+    fallback: Callable[[], str] | None = None,
+) -> str:
+    """画像语义提取（K2）：从用户话术提取 belief 候选，输出严格 JSON。
+
+    经 `_invoke` 咽喉层（重试 + fallback + Langfuse span）。语言锁对
+    JSON 安全：只拦"整段错语"，zh 值 JSON 可通过。
+    """
+    return _invoke(
+        system_prompt,
+        payload_text,
+        "zh",
+        mode="support",
+        fallback=fallback,
+    )
 
 
 def generate_assessment_history_analysis(
