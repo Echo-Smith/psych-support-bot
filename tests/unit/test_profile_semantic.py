@@ -12,8 +12,6 @@
 
 from uuid import uuid4
 
-import pytest
-
 from psych_support_bot.ai.knowledge.index import TOPIC_KEYWORDS
 from psych_support_bot.ai.nodes.consultation_planner import plan_consultation
 from psych_support_bot.ai.profile.extractor import record_turn_interventions, run_turn_extraction

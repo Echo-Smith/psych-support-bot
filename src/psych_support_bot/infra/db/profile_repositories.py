@@ -702,9 +702,7 @@ def delete_user_profile_beliefs(session: Session, user_id: str) -> dict[str, int
         .delete(synchronize_session=False)
     )
     snapshots_deleted = (
-        session.query(ProfileSnapshot)
-        .filter(ProfileSnapshot.user_id == user_id)
-        .delete(synchronize_session=False)
+        session.query(ProfileSnapshot).filter(ProfileSnapshot.user_id == user_id).delete(synchronize_session=False)
     )
     return {
         "profile_beliefs": int(beliefs_deleted),

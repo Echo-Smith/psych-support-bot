@@ -140,6 +140,7 @@ def _generate_normal_reply(state: GraphState, risk_level: str, no_question_mode:
                 loop_hint="Prioritize safety, validation, and gentle redirection to support resources.",
                 expected_language=state.get("expected_language", ""),
                 emotional_state=state.get("emotional_state", ""),
+                conversation_intent=state.get("conversation_intent", "new_request"),
                 # Phase 3: 使用切片上下文或 recent_history
                 history=[dict(turn) for turn in (state.get("slice_context") or state.get("recent_history") or [])],
             )
@@ -173,7 +174,9 @@ def _generate_normal_reply(state: GraphState, risk_level: str, no_question_mode:
                 expected_language=state.get("expected_language", ""),
                 no_question_mode=no_question_mode,
                 emotional_state=state.get("emotional_state", ""),
+                conversation_intent=state.get("conversation_intent", "new_request"),
                 on_token=on_token,
+                history=[dict(turn) for turn in (state.get("slice_context") or state.get("recent_history") or [])],
             )
             state["consultation_opinions"] = opinions
         else:
@@ -339,6 +342,7 @@ def _generate_normal_reply(state: GraphState, risk_level: str, no_question_mode:
                 # 生成时就明确告知上一轮已交付过内容，不要复述。
                 "anti_repeat_note": _anti_repeat_note(),
                 "emotional_state": state.get("emotional_state", ""),
+                "conversation_intent": state.get("conversation_intent", "new_request"),
                 # Phase 3: 优先使用切片上下文（更完整的话题边界）
                 "history": [dict(turn) for turn in (state.get("slice_context") or state.get("recent_history") or [])],
             }

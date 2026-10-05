@@ -36,6 +36,7 @@ export function createTtsLive(deps) {
   const utterances = new Map();
 
   const TTS_LIVE = {
+    _roundGen: generation,
     ws: null, failed: false, pending: [], roundStarted: false, ended: false,
     curBytes: [], curChars: 0,
     pendingTexts: [], // 已 say 未播的句子文本，随 sentence_end 出队随音频起播上屏

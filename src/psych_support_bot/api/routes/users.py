@@ -9,7 +9,7 @@ from psych_support_bot.domain.users.schemas import (
     UserProfileResponse,
 )
 from psych_support_bot.domain.users.service import build_profile_summary
-from psych_support_bot.infra.db.models import ProfileBetaConsent, PrivacyConsent, PrivacyDeletionJob, utcnow
+from psych_support_bot.infra.db.models import PrivacyConsent, PrivacyDeletionJob, ProfileBetaConsent, utcnow
 from psych_support_bot.infra.db.repositories import (
     get_user_profile,
     record_usage_event,
@@ -198,15 +198,19 @@ def acknowledge_profile_beta_consent(
     if not payload.acknowledged:
         raise HTTPException(status_code=422, detail="acknowledged must be true")
     if payload.consent_version != consents.PROFILE_BETA_VERSION:
-        raise HTTPException(status_code=409, detail="Profile beta consent version changed; please read and confirm again.")
+        raise HTTPException(
+            status_code=409, detail="Profile beta consent version changed; please read and confirm again."
+        )
     if session.query(PrivacyDeletionJob).filter(PrivacyDeletionJob.user_id == user_id).first():
         raise HTTPException(status_code=403, detail="Account deletion is in progress.")
-    session.merge(ProfileBetaConsent(
-        user_id=user_id,
-        version=payload.consent_version,
-        sensitive_background_enabled=payload.sensitive_background_enabled,
-        accepted_at=utcnow(),
-    ))
+    session.merge(
+        ProfileBetaConsent(
+            user_id=user_id,
+            version=payload.consent_version,
+            sensitive_background_enabled=payload.sensitive_background_enabled,
+            accepted_at=utcnow(),
+        )
+    )
     record_usage_event(
         session,
         user_id,

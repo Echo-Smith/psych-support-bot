@@ -38,6 +38,7 @@ async def lifespan(_: FastAPI):
     # 认证安全检查：AUTH_ENABLED=false 时客户端可声明任意 user_id，
     # 存在跨用户读写风险。生产环境强制开启。
     from psych_support_bot.infra.config.settings import get_settings
+
     _settings = get_settings()
     if not _settings.auth_enabled:
         logger.warning(

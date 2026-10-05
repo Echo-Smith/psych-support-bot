@@ -20,18 +20,15 @@ from uuid import uuid4
 import pytest
 
 from psych_support_bot.infra.db.models import (
-    ProfileBelief,
     ProfileEvolutionJob,
     ProfileSnapshot,
-    UserProfile,
 )
-from psych_support_bot.infra.db.profile_repositories import is_profile_memory_enabled, record_claim
+from psych_support_bot.infra.db.profile_repositories import record_claim
 from psych_support_bot.infra.db.session import SessionLocal
 from psych_support_bot.services.profile_evolution import (
     JOB_LEASE_SECONDS,
     MAX_ATTEMPTS,
     _compile_policy,
-    _FORBIDDEN_LABELS,
     _formulate,
     _load_evidence,
     _persist_snapshot,
@@ -208,12 +205,14 @@ class TestProcessSingleJob:
 
             monkeypatch.setattr(
                 "psych_support_bot.infra.llm.generation.generate_profile_extraction",
-                lambda **kwargs: json.dumps({
-                    "patterns": [{"description": "tends to avoid social situations", "confidence": 0.7}],
-                    "how_to_be_with_them": "gentle",
-                    "open_questions": ["why?"],
-                    "support_policy": {"response_length": "brief"},
-                }),
+                lambda **kwargs: json.dumps(
+                    {
+                        "patterns": [{"description": "tends to avoid social situations", "confidence": 0.7}],
+                        "how_to_be_with_them": "gentle",
+                        "open_questions": ["why?"],
+                        "support_policy": {"response_length": "brief"},
+                    }
+                ),
             )
 
             _process_single_job(session, job)
@@ -322,10 +321,12 @@ class TestValidate:
 
     def test_contradiction_forces_needs_verification(self) -> None:
         evidence = {
-            "beliefs": [{
-                "key": "sleep",
-                "value": json.dumps({"clarification_status": "needs_clarification"}),
-            }]
+            "beliefs": [
+                {
+                    "key": "sleep",
+                    "value": json.dumps({"clarification_status": "needs_clarification"}),
+                }
+            ]
         }
         candidate = {"patterns": [{"description": "trouble sleeping", "confidence": 0.7}]}
         result = _validate(candidate, evidence)
@@ -340,25 +341,33 @@ class TestValidate:
 
     def test_multi_session_allows_without_verification(self) -> None:
         """多会话证据 → 不强制 needs_verification。"""
-        evidence = {"beliefs": [{"key": "sleep", "value": "{}", "origin_session_id": "s-1"},
-                                {"key": "anxiety", "value": "{}", "origin_session_id": "s-2"}],
-                    "distinct_sessions": 2}
+        evidence = {
+            "beliefs": [
+                {"key": "sleep", "value": "{}", "origin_session_id": "s-1"},
+                {"key": "anxiety", "value": "{}", "origin_session_id": "s-2"},
+            ],
+            "distinct_sessions": 2,
+        }
         candidate = {"patterns": [{"description": "tends to isolate", "confidence": 0.8, "evidence_count": 3}]}
         result = _validate(candidate, evidence)
         assert result["patterns"][0].get("needs_verification") is not True
 
     def test_third_party_attribution_filtered(self) -> None:
         """第三方归属的 pattern 被丢弃。"""
-        candidate = {"patterns": [
-            {"description": "his friend causes him anxiety", "confidence": 0.7},
-        ]}
+        candidate = {
+            "patterns": [
+                {"description": "his friend causes him anxiety", "confidence": 0.7},
+            ]
+        }
         result = _validate(candidate)
         assert len(result["patterns"]) == 0
 
     def test_third_party_attribution_chinese(self) -> None:
-        candidate = {"patterns": [
-            {"description": "她的朋友让她很焦虑", "confidence": 0.7},
-        ]}
+        candidate = {
+            "patterns": [
+                {"description": "她的朋友让她很焦虑", "confidence": 0.7},
+            ]
+        }
         result = _validate(candidate)
         assert len(result["patterns"]) == 0
 
@@ -371,15 +380,18 @@ class TestValidate:
 
     def test_valid_pattern_passes(self) -> None:
         evidence = {"beliefs": [{"key": "sleep", "value": "{}"}], "distinct_sessions": 2}
-        candidate = {"patterns": [{"description": "trouble sleeping", "confidence": 0.7, "evidence_keys": ["sleep"], "evidence_count": 3}]}
+        candidate = {
+            "patterns": [
+                {"description": "trouble sleeping", "confidence": 0.7, "evidence_keys": ["sleep"], "evidence_count": 3}
+            ]
+        }
         result = _validate(candidate, evidence)
         assert len(result["patterns"]) == 1
 
     def test_max_three_patterns(self) -> None:
-        candidate = {"patterns": [
-            {"description": f"pattern-{i}", "confidence": 0.5, "evidence_count": 3}
-            for i in range(5)
-        ]}
+        candidate = {
+            "patterns": [{"description": f"pattern-{i}", "confidence": 0.5, "evidence_count": 3} for i in range(5)]
+        }
         result = _validate(candidate)
         assert len(result["patterns"]) == 3
 
@@ -394,20 +406,24 @@ class TestCompilePolicy:
         assert policy["pacing"] == "validate_before_suggestions"
 
     def test_controls_valid_enums(self) -> None:
-        candidate = {"support_policy": {
-            "response_length": "brief",
-            "pacing": "slow",
-            "preferred_knowledge_paths": ["cbt", "mi"],
-        }}
+        candidate = {
+            "support_policy": {
+                "response_length": "brief",
+                "pacing": "slow",
+                "preferred_knowledge_paths": ["cbt", "mi"],
+            }
+        }
         policy = _compile_policy(candidate)
         assert policy["response_length"] == "brief"
         assert policy["preferred_knowledge_paths"] == ["cbt", "mi"]
 
     def test_rejects_invalid_enums(self) -> None:
-        candidate = {"support_policy": {
-            "response_length": "verbose",  # 不合法
-            "preferred_knowledge_paths": ["cbt", "invalid_path"],
-        }}
+        candidate = {
+            "support_policy": {
+                "response_length": "verbose",  # 不合法
+                "preferred_knowledge_paths": ["cbt", "invalid_path"],
+            }
+        }
         policy = _compile_policy(candidate)
         assert policy["response_length"] == "normal"  # 回退默认
         assert policy["preferred_knowledge_paths"] == ["cbt"]
@@ -475,7 +491,9 @@ class TestShadowLifecycle:
 
             monkeypatch.setattr(
                 "psych_support_bot.infra.llm.generation.generate_profile_extraction",
-                lambda **kwargs: '{"patterns": [], "how_to_be_with_them": "", "open_questions": [], "support_policy": {}}',
+                lambda **kwargs: (
+                    '{"patterns": [], "how_to_be_with_them": "", "open_questions": [], "support_policy": {}}'
+                ),
             )
             _process_single_job(session, job)
 
@@ -495,7 +513,9 @@ class TestShadowLifecycle:
 
             monkeypatch.setattr(
                 "psych_support_bot.infra.llm.generation.generate_profile_extraction",
-                lambda **kwargs: '{"patterns": [], "how_to_be_with_them": "", "open_questions": [], "support_policy": {}}',
+                lambda **kwargs: (
+                    '{"patterns": [], "how_to_be_with_them": "", "open_questions": [], "support_policy": {}}'
+                ),
             )
             _process_single_job(session, job)
 
@@ -514,7 +534,9 @@ class TestShadowLifecycle:
 
             monkeypatch.setattr(
                 "psych_support_bot.infra.llm.generation.generate_profile_extraction",
-                lambda **kwargs: '{"patterns": [], "how_to_be_with_them": "", "open_questions": [], "support_policy": {}}',
+                lambda **kwargs: (
+                    '{"patterns": [], "how_to_be_with_them": "", "open_questions": [], "support_policy": {}}'
+                ),
             )
             _process_single_job(session, job)
 
@@ -538,7 +560,9 @@ class TestFormulate:
         uid = _uid()
         monkeypatch.setattr(
             "psych_support_bot.infra.llm.generation.generate_profile_extraction",
-            lambda **kwargs: '{"patterns": [], "how_to_be_with_them": "gentle", "open_questions": [], "support_policy": {}}',
+            lambda **kwargs: (
+                '{"patterns": [], "how_to_be_with_them": "gentle", "open_questions": [], "support_policy": {}}'
+            ),
         )
         with SessionLocal() as session:
             result = _formulate(session, uid, {"beliefs": [], "background": {}, "user_id": uid})
@@ -548,7 +572,9 @@ class TestFormulate:
         uid = _uid()
         monkeypatch.setattr(
             "psych_support_bot.infra.llm.generation.generate_profile_extraction",
-            lambda **kwargs: '```json\n{"patterns": [], "how_to_be_with_them": "", "open_questions": [], "support_policy": {}}\n```',
+            lambda **kwargs: (
+                '```json\n{"patterns": [], "how_to_be_with_them": "", "open_questions": [], "support_policy": {}}\n```'
+            ),
         )
         with SessionLocal() as session:
             result = _formulate(session, uid, {"beliefs": [], "background": {}, "user_id": uid})

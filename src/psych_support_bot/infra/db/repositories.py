@@ -194,7 +194,7 @@ def get_recent_user_messages(session: Session, user_id: str, limit: int = 10) ->
     rows = (
         session.query(Message.content)  # type: ignore[attr-defined]
         .filter(Message.session_id.in_(session_ids), Message.role == "user")  # 绑定参数，非字符串拼接
-        .order_by(desc(Message.created_at))
+        .order_by(desc(Message.created_at), desc(Message.id))
         .limit(limit)
         .all()
     )
@@ -596,32 +596,59 @@ def checkin_to_d2_beliefs(session: Session, user_id: str) -> None:
         # 心情持续低落（≤4 连续 3 天）
         if all(r.mood_score <= 4 for r in last3):
             claim = d2_assessment_claim(
-                "checkin_mood", "moderate", score=int(sum(r.mood_score for r in last3) / 3),
+                "checkin_mood",
+                "moderate",
+                score=int(sum(r.mood_score for r in last3) / 3),
             )
             if claim:
-                record_claim(session, user_id, dimension=claim.dimension, key=claim.key,
-                             claim_text=claim.claim_text, value=claim.value,
-                             relation=claim.relation, confidence=claim.confidence)
+                record_claim(
+                    session,
+                    user_id,
+                    dimension=claim.dimension,
+                    key=claim.key,
+                    claim_text=claim.claim_text,
+                    value=claim.value,
+                    relation=claim.relation,
+                    confidence=claim.confidence,
+                )
 
         # 焦虑持续偏高（≥7 连续 3 天）
         if all(r.anxiety_score >= 7 for r in last3):
             claim = d2_assessment_claim(
-                "checkin_anxiety", "moderate", score=int(sum(r.anxiety_score for r in last3) / 3),
+                "checkin_anxiety",
+                "moderate",
+                score=int(sum(r.anxiety_score for r in last3) / 3),
             )
             if claim:
-                record_claim(session, user_id, dimension=claim.dimension, key=claim.key,
-                             claim_text=claim.claim_text, value=claim.value,
-                             relation=claim.relation, confidence=claim.confidence)
+                record_claim(
+                    session,
+                    user_id,
+                    dimension=claim.dimension,
+                    key=claim.key,
+                    claim_text=claim.claim_text,
+                    value=claim.value,
+                    relation=claim.relation,
+                    confidence=claim.confidence,
+                )
 
         # 睡眠持续不足（≤5h 连续 3 天）
         if all(r.sleep_hours <= 5 for r in last3):
             claim = d2_assessment_claim(
-                "checkin_sleep", "moderate", score=int(sum(r.sleep_hours for r in last3) / 3),
+                "checkin_sleep",
+                "moderate",
+                score=int(sum(r.sleep_hours for r in last3) / 3),
             )
             if claim:
-                record_claim(session, user_id, dimension=claim.dimension, key=claim.key,
-                             claim_text=claim.claim_text, value=claim.value,
-                             relation=claim.relation, confidence=claim.confidence)
+                record_claim(
+                    session,
+                    user_id,
+                    dimension=claim.dimension,
+                    key=claim.key,
+                    claim_text=claim.claim_text,
+                    value=claim.value,
+                    relation=claim.relation,
+                    confidence=claim.confidence,
+                )
     except Exception:  # noqa: BLE001 — checkin extraction must not block checkin save
         pass
 

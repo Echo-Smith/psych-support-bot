@@ -29,8 +29,9 @@ seal: `sha256:24cbfd98bc885d7a691e3d2ec8400873ed2fa4e8ca84b2b2b43e1ab4e0cb54d0`�
 
 ## 遗留
 
-- 依赖 advisory：扫描命中 7 包 / 24 条离线通告，产物无逐包明细，待有网
-  环境对 `uv.lock` 逐条核对（低优先）。
+- 依赖 advisory：已于 2026-10-05 完成 OSV 在线核对及修复。旧锁文件 97 包中
+  14 包命中；更新后 98 包已知命中为 0。逐包版本、查询证据与验证边界见
+  [依赖核对记录](DEPENDENCY_AUDIT_2026-10-05.md)。
 - 测试顺序耦合教训：monkeypatch service **实例**属性会在 teardown 把类方法
   固化为实例属性，遮蔽后续测试的类级补丁——服务 mock 一律打类
   （见 test_conversation_ownership.py 注释）。

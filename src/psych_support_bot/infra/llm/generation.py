@@ -272,6 +272,8 @@ def _generate_consultation_opinion(
     question_strategy: str,
     challenge_allowed: bool,
     loop_hint: str,
+    conversation_intent: str = "new_request",
+    history: list[dict[str, str]] | None = None,
 ) -> dict[str, str]:
     system_prompt = build_consultation_agent_prompt(
         agent_label=agent["label"],
@@ -286,6 +288,7 @@ def _generate_consultation_opinion(
         question_strategy=question_strategy,
         challenge_allowed=challenge_allowed,
         loop_hint=loop_hint,
+        conversation_intent=conversation_intent,
     )
     fallback_note = (
         f"（{agent['label']}视角暂时不可用。）"
@@ -298,6 +301,7 @@ def _generate_consultation_opinion(
         expected_language,
         mode=mode,
         fallback=lambda: fallback_note,
+        history=history,
     )
     return {
         "agent": agent["label"],
@@ -323,6 +327,8 @@ def generate_multidisciplinary_consultation(
     no_question_mode: bool = False,
     emotional_state: str = "",
     on_token: Callable[[str], None] | None = None,
+    conversation_intent: str = "new_request",
+    history: list[dict[str, str]] | None = None,
 ) -> tuple[str, list[dict[str, str]]]:
     if not expected_language:
         expected_language = _expected_language(user_message)
@@ -351,6 +357,8 @@ def generate_multidisciplinary_consultation(
                     question_strategy=question_strategy,
                     challenge_allowed=challenge_allowed,
                     loop_hint=loop_hint,
+                    conversation_intent=conversation_intent,
+                    history=history,
                 ),
             )
             for agent in agents
@@ -377,6 +385,7 @@ def generate_multidisciplinary_consultation(
         expected_language=expected_language,
         no_question_mode=no_question_mode,
         emotional_state=emotional_state,
+        conversation_intent=conversation_intent,
     )
 
     # Synthesis failure degrades to the raw opinions instead of crashing the
@@ -400,6 +409,7 @@ def generate_multidisciplinary_consultation(
                 expected_language,
                 mode=mode,
                 fallback=_synthesis_fallback,
+                history=history,
             ):
                 pieces.append(chunk)
                 on_token(chunk)
@@ -412,6 +422,7 @@ def generate_multidisciplinary_consultation(
         expected_language,
         mode=mode,
         fallback=_synthesis_fallback,
+        history=history,
     )
     return reply_text, opinions
 
@@ -423,14 +434,15 @@ def _stream_invoke(
     *,
     mode: str = "support",
     fallback: Callable[[], str] | None = None,
+    history: list[dict[str, str]] | None = None,
 ) -> Iterator[str]:
     """_invoke 的流式孪生：model.stream 产出文本增量。
 
-    复用 _invoke 的消息组装语义（System + Human 直投，无近史场景）；
+    复用 _invoke 的消息组装语义（System + 逐字近史 + 本轮 Human）；
     任何瞬时错误直接抛出由调用方回退整段合成。
     """
     model = build_chat_model(temperature=get_temperature_for_mode(mode), mode=mode)
-    messages = [SystemMessage(content=system_prompt), HumanMessage(content=user_message)]
+    messages = [SystemMessage(content=system_prompt), *_history_messages(history), HumanMessage(content=user_message)]
     with trace_span(
         "llm.stream",
         input={"system_prompt": system_prompt[:300], "user_message": user_message[:300]},
@@ -531,6 +543,7 @@ def generate_clinically_bounded_reply(
     anti_repeat_note: str = "",
     emotional_state: str = "",
     history: list[dict[str, str]] | None = None,
+    conversation_intent: str = "new_request",
 ) -> str:
     system_prompt, user_context, expected_language = _build_reply_prompt(
         user_message,
@@ -572,6 +585,7 @@ async def generate_clinically_bounded_reply_stream(
     anti_repeat_note: str = "",
     emotional_state: str = "",
     history: list[dict[str, str]] | None = None,
+    conversation_intent: str = "new_request",
 ):
     """主回复的异步流式版本：产出文本增量（str chunks）。
 
@@ -627,6 +641,7 @@ def generate_clinically_bounded_reply_stream_sync(
     anti_repeat_note: str = "",
     emotional_state: str = "",
     history: list[dict[str, str]] | None = None,
+    conversation_intent: str = "new_request",
 ) -> Iterator[str]:
     """主回复的同步流式版本（供同步 LangGraph 节点经 get_stream_writer 推块）。
 

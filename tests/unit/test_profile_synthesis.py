@@ -11,8 +11,6 @@ from __future__ import annotations
 import json
 from uuid import uuid4
 
-import pytest
-
 from psych_support_bot.ai.profile.synthesis import (
     _format_beliefs_for_k3,
     _format_checkin_trend,
@@ -20,7 +18,7 @@ from psych_support_bot.ai.profile.synthesis import (
     render_understanding,
     run_k3_synthesis,
 )
-from psych_support_bot.infra.db.models import ProfileBelief, SliceSummary, UserProfile
+from psych_support_bot.infra.db.models import ProfileBelief, SliceSummary
 from psych_support_bot.infra.db.profile_repositories import record_claim
 from psych_support_bot.infra.db.repositories import get_user_profile, upsert_user_profile
 from psych_support_bot.infra.db.session import SessionLocal
@@ -32,9 +30,13 @@ def _uid() -> str:
 
 def _ensure_profile(session, user_id: str) -> None:
     upsert_user_profile(
-        session, user_id,
-        display_name="test", primary_concerns="", goals="",
-        support_preferences="", risk_notes="",
+        session,
+        user_id,
+        display_name="test",
+        primary_concerns="",
+        goals="",
+        support_preferences="",
+        risk_notes="",
     )
 
 
@@ -43,9 +45,12 @@ def _seed_beliefs(session, user_id: str, count: int = 3, *, session_id: str = "s
     keys = ["sleep", "anxiety", "rumination", "social_anxiety", "panic"]
     for i in range(count):
         record_claim(
-            session, user_id,
-            dimension="D1", key=keys[i % len(keys)],
-            claim_text=f"claim-{i}", confidence=0.6 + i * 0.05,
+            session,
+            user_id,
+            dimension="D1",
+            key=keys[i % len(keys)],
+            claim_text=f"claim-{i}",
+            confidence=0.6 + i * 0.05,
             session_id=session_id,
         )
 
@@ -69,11 +74,13 @@ class TestFormatBeliefs:
 
 class TestFormatSliceSummaries:
     def test_formats_summaries(self) -> None:
-        from datetime import datetime, UTC
+        from datetime import UTC, datetime
 
         s = SliceSummary(
-            slice_id="sl-1", user_id="u1",
-            summary_text="讨论了焦虑", created_at=datetime(2025, 1, 1, tzinfo=UTC),
+            slice_id="sl-1",
+            user_id="u1",
+            summary_text="讨论了焦虑",
+            created_at=datetime(2025, 1, 1, tzinfo=UTC),
         )
         result = _format_slice_summaries([s])
         assert "讨论了焦虑" in result
@@ -121,12 +128,14 @@ class TestRunK3Synthesis:
 
     def test_writes_understanding_json(self, monkeypatch) -> None:
         uid = _uid()
-        canned = json.dumps({
-            "patterns": [{"description": "tends to avoid conflict", "confidence": 0.7}],
-            "how_to_be_with_them": "gentle and patient",
-            "open_questions": ["why conflict?"],
-            "what_works": ["validation"],
-        })
+        canned = json.dumps(
+            {
+                "patterns": [{"description": "tends to avoid conflict", "confidence": 0.7}],
+                "how_to_be_with_them": "gentle and patient",
+                "open_questions": ["why conflict?"],
+                "what_works": ["validation"],
+            }
+        )
         monkeypatch.setattr(
             "psych_support_bot.infra.llm.generation.generate_profile_extraction",
             lambda **kwargs: canned,
@@ -147,7 +156,9 @@ class TestRunK3Synthesis:
         uid = _uid()
         monkeypatch.setattr(
             "psych_support_bot.infra.llm.generation.generate_profile_extraction",
-            lambda **kwargs: '```json\n{"patterns": [], "how_to_be_with_them": "", "open_questions": [], "what_works": []}\n```',
+            lambda **kwargs: (
+                '```json\n{"patterns": [], "how_to_be_with_them": "", "open_questions": [], "what_works": []}\n```'
+            ),
         )
         with SessionLocal() as session:
             _seed_beliefs(session, uid)
@@ -185,18 +196,22 @@ class TestRunK3Synthesis:
 
     def test_updates_existing_understanding(self, monkeypatch) -> None:
         uid = _uid()
-        first = json.dumps({
-            "patterns": [{"description": "old pattern", "confidence": 0.5}],
-            "how_to_be_with_them": "old style",
-            "open_questions": [],
-            "what_works": [],
-        })
-        second = json.dumps({
-            "patterns": [{"description": "new pattern", "confidence": 0.8}],
-            "how_to_be_with_them": "new style",
-            "open_questions": [],
-            "what_works": [],
-        })
+        first = json.dumps(
+            {
+                "patterns": [{"description": "old pattern", "confidence": 0.5}],
+                "how_to_be_with_them": "old style",
+                "open_questions": [],
+                "what_works": [],
+            }
+        )
+        second = json.dumps(
+            {
+                "patterns": [{"description": "new pattern", "confidence": 0.8}],
+                "how_to_be_with_them": "new style",
+                "open_questions": [],
+                "what_works": [],
+            }
+        )
         calls = []
         monkeypatch.setattr(
             "psych_support_bot.infra.llm.generation.generate_profile_extraction",
@@ -227,14 +242,16 @@ class TestRenderUnderstanding:
         with SessionLocal() as session:
             _ensure_profile(session, uid)
             profile = get_user_profile(session, uid)
-            profile.understanding_json = json.dumps({
-                "patterns": [
-                    {"description": "tends to ruminate at night"},
-                    {"description": "avoids confrontation"},
-                ],
-                "how_to_be_with_them": "gentle",
-                "open_questions": ["why at night?"],
-            })
+            profile.understanding_json = json.dumps(
+                {
+                    "patterns": [
+                        {"description": "tends to ruminate at night"},
+                        {"description": "avoids confrontation"},
+                    ],
+                    "how_to_be_with_them": "gentle",
+                    "open_questions": ["why at night?"],
+                }
+            )
             session.commit()
 
             result = render_understanding(session, uid)
@@ -247,14 +264,13 @@ class TestRenderUnderstanding:
         with SessionLocal() as session:
             _ensure_profile(session, uid)
             profile = get_user_profile(session, uid)
-            profile.understanding_json = json.dumps({
-                "patterns": [
-                    {"description": f"pattern-{i}"}
-                    for i in range(5)
-                ],
-                "how_to_be_with_them": "",
-                "open_questions": [],
-            })
+            profile.understanding_json = json.dumps(
+                {
+                    "patterns": [{"description": f"pattern-{i}"} for i in range(5)],
+                    "how_to_be_with_them": "",
+                    "open_questions": [],
+                }
+            )
             session.commit()
 
             result = render_understanding(session, uid)

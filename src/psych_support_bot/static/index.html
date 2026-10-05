@@ -3051,7 +3051,7 @@
         <div class="profile-memory-setting">
           <div>
             <div class="setting-title">个性化记忆</div>
-            <div class="setting-desc" id="profileMemoryStatus">系统会记住你主动分享的背景和偏好，并从对话中形成内部个性化理解来调整回复方式。不会作为诊断或人格结论展示。</div>
+            <div class="setting-desc" id="profileMemoryStatus">系统会记住你主动分享的背景和偏好，并从对话中形成内部个性化理解来调整回复方式。不会作为诊断或人格结论展示。关闭只暂停采集与使用，不会自动删除已有记忆。</div>
           </div>
           <button class="profile-memory-switch" id="profileMemoryToggle" type="button" role="switch"
             aria-label="个性化记忆" aria-checked="true" onclick="toggleProfileMemory()"></button>
@@ -3485,8 +3485,8 @@
         toggle.title = memory.enabled ? '关闭记忆' : '开启记忆';
         clearBtn.disabled = !memory.has_data;
         status.textContent = memory.enabled
-          ? '已开启：系统会记住你主动分享的背景和偏好，并从对话中形成内部个性化理解来调整回复方式。不会作为诊断或人格结论展示。'
-          : '已暂停：不会新增或使用记忆；当轮安全识别和已保存记录不受影响。';
+          ? '已开启：系统会记住你主动分享的背景和偏好，并从对话中形成内部个性化理解来调整回复方式。不会作为诊断或人格结论展示。关闭只暂停采集与使用，不会自动删除已有记忆。'
+          : '已暂停：不会新增或使用记忆；已有记忆仍保留，可点击“关闭并清除已有记忆”删除。当轮安全识别和已保存记录不受影响。';
         if (!memory.enabled) {
           wrap.innerHTML = '<div class="profile-card"><h3>记忆已暂停</h3><span class="profile-chip">不会从新对话继续记录</span></div>';
           return;

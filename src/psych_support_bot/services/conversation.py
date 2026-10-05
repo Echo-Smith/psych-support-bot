@@ -341,6 +341,7 @@ class ConversationService:
             "user_id": payload.user_id,
             "session_id": session_id,
             "user_message": payload.message,
+            "conversation_intent": "new_request",
             "memory_summary": memory_summary,
             "user_history_text": user_history_text,
             "recent_risk_level": recent_risk_level,

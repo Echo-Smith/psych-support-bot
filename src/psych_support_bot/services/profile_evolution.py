@@ -230,6 +230,7 @@ def _process_single_job(session: Session, job: ProfileEvolutionJob) -> None:
 
 # ── Node 1: load_evidence ────────────────────────────────────────────
 
+
 def _load_evidence(session: Session, user_id: str) -> dict:
     """读取用户的活跃信念、背景、最近切片摘要作为综合输入。"""
     beliefs = (
@@ -241,14 +242,16 @@ def _load_evidence(session: Session, user_id: str) -> dict:
     )
     belief_data = []
     for b in beliefs:
-        belief_data.append({
-            "dimension": b.dimension,
-            "key": b.key,
-            "claim_text": b.claim_text,
-            "confidence": b.confidence,
-            "layer": b.layer,
-            "value": b.value_json,
-        })
+        belief_data.append(
+            {
+                "dimension": b.dimension,
+                "key": b.key,
+                "claim_text": b.claim_text,
+                "confidence": b.confidence,
+                "layer": b.layer,
+                "value": b.value_json,
+            }
+        )
 
     profile = session.get(UserProfile, user_id)
     background = {}
@@ -273,6 +276,7 @@ def _load_evidence(session: Session, user_id: str) -> dict:
 
 
 # ── Node 2: formulate (LLM) ─────────────────────────────────────────
+
 
 def _formulate(session: Session, user_id: str, evidence: dict) -> dict:
     """一次 LLM 调用生成候选理解。"""
@@ -323,25 +327,60 @@ def _formulate(session: Session, user_id: str, evidence: dict) -> dict:
 
 _FORBIDDEN_LABELS = (
     # English
-    "personality disorder", "narcissist", "borderline", "avoidant",
-    "attachment style", "anxious attachment", "secure attachment",
-    "disorder", "diagnosis", "pathological",
+    "personality disorder",
+    "narcissist",
+    "borderline",
+    "avoidant",
+    "attachment style",
+    "anxious attachment",
+    "secure attachment",
+    "disorder",
+    "diagnosis",
+    "pathological",
     # Chinese equivalents
-    "人格障碍", "自恋", "边缘", "回避型", "依恋风格", "焦虑型依恋",
-    "安全型依恋", "障碍", "诊断", "病态",
+    "人格障碍",
+    "自恋",
+    "边缘",
+    "回避型",
+    "依恋风格",
+    "焦虑型依恋",
+    "安全型依恋",
+    "障碍",
+    "诊断",
+    "病态",
 )
 
 # 第三方归属关键词：pattern 描述中出现这些词说明可能把他人事实归到了用户身上。
 _THIRD_PARTY_MARKERS = (
-    "his friend", "her friend", "their friend",
-    "his partner", "her partner", "their partner",
-    "his family", "her family", "their family",
-    "his colleague", "her colleague", "their colleague",
-    "他的朋友", "她的朋友", "他们的朋友",
-    "他的家人", "她的家人", "他们的家人",
-    "他的同事", "她的同事", "他们的同事",
-    "his mother", "his father", "her mother", "her father",
-    "他的妈妈", "他的爸爸", "她的妈妈", "她的爸爸",
+    "his friend",
+    "her friend",
+    "their friend",
+    "his partner",
+    "her partner",
+    "their partner",
+    "his family",
+    "her family",
+    "their family",
+    "his colleague",
+    "her colleague",
+    "their colleague",
+    "他的朋友",
+    "她的朋友",
+    "他们的朋友",
+    "他的家人",
+    "她的家人",
+    "他们的家人",
+    "他的同事",
+    "她的同事",
+    "他们的同事",
+    "his mother",
+    "his father",
+    "her mother",
+    "her father",
+    "他的妈妈",
+    "他的爸爸",
+    "她的妈妈",
+    "她的爸爸",
 )
 
 
@@ -435,6 +474,7 @@ def _compile_policy(candidate: dict) -> dict:
 
 # ── Node 5: persist_snapshot ─────────────────────────────────────────
 
+
 def _persist_snapshot(
     session: Session,
     user_id: str,
@@ -480,6 +520,7 @@ def _persist_snapshot(
 
 
 # ── Worker ───────────────────────────────────────────────────────────
+
 
 async def profile_evolution_worker(stop: asyncio.Event) -> None:
     """应用内持久后台 Worker：轮询 pending 任务并处理。"""

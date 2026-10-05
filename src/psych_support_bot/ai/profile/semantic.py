@@ -61,7 +61,7 @@ ALLOWED_KEYS: dict[str, frozenset[str]] = {
 _SYSTEM_PROMPT = (
     "You are the profile-extraction module of a psych-support bot: a quiet, "
     "cautious observer maintaining a belief stream about the user. Output "
-    'STRICT JSON only, no prose, no code fences:\n'
+    "STRICT JSON only, no prose, no code fences:\n"
     '{"claims": [{"dimension": "D1"|"D2"|"D3"|"D5"|"D6"|"D7", "key": '
     '"<from the allowed list>", "claim_zh": '
     '"<one clinical-neutral observation sentence in Chinese>", "confidence": '

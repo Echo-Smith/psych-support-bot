@@ -106,12 +106,12 @@ def belief_activity(belief, *, now: datetime | None = None, half_life_days: floa
 # 每个维度最多渲染条目数（多样性防止单维度占满槽位）。
 _MAX_PER_DIMENSION = 3
 
-_SCORE_TOPIC_HIT = 5.0       # D1 key 命中当前消息主题
-_SCORE_RISK_D7_BOOST = 4.0   # 风险升高时 D7 保护因素加权
-_SCORE_LAYER_CONFIRMED = 3.0 # L1/L2 用户确认的信念
-_SCORE_ACTIVITY_WEIGHT = 2.0 # 活性分数权重（置信度×衰减×确认强度）
+_SCORE_TOPIC_HIT = 5.0  # D1 key 命中当前消息主题
+_SCORE_RISK_D7_BOOST = 4.0  # 风险升高时 D7 保护因素加权
+_SCORE_LAYER_CONFIRMED = 3.0  # L1/L2 用户确认的信念
+_SCORE_ACTIVITY_WEIGHT = 2.0  # 活性分数权重（置信度×衰减×确认强度）
 _SCORE_EVIDENCE_BONUS = 1.0  # 多证据支持（evidence_count >= 3）
-_SCORE_FRESHNESS = 1.0       # 最近一轮有新证据
+_SCORE_FRESHNESS = 1.0  # 最近一轮有新证据
 
 
 def score_belief(
