@@ -1,7 +1,7 @@
 import contextvars
 import logging
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from concurrent.futures import ThreadPoolExecutor
 from functools import partial
 
@@ -323,6 +323,7 @@ def generate_multidisciplinary_consultation(
     expected_language: str = "",
     no_question_mode: bool = False,
     emotional_state: str = "",
+    on_token: Callable[[str], None] | None = None,
 ) -> tuple[str, list[dict[str, str]]]:
     if not expected_language:
         expected_language = _expected_language(user_message)
@@ -389,6 +390,23 @@ def generate_multidisciplinary_consultation(
             else f"Synthesis of consultation opinions ({mode} mode, risk {risk_level}):\n\n{opinions_text}"
         )
 
+    # 流式综合：on_token 回调存在时 synthesis 走 model.stream 逐块产出（LLM→TTS
+    # 句子级流式）；失败/无回调退回整段 _invoke。agent fan-out 本身不流式。
+    if on_token is not None:
+        try:
+            pieces: list[str] = []
+            for chunk in _stream_invoke(
+                synthesis_prompt,
+                user_message,
+                expected_language,
+                mode=mode,
+                fallback=_synthesis_fallback,
+            ):
+                pieces.append(chunk)
+                on_token(chunk)
+            return "".join(pieces), opinions
+        except Exception:
+            logger.exception("Streaming synthesis failed; falling back to blocking synthesis.")
     reply_text = _invoke(
         synthesis_prompt,
         user_message,
@@ -399,27 +417,54 @@ def generate_multidisciplinary_consultation(
     return reply_text, opinions
 
 
-def generate_clinically_bounded_reply(
+def _stream_invoke(
+    system_prompt: str,
+    user_message: str,
+    expected_language: str,
+    *,
+    mode: str = "support",
+    fallback: Callable[[], str] | None = None,
+) -> Iterator[str]:
+    """_invoke 的流式孪生：model.stream 产出文本增量。
+
+    复用 _invoke 的消息组装语义（System + Human 直投，无近史场景）；
+    任何瞬时错误直接抛出由调用方回退整段合成。
+    """
+    model = build_chat_model(temperature=get_temperature_for_mode(mode), mode=mode)
+    messages = [SystemMessage(content=system_prompt), HumanMessage(content=user_message)]
+    with trace_span(
+        "llm.stream",
+        input={"system_prompt": system_prompt[:300], "user_message": user_message[:300]},
+        as_type="generation",
+    ) as gen_obs:
+        collected: list[str] = []
+        for chunk in model.stream(messages):
+            text = _coerce_content(chunk.content)
+            if text:
+                collected.append(text)
+                yield text
+        update_span_output(gen_obs, "".join(collected)[:300])
+
+
+def _build_reply_prompt(
     user_message: str,
     mode: str,
     risk_level: str,
     memory_summary: str,
     knowledge_context: str,
-    # consultation_* 仅为签名兼容保留：普通/危机路径恒为 False，真正的多
-    # 学科会诊走 generate_multidisciplinary_consultation（旧装配，Phase 5 迁移）。
-    consultation_required: bool = False,
-    consultation_agents: list[str] | None = None,
-    consultation_framework: str = "",
-    interview_stage: str = "engagement",
-    question_strategy: str = "open",
-    challenge_allowed: bool = False,
-    loop_hint: str = "Start broad, then narrow.",
-    expected_language: str = "",
-    no_question_mode: bool = False,
-    anti_repeat_note: str = "",
-    emotional_state: str = "",
-    history: list[dict[str, str]] | None = None,
-) -> str:
+    interview_stage: str,
+    question_strategy: str,
+    challenge_allowed: bool,
+    loop_hint: str,
+    expected_language: str,
+    no_question_mode: bool,
+    anti_repeat_note: str,
+    emotional_state: str,
+) -> tuple[str, str, str]:
+    """主回复的 prompt 装配（同步与流式路径共用，逐字一致防行为漂移）。
+
+    返回 (system_prompt, user_context, expected_language)。
+    """
     if not expected_language:
         expected_language = _expected_language(user_message)
     # Prompt 分层装配（Phase 1/5）：静态前缀与主回复、会诊 agent、会诊综合
@@ -462,6 +507,52 @@ def generate_clinically_bounded_reply(
     # Inject diagnosis refusal prompt if user is asking for a diagnosis
     if _is_diagnosis_request(user_message):
         system_prompt = system_prompt + "\n\n" + build_diagnosis_refusal_prompt()
+    return system_prompt, user_context, expected_language
+
+
+def _build_reply_messages(
+    system_prompt: str, user_message: str, user_context: str, history: list[dict[str, str]] | None
+) -> list:
+    human_content = f"{user_context}\n\n{user_message}" if user_context else user_message
+    return [SystemMessage(content=system_prompt), *_history_messages(history), HumanMessage(content=human_content)]
+
+
+def generate_clinically_bounded_reply(
+    user_message: str,
+    mode: str,
+    risk_level: str,
+    memory_summary: str,
+    knowledge_context: str,
+    # consultation_* 仅为签名兼容保留：普通/危机路径恒为 False，真正的多
+    # 学科会诊走 generate_multidisciplinary_consultation（旧装配，Phase 5 迁移）。
+    consultation_required: bool = False,
+    consultation_agents: list[str] | None = None,
+    consultation_framework: str = "",
+    interview_stage: str = "engagement",
+    question_strategy: str = "open",
+    challenge_allowed: bool = False,
+    loop_hint: str = "Start broad, then narrow.",
+    expected_language: str = "",
+    no_question_mode: bool = False,
+    anti_repeat_note: str = "",
+    emotional_state: str = "",
+    history: list[dict[str, str]] | None = None,
+) -> str:
+    system_prompt, user_context, expected_language = _build_reply_prompt(
+        user_message,
+        mode,
+        risk_level,
+        memory_summary,
+        knowledge_context,
+        interview_stage,
+        question_strategy,
+        challenge_allowed,
+        loop_hint,
+        expected_language,
+        no_question_mode,
+        anti_repeat_note,
+        emotional_state,
+    )
     return _invoke(
         system_prompt,
         user_message,
@@ -470,6 +561,115 @@ def generate_clinically_bounded_reply(
         user_context=user_context,
         history=history,
     )
+
+
+async def generate_clinically_bounded_reply_stream(
+    user_message: str,
+    mode: str,
+    risk_level: str,
+    memory_summary: str,
+    knowledge_context: str,
+    interview_stage: str = "engagement",
+    question_strategy: str = "open",
+    challenge_allowed: bool = False,
+    loop_hint: str = "Start broad, then narrow.",
+    expected_language: str = "",
+    no_question_mode: bool = False,
+    anti_repeat_note: str = "",
+    emotional_state: str = "",
+    history: list[dict[str, str]] | None = None,
+):
+    """主回复的异步流式版本：产出文本增量（str chunks）。
+
+    与同步路径共用 _build_reply_prompt（prompt 逐字一致，缓存命中池相同）。
+    语言强制与完整 safety_reviewer 由调用方在全文收齐后施加（句子级流式 +
+    全文事后审）；瞬时错误直接抛出，由调用方回退到非流式 /respond。
+    """
+    system_prompt, user_context, expected_language = _build_reply_prompt(
+        user_message,
+        mode,
+        risk_level,
+        memory_summary,
+        knowledge_context,
+        interview_stage,
+        question_strategy,
+        challenge_allowed,
+        loop_hint,
+        expected_language,
+        no_question_mode,
+        anti_repeat_note,
+        emotional_state,
+    )
+    model = build_chat_model(temperature=get_temperature_for_mode(mode), mode=mode)
+    messages = _build_reply_messages(system_prompt, user_message, user_context, history)
+    settings = get_settings()
+    with trace_span(
+        "llm.astream",
+        input={"system_prompt": system_prompt, "user_message": user_message},
+        metadata={"model": settings.openai_model, "language": expected_language},
+        as_type="generation",
+    ) as gen_obs:
+        collected: list[str] = []
+        async for chunk in model.astream(messages):
+            text = _coerce_content(chunk.content)
+            if text:
+                collected.append(text)
+                yield text
+        update_span_output(gen_obs, "".join(collected)[:300])
+
+
+def generate_clinically_bounded_reply_stream_sync(
+    user_message: str,
+    mode: str,
+    risk_level: str,
+    memory_summary: str,
+    knowledge_context: str,
+    interview_stage: str = "engagement",
+    question_strategy: str = "open",
+    challenge_allowed: bool = False,
+    loop_hint: str = "Start broad, then narrow.",
+    expected_language: str = "",
+    no_question_mode: bool = False,
+    anti_repeat_note: str = "",
+    emotional_state: str = "",
+    history: list[dict[str, str]] | None = None,
+) -> Iterator[str]:
+    """主回复的同步流式版本（供同步 LangGraph 节点经 get_stream_writer 推块）。
+
+    与 async 孪生共用 _build_reply_prompt；用 model.stream() 同步产出文本增量。
+    语言强制/完整 safety_reviewer 由调用方在全文收齐后施加。
+    """
+    system_prompt, user_context, expected_language = _build_reply_prompt(
+        user_message,
+        mode,
+        risk_level,
+        memory_summary,
+        knowledge_context,
+        interview_stage,
+        question_strategy,
+        challenge_allowed,
+        loop_hint,
+        expected_language,
+        no_question_mode,
+        anti_repeat_note,
+        emotional_state,
+    )
+    model = build_chat_model(temperature=get_temperature_for_mode(mode), mode=mode)
+    messages = _build_reply_messages(system_prompt, user_message, user_context, history)
+    settings = get_settings()
+    with trace_span(
+        "llm.stream",
+        input={"system_prompt": system_prompt, "user_message": user_message},
+        metadata={"model": settings.openai_model, "language": expected_language},
+        as_type="generation",
+    ) as gen_obs:
+        collected: list[str] = []
+        for chunk in model.stream(messages):
+            text = _coerce_content(chunk.content)
+            if text:
+                collected.append(text)
+                yield text
+        update_span_output(gen_obs, "".join(collected)[:300])
 
 
 def generate_assessment_history_analysis(

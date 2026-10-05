@@ -1,6 +1,8 @@
 import logging
 import re
 
+from langgraph.config import get_stream_writer
+
 from psych_support_bot.ai.consultation import consultation_agent_descriptions
 from psych_support_bot.ai.prompts.templates import build_crisis_safety_prompt
 from psych_support_bot.ai.safety.crisis import build_crisis_reply
@@ -8,6 +10,7 @@ from psych_support_bot.ai.schemas.messages import GeneratedReply
 from psych_support_bot.ai.schemas.state import GraphState
 from psych_support_bot.infra.llm.generation import (
     generate_clinically_bounded_reply,
+    generate_clinically_bounded_reply_stream_sync,
     generate_multidisciplinary_consultation,
 )
 from psych_support_bot.infra.telemetry.tracing import trace_span, update_span_output
@@ -151,6 +154,10 @@ def _generate_normal_reply(state: GraphState, risk_level: str, no_question_mode:
         return reply_text
     try:
         if state.get("consultation_required", False):
+            # 会诊路径：agent fan-out 不流式，最终综合在 stream_tokens 开启时
+            # 经 on_token 逐块推出（intervention 轮的流式覆盖）。
+            writer = get_stream_writer() if state.get("stream_tokens") else None
+            on_token = (lambda t: writer({"type": "token", "text": t})) if writer else None
             reply_text, opinions = generate_multidisciplinary_consultation(
                 user_message=state["user_message"],
                 mode=state["mode"],
@@ -165,30 +172,43 @@ def _generate_normal_reply(state: GraphState, risk_level: str, no_question_mode:
                 expected_language=state.get("expected_language", ""),
                 no_question_mode=no_question_mode,
                 emotional_state=state.get("emotional_state", ""),
+                on_token=on_token,
             )
             state["consultation_opinions"] = opinions
         else:
-            reply_text = generate_clinically_bounded_reply(
-                user_message=state["user_message"],
-                mode=state["mode"],
-                risk_level=state["risk_result"].risk_level,
-                memory_summary=state.get("memory_summary", ""),
-                knowledge_context=state.get("knowledge_context", ""),
-                consultation_required=False,
-                consultation_agents=[],
-                consultation_framework="",
-                interview_stage=state.get("interview_stage", "engagement"),
-                question_strategy=state.get("question_strategy", "open"),
-                challenge_allowed=bool(state.get("challenge_allowed", False)),
-                loop_hint=state.get("loop_hint", "Start broad, reflect, then narrow."),
-                expected_language=state.get("expected_language", ""),
-                no_question_mode=no_question_mode,
+            gen_kwargs = {
+                "user_message": state["user_message"],
+                "mode": state["mode"],
+                "risk_level": state["risk_result"].risk_level,
+                "memory_summary": state.get("memory_summary", ""),
+                "knowledge_context": state.get("knowledge_context", ""),
+                "consultation_required": False,
+                "consultation_agents": [],
+                "consultation_framework": "",
+                "interview_stage": state.get("interview_stage", "engagement"),
+                "question_strategy": state.get("question_strategy", "open"),
+                "challenge_allowed": bool(state.get("challenge_allowed", False)),
+                "loop_hint": state.get("loop_hint", "Start broad, reflect, then narrow."),
+                "expected_language": state.get("expected_language", ""),
+                "no_question_mode": no_question_mode,
                 # 复读事故（Langfuse 2026-09-02 c4fd09cc）的第二道防线：
                 # 生成时就明确告知上一轮已交付过内容，不要复述。
-                anti_repeat_note=_anti_repeat_note(),
-                emotional_state=state.get("emotional_state", ""),
-                history=[dict(turn) for turn in (state.get("recent_history") or [])],
-            )
+                "anti_repeat_note": _anti_repeat_note(),
+                "emotional_state": state.get("emotional_state", ""),
+                "history": [dict(turn) for turn in (state.get("recent_history") or [])],
+            }
+            if state.get("stream_tokens"):
+                # 句子级流式：普通 LLM 路径逐块经 get_stream_writer 推 token，
+                # 供 /respond/stream SSE 消费喂 TTS。同时累积完整文本写入
+                # reply_text——下游 safety_reviewer/持久化与非流式路径完全一致。
+                writer = get_stream_writer()
+                pieces: list[str] = []
+                for chunk in generate_clinically_bounded_reply_stream_sync(**gen_kwargs):
+                    pieces.append(chunk)
+                    writer({"type": "token", "text": chunk})
+                reply_text = "".join(pieces)
+            else:
+                reply_text = generate_clinically_bounded_reply(**gen_kwargs)
             state["consultation_opinions"] = []
     except Exception:
         logger.exception("LLM generation failed; using template fallback.")
@@ -245,6 +265,11 @@ def generate_response(state: GraphState) -> GraphState:
             state["consultation_opinions"] = []
             state["speculative_reply"] = None
             update_span_output(gen_obs, {"speculative_reply_used": True})
+            if state.get("stream_tokens"):
+                # 投机快路径的流式语义：整文虽已备好，仍按 token 经 writer 推出，
+                # 让 respond_stream 照常切句——live 字幕/句级朗读与普通路径同管道。
+                # 缺这一步时大多数普通轮走投机，前端只能等 final 整段蹦出（2026-09-10 实证）。
+                get_stream_writer()({"type": "token", "text": reply_text})
         else:
             if speculative:
                 # 丢弃重复投机回复；日志留痕供 Langfuse 巡检对照。

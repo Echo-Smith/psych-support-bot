@@ -127,6 +127,29 @@ class RiskEvent(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
 
 
+class PracticeSessionRecord(Base):
+    """图内引导练习会话（对话式 54321 等）。
+
+    与问卷会话同构：GraphState 每轮从 DB 重建，多轮练习的推进状态必须
+    落库；current_step 是"正在等待用户回答"的步骤下标（0-based）。
+    status: active（进行中）/ paused（暂停，保留已答步骤）/ completed。
+    """
+
+    __tablename__ = "practice_sessions"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    user_id: Mapped[str] = mapped_column(String(64), index=True)
+    exercise_tag: Mapped[str] = mapped_column(String(64), index=True)
+    current_step: Mapped[int] = mapped_column(Integer, default=0)
+    step_responses_json: Mapped[str] = mapped_column(Text, default="[]")
+    guidance_transcript_json: Mapped[str] = mapped_column(Text, default="[]")
+    status: Mapped[str] = mapped_column(String(16), default="active")
+    disclaimer_version: Mapped[str] = mapped_column(String(32), default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, onupdate=utcnow)
+
+
 class WeeklyReportRecord(Base):
     __tablename__ = "weekly_reports"
 
