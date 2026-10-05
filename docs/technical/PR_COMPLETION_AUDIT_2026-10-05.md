@@ -19,13 +19,15 @@
 | [#24](https://github.com/redmaplewww/psych-support-bot/pull/24) | 逐字近史与回复形态 | PR 尖端为本地祖先。本轮补齐会诊专家及同步/流式最终综合的逐字近史传递。 |
 | [#25](https://github.com/redmaplewww/psych-support-bot/pull/25) | 连续性意图 | 原四个提交尚未接入。移植最终版本并适配当前流式、练习与切片结构；保留作者 huangjun 归属。分类仅用于状态/日志，依照 PR 最后修订不将标签变成 Prompt 指令。 |
 | [#26](https://github.com/redmaplewww/psych-support-bot/pull/26) | 分页问卷、整卷提交 | 已由 #27 及后续链完整覆盖，PR 尖端为本地祖先。 |
-| [#27](https://github.com/redmaplewww/psych-support-bot/pull/27) | 语音与可靠性 | PR 尖端为本地祖先。修复 TTS 初始轮代次未初始化，导致收轮 Promise 无法完成、前端测试挂起的问题。 |
+| [#27](https://github.com/redmaplewww/psych-support-bot/pull/27) | 语音与可靠性 | PR 尖端为本地祖先。#30 修复 TTS 初始轮代次未初始化造成的收轮 Promise 挂起；真机预滚首词测试、线上 403 身份自愈验证仍未完成。 |
 | [#28](https://github.com/redmaplewww/psych-support-bot/pull/28) | 画像、切片及隐私 | 当前 GitHub 尖端 92ed5bf 为本地祖先；包含 #29 的 cherry-pick。现有 6d701ec/e1b53ce 的流式 STT、画像/Beta/隐私工作已经推到 fork，但尚未由该上游 PR 尖端覆盖，本轮交付分支包含它们。 |
-| [#29](https://github.com/redmaplewww/psych-support-bot/pull/29) | 画像智能调度 | git cherry 判定原 9fa76fc 的补丁已存在；无需重复应用。补齐描述中未勾选的 6–10 轮纵向调度验证，并修复同时间戳消息排序的既有 flake。 |
+| [#29](https://github.com/redmaplewww/psych-support-bot/pull/29) | 画像智能调度 | git cherry 判定原 9fa76fc 的补丁已存在；无需重复应用。#30 补齐固定输出的 8 轮纵向调度契约测试并修复消息排序 flake；真实 LLM 多轮质量/成本/延迟评测和线上一周 gate 核对仍未完成。 |
 
 开放 PR 是累积功能链，不能把每个 PR 相对 main 的整份 diff 重复应用。
 #29 描述仍建议等待 #28，但 #28 已含它的 cherry-pick，属于描述滞后。
-本轮通过新的交付 PR 提供合并入口，不关闭或修改其他作者的旧 PR。
+本轮通过 [#30](https://github.com/redmaplewww/psych-support-bot/pull/30) 提供合并入口，
+并更新 #27 描述、通过 #29 评论同步完成证据与未完成项（当前账号无权编辑 #29 描述）。补齐实现仅在 #30 分支，
+不表示原 PR 分支已更新或上游已合并；旧 PR 保持开放。
 
 ## 本轮补齐与修复
 
@@ -43,13 +45,12 @@
 8. 对锁文件逐版本完成 OSV 检查及依赖更新：旧锁 97 包中 14 包命中；
    新锁 98 包已知命中 0。详见 [依赖记录](DEPENDENCY_AUDIT_2026-10-05.md)。
 
-## 本地未提交工作
+## Psy 记忆系统范围
 
-开始时 git status 只有 9 份未跟踪文档：Mirror Memory v2 的 Architecture RFC
-以及 specs/mirror-memory-v2 的 README、需求、设计、任务、执行、运行、模板、验证。
-本轮将完整提交这些现有设计稿；本地链接检查 9 份文件无断链。
-文档明确内核、SDK、管理命令与工程验收尚未实现，仍是 Draft/M0 状态。
-这套新项目设计与现有 PR 的画像实现是两个不同交付范围。
+Psy 与 Mirror 保持独立。本 PR 保留 Psy 自身画像/记忆设计、智能调度、上下文切片、
+回复上下文注入和隐私生命周期实现，不引入 Mirror 项目依赖。
+此前误纳入的 9 份 Mirror RFC/规格文档已从 PR 最终差异中移除，原稿留在本地且不跟踪。
+Mirror 的独立工程计划不计入 Psy 的完成项或后续任务。
 
 ## 验证记录
 
@@ -76,4 +77,3 @@
   不以离线调度测试或旧 PR 描述追认为完成。
 - VOICE_DECISIONS 的 D2 限流是已记载的条件性待决事项；D1.1 是扩 worker 的前置工作。
   本轮没有变更部署规模、采样预算或上线配置。
-- Mirror Memory v2 的 T00–T14 保留真实未实施状态；当前交付是保存已有设计文档。
