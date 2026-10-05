@@ -29,6 +29,29 @@
 并更新 #27 描述、通过 #29 评论同步完成证据与未完成项（当前账号无权编辑 #29 描述）。补齐实现仅在 #30 分支，
 不表示原 PR 分支已更新或上游已合并；旧 PR 保持开放。
 
+## 冗余 PR 整理
+
+用户已同意清理旧入口：#2、#3、#21、#25、#29。功能由 #30 承接，
+其中 #29 与 #28 补丁等价，#25 为适配后的实现，#2/#3/#21 已进入并演进于功能链。
+保留 #22 → #23 → #24 → #26 → #27 → #28 → #30 的阶段审阅链。
+当前上游 main 仍为 255169f，尚未合入承接功能。
+
+实际权限检查：Echo-Smith 对上游及两个来源 fork 均只有 pull 权限。
+关闭 #29 的 API 操作被 GitHub 的 ClosePullRequest 权限检查拒绝；其他四个 PR
+也由其他作者创建。上述五个 PR 尚未关闭，来源分支没有删除，
+已分别发布覆盖关系与关闭建议，等待有权限的维护者执行。
+
+- [#2 关闭建议](https://github.com/redmaplewww/psych-support-bot/pull/2#issuecomment-5986800108)
+- [#3 关闭建议](https://github.com/redmaplewww/psych-support-bot/pull/3#issuecomment-5986800334)
+- [#21 关闭建议](https://github.com/redmaplewww/psych-support-bot/pull/21#issuecomment-5986800556)
+- [#25 关闭建议](https://github.com/redmaplewww/psych-support-bot/pull/25#issuecomment-5986800788)
+- [#29 关闭建议](https://github.com/redmaplewww/psych-support-bot/pull/29#issuecomment-5986801007)
+
+未完成验收已迁入独立 issue，#27/#30 描述同步了链接：
+[语音真机与线上身份恢复 #31](https://github.com/redmaplewww/psych-support-bot/issues/31)、
+[Psy 记忆真实模型纵向评测与一周 gate 核对 #32](https://github.com/redmaplewww/psych-support-bot/issues/32)。
+创建跟踪项不代表验收完成；Mirror 保持独立。
+
 ## 本轮补齐与修复
 
 1. 连续性分类接入当前状态、流式生成签名及日志；切片历史可供分类。
