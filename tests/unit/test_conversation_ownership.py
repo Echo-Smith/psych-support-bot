@@ -6,7 +6,7 @@
 
 1. 游客模式（AUTH_ENABLED=false，本仓库默认）：行为不变——messages 无
    user_id 参数可读（前端契约）、respond 自带 session_id 不引入新校验。
-2. 认证模式：未认证 401；他人会话 404（读取/续聊两路）；不存在
+2. 认证模式：未认证 401；他人会话 404（读取/续聊/流式三路）；不存在
    会话 404（不区分两态，防会话枚举）；本人才放行。
 
 测试口令/凭据一律运行时生成——源码不落字面量凭据（Mimosa 红线）。
@@ -72,9 +72,7 @@ def test_guest_mode_respond_with_session_id_unaffected(monkeypatch) -> None:
 
     sid = f"guest-{uuid4().hex[:8]}"
     _seed_session(sid, "guest-owner")
-    monkeypatch.setattr(
-        ConversationService, "respond", lambda self, payload, session: _canned_response()
-    )
+    monkeypatch.setattr(ConversationService, "respond", lambda self, payload, session: _canned_response())
     resp = client.post("/v1/conversations/respond", json={"user_id": "anyone", "session_id": sid, "message": "好"})
     assert resp.status_code == 200
 
@@ -162,6 +160,27 @@ def test_auth_mode_respond_with_foreign_session_is_404(monkeypatch) -> None:
         get_settings.cache_clear()
 
 
+def test_auth_mode_respond_stream_with_foreign_session_is_404(monkeypatch) -> None:
+    _auth_on(monkeypatch)
+    try:
+        from psych_support_bot.services.conversation import ConversationService
+
+        other = f"sec-{uuid4().hex[:8]}"
+        _seed_session(other, "user-b")
+        monkeypatch.setattr(
+            ConversationService,
+            "respond_stream",
+            lambda self, payload, session: iter([{"type": "final", "response": _canned_response()}]),
+        )
+        headers = {"Authorization": f"Bearer {create_access_token('user-a')}"}
+        resp = client.post(
+            "/v1/conversations/respond/stream",
+            json={"user_id": "user-a", "session_id": other, "message": "你好"},
+            headers=headers,
+        )
+        assert resp.status_code == 404
+    finally:
+        get_settings.cache_clear()
 
 
 def test_auth_mode_respond_with_own_session_passes(monkeypatch) -> None:

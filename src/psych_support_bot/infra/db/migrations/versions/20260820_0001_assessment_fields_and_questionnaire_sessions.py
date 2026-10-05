@@ -26,9 +26,7 @@ def upgrade() -> None:
     op.add_column("assessments", sa.Column("functional_impact", sa.Text(), nullable=False, server_default=""))
     op.add_column("assessments", sa.Column("care_consideration", sa.Text(), nullable=False, server_default=""))
     op.add_column("assessments", sa.Column("disclaimer", sa.Text(), nullable=False, server_default=""))
-    op.add_column(
-        "assessments", sa.Column("needs_safety_followup", sa.Boolean(), nullable=False, server_default=sa.text("false"))
-    )
+    op.add_column("assessments", sa.Column("needs_safety_followup", sa.Boolean(), nullable=False, server_default=sa.text("false")))
 
     # 2. Create questionnaire_sessions table
     op.create_table(

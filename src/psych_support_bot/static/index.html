@@ -14,15 +14,18 @@
   <link rel="manifest" href="/static/manifest.webmanifest">
   <style>
     :root {
-      --ink: #111111;
-      --paper: #fafafa;
-      --rule: #111111;
-      --muted: #666666;
-      --soft: #eeeeee;
-      --accent: #111111;
-      --safe: #111111;
-      --warn: #111111;
-      --danger: #111111;
+      /* 暖纸色系（心理陪伴业务：低饱和高明度，"信纸/日记本"质感）
+         对比度：#2B2620 on #FAF7F2 ≈ 14:1（AAA）；#6E655C on #FAF7F2 ≈ 5.2:1（AA） */
+      --ink: #2B2620;
+      --paper: #FAF7F2;
+      --card: #FFFDF9;
+      --rule: #2B2620;
+      --muted: #6E655C;
+      --soft: #F1ECE3;
+      --accent: #2B2620;
+      --safe: #4A7C59;    /* 鼠尾草绿 */
+      --warn: #B98A2F;    /* 琥珀 */
+      --danger: #A65A4A;  /* 陶土红：警示但不惊吓 */
     }
 
     * {
@@ -53,38 +56,37 @@
     .masthead {
       border-top: 3px double var(--rule);
       border-bottom: 3px double var(--rule);
-      padding: 18px 0 14px;
+      padding: 12px 0 10px;
       text-align: center;
-      margin-bottom: 18px;
+      margin-bottom: 14px;
     }
 
     .masthead h1 {
-      font-size: 28px;
+      font-size: 20px;
       font-weight: 700;
-      letter-spacing: 2px;
-      margin-bottom: 4px;
+      letter-spacing: 1.5px;
+      margin-bottom: 2px;
     }
 
     .masthead .tagline {
-      font-size: 13px;
+      font-size: 12px;
       color: var(--muted);
       font-style: italic;
+      margin-bottom: 8px;
     }
 
     .meta-bar {
       display: grid;
       grid-template-columns: repeat(4, minmax(0, 1fr));
-      gap: 10px;
+      gap: 6px;
       font-size: 12px;
-      padding: 10px 0;
-      border-bottom: 1px solid var(--rule);
-      margin-bottom: 16px;
+      margin-bottom: 8px;
     }
 
     .meta-item {
       padding: 6px 8px;
       border: 1px solid var(--soft);
-      background: #fff;
+      background: var(--card);
     }
 
     .meta-item .k {
@@ -102,6 +104,21 @@
       word-break: break-all;
     }
 
+    /* 模型格：单行 flex 内联（对话/转写/朗读三角色），窄屏可换行 */
+    .model-line {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 2px 10px;
+      font-size: 11px;
+      font-weight: 600;
+    }
+
+    .model-line .mk {
+      color: var(--muted);
+      font-weight: 400;
+      margin-right: 2px;
+    }
+
     /* Tab navigation (C4) */
     .tabs {
       display: flex;
@@ -117,7 +134,7 @@
       font-family: inherit;
       font-size: 14px;
       font-weight: 600;
-      background: #fff;
+      background: var(--card);
       color: var(--muted);
       border: none;
       border-bottom: 3px solid transparent;
@@ -148,7 +165,7 @@
     .tools-seg {
       display: inline-flex;
       border: 1px solid var(--rule);
-      background: #fff;
+      background: var(--card);
       margin-bottom: 14px;
     }
 
@@ -158,7 +175,7 @@
       font-size: 14px;
       font-weight: 600;
       letter-spacing: 2px;
-      background: #fff;
+      background: var(--card);
       color: var(--muted);
       border: none;
       cursor: pointer;
@@ -171,7 +188,7 @@
 
     .tools-seg button.active {
       background: var(--ink);
-      color: #fff;
+      color: var(--card);
     }
 
     .tools-view { display: none; }
@@ -197,7 +214,7 @@
       margin-bottom: 4px;
     }
 
-    .stat-card { border: 1px solid var(--rule); background: #fff; padding: 12px 16px; }
+    .stat-card { border: 1px solid var(--rule); background: var(--card); padding: 12px 16px; }
     .stat-card .num { font-family: "Courier New", monospace; font-size: 22px; font-weight: 700; }
     .stat-card .num small { font-size: 12px; font-weight: 400; color: var(--muted); }
     .stat-card .lbl { font-size: 11px; color: var(--muted); letter-spacing: 1px; margin-top: 2px; }
@@ -210,7 +227,7 @@
       padding: 2px 12px;
       border: 1px solid var(--soft);
       color: var(--muted);
-      background: #fff;
+      background: var(--card);
       cursor: pointer;
     }
 
@@ -247,14 +264,14 @@
       font-size: 12px;
       font-weight: 600;
       padding: 6px 16px;
-      background: #fff;
+      background: var(--card);
       color: var(--ink);
       border: 1px solid var(--rule);
       letter-spacing: 1px;
       cursor: pointer;
     }
 
-    .btn-outline:hover { background: var(--ink); color: #fff; }
+    .btn-outline:hover { background: var(--ink); color: var(--card); }
 
     .btn-danger {
       display: inline-block;
@@ -262,14 +279,14 @@
       font-size: 12px;
       font-weight: 700;
       padding: 6px 16px;
-      background: #fff;
+      background: var(--card);
       color: var(--ink);
       border: 3px double var(--rule);
       letter-spacing: 1px;
       cursor: pointer;
     }
 
-    .btn-danger:hover { background: var(--ink); color: #fff; }
+    .btn-danger:hover { background: var(--ink); color: var(--card); }
 
     /* Common newsprint section */
     .section-title {
@@ -288,20 +305,25 @@
       margin-bottom: 14px;
     }
 
+    /* tab 已表达面板名：无 section-title 时 subtitle 顶格 */
+    .panel > .section-subtitle:first-child {
+      margin-top: 0;
+    }
+
     /* ========== CHAT TAB ========== */
     .risk-pill {
       display: inline-block;
       padding: 3px 10px;
       font-size: 11px;
       border: 1px solid var(--rule);
-      background: #fff;
+      background: var(--card);
       margin-top: 8px;
       font-family: "Courier New", monospace;
       letter-spacing: 1px;
     }
 
     .risk-low {
-      background: #fff;
+      background: var(--card);
     }
 
     .risk-elevated {
@@ -309,13 +331,13 @@
     }
 
     .risk-high {
-      background: #fff;
+      background: var(--card);
       border-style: dashed;
     }
 
     .risk-critical {
       background: var(--ink);
-      color: #fff;
+      color: var(--card);
     }
 
     .chat-area {
@@ -324,7 +346,7 @@
       overflow-y: auto;
       padding: 16px 12px;
       border: 1px solid var(--rule);
-      background: #fff;
+      background: var(--card);
       margin-bottom: 14px;
     }
 
@@ -340,6 +362,53 @@
       font-style: normal;
       margin-bottom: 8px;
       font-size: 18px;
+    }
+
+    /* ===== 历史上下文：重置分割线 + 顶部下拉加载 ===== */
+    .chat-divider {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      margin: 20px 0;
+      color: var(--muted);
+      font-size: 11px;
+      letter-spacing: 1px;
+      white-space: nowrap;
+    }
+
+    .chat-divider::before,
+    .chat-divider::after {
+      content: "";
+      flex: 1;
+      border-top: 1px solid var(--rule);
+    }
+
+    .history-top {
+      text-align: center;
+      padding: 4px 0 14px;
+    }
+
+    .history-top button {
+      font-family: inherit;
+      font-size: 12px;
+      color: var(--muted);
+      background: none;
+      border: 1px dashed var(--rule);
+      padding: 6px 14px;
+      cursor: pointer;
+      letter-spacing: 1px;
+      transition: color .15s, border-color .15s;
+    }
+
+    .history-top button:hover {
+      color: var(--ink);
+      border-color: var(--ink);
+    }
+
+    .history-top .history-note {
+      font-size: 11px;
+      color: var(--muted);
+      letter-spacing: 1px;
     }
 
     .msg {
@@ -367,7 +436,7 @@
       max-width: 82%;
       padding: 10px 14px;
       border: 1px solid var(--rule);
-      background: #fff;
+      background: var(--card);
       text-align: left;
       word-break: break-word;
       white-space: pre-wrap;
@@ -376,7 +445,7 @@
 
     .msg.user .bubble {
       background: var(--ink);
-      color: #fff;
+      color: var(--card);
       border-color: var(--ink);
     }
 
@@ -417,6 +486,27 @@
       }
     }
 
+    /* 静音按钮：图标态（开声）与静音态（虚线弱化） */
+    #muteBtn {
+      padding: 4px 10px;
+      font-family: inherit;
+      font-size: 12px;
+      background: var(--card);
+      color: var(--ink);
+      border: 1px solid var(--rule);
+      cursor: pointer;
+    }
+
+    #muteBtn:hover {
+      border-color: var(--ink);
+    }
+
+    #muteBtn[aria-pressed="true"] {
+      color: var(--muted);
+      border-style: dashed;
+      background: var(--soft);
+    }
+
     .msg-header {
       font-size: 11px;
       margin-bottom: 4px;
@@ -441,6 +531,18 @@
       border: 1px dotted var(--muted);
     }
 
+    /* 图内练习进度徽标：气泡流左侧对齐的小标签，弱视觉、不打断对话 */
+    .practice-badge {
+      font-size: 11px;
+      padding: 3px 10px;
+      border: 1px solid var(--muted);
+      border-radius: 12px;
+      display: inline-block;
+      background: var(--bg, transparent);
+      opacity: .85;
+      margin: 2px 0;
+    }
+
     .quick-row {
       display: flex;
       flex-wrap: wrap;
@@ -452,7 +554,7 @@
       padding: 6px 12px;
       font-size: 12px;
       font-family: inherit;
-      background: #fff;
+      background: var(--card);
       color: var(--ink);
       border: 1px solid var(--rule);
       cursor: pointer;
@@ -461,7 +563,7 @@
 
     .chip:hover {
       background: var(--ink);
-      color: #fff;
+      color: var(--card);
     }
 
     .chat-input-row {
@@ -469,25 +571,242 @@
       gap: 8px;
     }
 
-    .chat-input-row input[type=text] {
+    .input-wrap {
+      position: relative;
       flex: 1;
-      padding: 10px 14px;
+      display: flex;
+    }
+
+    .input-wrap input[type=text] {
+      flex: 1;
+      padding: 10px 14px 10px 46px; /* 左侧留出麦克风图标位 */
       border: 1px solid var(--rule);
-      background: #fff;
+      background: var(--card);
       color: var(--ink);
       font-family: inherit;
       font-size: 14px;
       outline: none;
     }
 
+    .input-wrap input[type=text]:focus {
+      border-color: var(--ink);
+    }
+
+    /* 麦克风：输入框内左缘的幽灵图标按钮，贴合整体线性图标语言 */
+    #micBtn {
+      position: absolute;
+      left: 8px;
+      top: 50%;
+      transform: translateY(-50%);
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 30px;
+      height: 30px;
+      padding: 0;
+      font-family: inherit;
+      background: transparent;
+      color: var(--muted);
+      border: none;
+      border-radius: 8px;
+      cursor: pointer;
+      z-index: 2;
+      transition: color .15s, background .15s;
+    }
+
+    #micBtn:hover {
+      color: var(--ink);
+      background: var(--soft);
+    }
+
+    #micBtn svg {
+      display: block;
+    }
+
+    /* ===== 沉浸式语音对话：输入框整体变形即语音条 =====
+       绿=聆听中（人声采集时白色波形）| 黄=TTS 播放·识别暂停 | 白=转写已暂停 */
+    .input-wrap.voice-on {
+      min-height: 42px;
+      align-items: center;
+      border: 1px solid #059669;
+      background: #10b981;
+      transition: background .3s, border-color .3s;
+      animation: voBreathe 2.4s ease-out infinite;
+    }
+
+    .input-wrap.voice-on input[type=text] {
+      display: none;
+    }
+
+    .input-wrap.voice-on #micBtn {
+      color: var(--card);
+    }
+
+    .input-wrap.voice-on #micBtn:hover {
+      color: var(--card);
+      background: rgba(255, 255, 255, .22);
+    }
+
+    /* 黄色：检测到朗读，识别暂停中（点击可打断） */
+    .input-wrap.voice-on.vo-speaking {
+      border-color: #d97706;
+      background: #f59e0b;
+      animation: voGlow 1.8s ease-out infinite;
+    }
+
+    /* 白色：用户主动暂停转写；vo-hint 态提示点击进入收音 */
+    .input-wrap.voice-on.vo-paused {
+      border-color: var(--rule);
+      background: var(--card);
+      animation: none;
+    }
+
+    .input-wrap.voice-on.vo-paused #micBtn {
+      color: var(--muted);
+    }
+
+    .input-wrap.voice-on.vo-paused #micBtn:hover {
+      color: var(--ink);
+      background: var(--soft);
+    }
+
+    .input-wrap.voice-on.vo-paused.vo-hint {
+      border-style: dashed;
+      border-color: var(--ink);
+    }
+
+    .voice-shell {
+      position: absolute;
+      left: 44px;
+      right: 6px;
+      top: 0;
+      bottom: 0;
+      z-index: 1;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 10px;
+      cursor: pointer;
+      user-select: none;
+      -webkit-tap-highlight-color: transparent;
+    }
+
+    .voice-shell .vs-label {
+      font-size: 13px;
+      letter-spacing: 1px;
+      color: var(--card);
+      transition: color .2s;
+    }
+
+    .voice-shell.vo-paused-text .vs-label {
+      color: var(--muted);
+    }
+
+    .voice-shell.vo-hint-text .vs-label {
+      color: var(--ink);
+    }
+
+    .voice-shell .vs-icon {
+      display: inline-flex;
+      align-items: center;
+      color: var(--card);
+    }
+
+    .voice-shell .vs-icon:empty {
+      display: none;
+    }
+
+    .voice-shell .vs-icon.dark {
+      color: var(--muted);
+    }
+
+    /* 白色说话波形：VAD 检测到人声即激活（替代旧的红色录音框） */
+    .vs-wave {
+      display: none;
+      align-items: center;
+      gap: 3px;
+      height: 18px;
+    }
+
+    .vs-wave.on {
+      display: inline-flex;
+    }
+
+    .vs-wave i {
+      width: 3px;
+      height: 18px;
+      background: var(--card);
+      border-radius: 2px;
+      transform-origin: center;
+      animation: vsWave .9s ease-in-out infinite;
+    }
+
+    .vs-wave i:nth-child(2) {
+      animation-delay: .15s;
+    }
+
+    .vs-wave i:nth-child(3) {
+      animation-delay: .3s;
+    }
+
+    .vs-wave i:nth-child(4) {
+      animation-delay: .45s;
+    }
+
+    .vs-wave i:nth-child(5) {
+      animation-delay: .6s;
+    }
+
+    @keyframes vsWave {
+
+      0%,
+      100% {
+        transform: scaleY(.3);
+      }
+
+      50% {
+        transform: scaleY(1);
+      }
+    }
+
+    @keyframes voBreathe {
+
+      0% {
+        box-shadow: 0 0 0 0 rgba(16, 185, 129, .3);
+      }
+
+      70% {
+        box-shadow: 0 0 0 8px rgba(16, 185, 129, 0);
+      }
+
+      100% {
+        box-shadow: 0 0 0 0 rgba(16, 185, 129, 0);
+      }
+    }
+
+    @keyframes voGlow {
+
+      0% {
+        box-shadow: 0 0 0 0 rgba(245, 158, 11, .3);
+      }
+
+      70% {
+        box-shadow: 0 0 0 8px rgba(245, 158, 11, 0);
+      }
+
+      100% {
+        box-shadow: 0 0 0 0 rgba(245, 158, 11, 0);
+      }
+    }
+
     .chat-input-row button,
     button.btn {
-      padding: 10px 18px;
       font-family: inherit;
       font-size: 14px;
       font-weight: 600;
+      padding: 10px 18px;
       background: var(--ink);
-      color: #fff;
+      color: var(--card);
       border: 1px solid var(--ink);
       cursor: pointer;
       letter-spacing: 1px;
@@ -496,7 +815,7 @@
 
     .chat-input-row button:hover,
     button.btn:hover {
-      background: #fff;
+      background: var(--card);
       color: var(--ink);
     }
 
@@ -508,11 +827,11 @@
 
     button.btn:disabled:hover {
       background: var(--ink);
-      color: #fff;
+      color: var(--card);
     }
 
     .btn-secondary {
-      background: #fff;
+      background: var(--card);
       color: var(--ink);
     }
 
@@ -525,7 +844,7 @@
       padding: 10px 14px;
       font-family: inherit;
       font-size: 12px;
-      background: #fff;
+      background: var(--card);
       color: var(--muted);
       border: 1px solid var(--soft);
       cursor: pointer;
@@ -661,7 +980,7 @@
       margin-top: 14px;
       padding: 12px;
       border: 1px dashed var(--rule);
-      background: #fff;
+      background: var(--card);
     }
 
     .debug-box h4 {
@@ -715,7 +1034,7 @@
     .exercise-card {
       padding: 16px 14px;
       border: 1px solid var(--rule);
-      background: #fff;
+      background: var(--card);
       cursor: pointer;
       transition: all 0.15s;
       text-align: left;
@@ -725,7 +1044,7 @@
 
     .exercise-card:hover {
       background: var(--ink);
-      color: #fff;
+      color: var(--card);
     }
 
     .exercise-card .tag {
@@ -754,7 +1073,7 @@
     .exercise-viewer {
       padding: 18px;
       border: 1px solid var(--rule);
-      background: #fff;
+      background: var(--card);
     }
 
     .exercise-viewer .ev-title {
@@ -798,7 +1117,7 @@
 
     .step-row.done .step-num {
       background: var(--ink);
-      color: #fff;
+      color: var(--card);
     }
 
     .step-body {
@@ -828,7 +1147,7 @@
       padding: 14px;
       border: 2px solid var(--rule);
       text-align: center;
-      background: #fff;
+      background: var(--card);
     }
 
     .completion-banner .tick {
@@ -853,7 +1172,7 @@
     .ex-guided-step {
       border: 1px solid var(--rule);
       padding: 16px;
-      background: #fff;
+      background: var(--card);
       margin: 14px 0;
     }
 
@@ -902,7 +1221,7 @@
       border: 1px solid var(--rule);
       font-family: inherit;
       font-size: 13px;
-      background: #fafafa;
+      background: var(--card);
       color: var(--ink);
       min-height: 90px;
       resize: vertical;
@@ -910,7 +1229,7 @@
     }
 
     .ex-response-field:focus {
-      background: #fff;
+      background: var(--card);
       border-color: var(--ink);
     }
 
@@ -928,7 +1247,7 @@
       border: 1px dashed var(--rule);
       font-family: inherit;
       font-size: 13px;
-      background: #fafafa;
+      background: var(--soft);
       color: var(--ink);
       outline: none;
       transition: border-color 0.15s, background 0.15s;
@@ -936,7 +1255,7 @@
 
     .gr-slot:focus {
       border: 1px solid var(--ink);
-      background: #fff;
+      background: var(--card);
     }
 
     .gr-slot.filled {
@@ -967,7 +1286,7 @@
       margin-top: 12px;
       padding: 10px 14px;
       border-left: 3px solid var(--ink);
-      background: #fafafa;
+      background: var(--soft);
       font-size: 13px;
       line-height: 1.6;
       font-style: italic;
@@ -977,7 +1296,7 @@
       margin-top: 14px;
       padding: 12px;
       border: 1px solid var(--soft);
-      background: #fafafa;
+      background: var(--soft);
     }
 
     .ex-history-title {
@@ -1018,7 +1337,7 @@
     .ex-summary-card {
       border: 2px solid var(--ink);
       padding: 20px;
-      background: #fff;
+      background: var(--card);
       margin-top: 18px;
     }
 
@@ -1059,7 +1378,7 @@
       font-size: 13px;
       line-height: 1.6;
       padding: 8px 12px;
-      background: #fafafa;
+      background: var(--soft);
       border-left: 3px solid var(--ink);
     }
 
@@ -1079,7 +1398,7 @@
     .ex-warm-card {
       border: 2px solid var(--ink);
       padding: 22px 24px;
-      background: #fff;
+      background: var(--card);
       margin-top: 18px;
       line-height: 1.8;
     }
@@ -1127,7 +1446,7 @@
 
     .ex-warm-card .wc-body .wc-reflect {
       padding: 12px 14px;
-      background: #fafafa;
+      background: var(--soft);
       border-left: 3px solid var(--ink);
       font-size: 13px;
       margin: 12px 0;
@@ -1180,7 +1499,7 @@
     .scale-card {
       padding: 16px;
       border: 1px solid var(--rule);
-      background: #fff;
+      background: var(--card);
       cursor: pointer;
       transition: all 0.15s;
       text-align: left;
@@ -1190,7 +1509,7 @@
 
     .scale-card:hover {
       background: var(--ink);
-      color: #fff;
+      color: var(--card);
     }
 
     .scale-card .code {
@@ -1217,7 +1536,7 @@
     .assess-viewer {
       padding: 18px;
       border: 1px solid var(--rule);
-      background: #fff;
+      background: var(--card);
     }
 
     .av-head {
@@ -1248,7 +1567,7 @@
       height: 6px;
       border: 1px solid var(--rule);
       margin: 10px 0 16px;
-      background: #fff;
+      background: var(--card);
       position: relative;
     }
 
@@ -1298,7 +1617,7 @@
       text-align: left;
       padding: 10px 12px;
       border: 1px solid var(--rule);
-      background: #fff;
+      background: var(--card);
       font-family: inherit;
       font-size: 13px;
       cursor: pointer;
@@ -1308,7 +1627,7 @@
 
     .opt-btn:hover {
       background: var(--ink);
-      color: #fff;
+      color: var(--card);
     }
 
     .opt-btn .v {
@@ -1321,7 +1640,7 @@
     .opt-btn.selected {
       border-color: var(--ink);
       background: var(--ink);
-      color: #fff;
+      color: var(--card);
     }
 
     .pager-nav {
@@ -1351,7 +1670,7 @@
 
     .deep-card {
       border: 1px solid var(--rule);
-      background: #f8fafc;
+      background: var(--soft);
       border-radius: 12px;
       padding: 12px 14px;
       margin-top: 4px;
@@ -1373,7 +1692,7 @@
     .result-box {
       padding: 18px;
       border: 2px solid var(--rule);
-      background: #fff;
+      background: var(--card);
     }
 
     .result-box .rb-head {
@@ -1437,7 +1756,7 @@
     .checkin-form {
       padding: 18px;
       border: 1px solid var(--rule);
-      background: #fff;
+      background: var(--card);
       margin-bottom: 18px;
     }
 
@@ -1483,7 +1802,7 @@
       width: 18px;
       height: 18px;
       border: 2px solid var(--ink);
-      background: #fff;
+      background: var(--card);
       border-radius: 0;
       cursor: pointer;
       transition: all 0.1s;
@@ -1497,7 +1816,7 @@
       width: 18px;
       height: 18px;
       border: 2px solid var(--ink);
-      background: #fff;
+      background: var(--card);
       border-radius: 0;
       cursor: pointer;
     }
@@ -1517,7 +1836,7 @@
       border: 1px solid var(--rule);
       font-family: inherit;
       font-size: 13px;
-      background: #fff;
+      background: var(--card);
       color: var(--ink);
       resize: vertical;
       min-height: 70px;
@@ -1536,7 +1855,7 @@
       padding: 18px;
       border: 2px solid var(--rule);
       text-align: center;
-      background: #fff;
+      background: var(--card);
       margin-bottom: 18px;
     }
 
@@ -1555,7 +1874,7 @@
     .checkin-locked {
       padding: 18px;
       border: 1px solid var(--ink);
-      background: #fafafa;
+      background: var(--soft);
       margin-bottom: 18px;
     }
 
@@ -1598,7 +1917,7 @@
     .checkin-locked .cl-note {
       margin-top: 12px;
       padding: 10px;
-      background: #fff;
+      background: var(--card);
       border: 1px dashed var(--rule);
       font-size: 13px;
       font-style: italic;
@@ -1625,7 +1944,7 @@
     .trend-box {
       padding: 18px;
       border: 1px solid var(--rule);
-      background: #fff;
+      background: var(--card);
     }
 
     .trend-title {
@@ -1646,7 +1965,7 @@
     .spark-card {
       border: 1px solid var(--soft);
       padding: 10px;
-      background: #fff;
+      background: var(--card);
     }
 
     .spark-card .sk-name {
@@ -1699,7 +2018,7 @@
       margin-top: 16px;
       padding: 18px;
       border: 1px solid var(--rule);
-      background: #fff;
+      background: var(--card);
     }
 
     .record-section .trend-title {
@@ -1783,7 +2102,7 @@
       line-height: 1.8;
       padding: 12px;
       border: 1px solid var(--soft);
-      background: #fff;
+      background: var(--card);
     }
 
     .analysis-meta {
@@ -1897,13 +2216,6 @@
       <div class="risk-pill risk-low" id="riskIndicator">就绪</div>
     </div>
 
-    <div class="meta-bar">
-      <div class="meta-item"><span class="k">页面版本</span><span class="v" id="uiVersion">np-v1</span></div>
-      <div class="meta-item"><span class="k">当前模型</span><span class="v" id="modelName">加载中…</span></div>
-      <div class="meta-item"><span class="k">当前模式</span><span class="v" id="currentMode">未开始</span></div>
-      <div class="meta-item"><span class="k">回复来源</span><span class="v" id="replySource">未开始</span></div>
-    </div>
-
     <nav class="tabs" role="tablist">
       <button class="tab active" data-tab="chat" role="tab">聊天</button>
       <button class="tab" data-tab="tools" role="tab">工具</button>
@@ -1913,10 +2225,12 @@
 
     <!-- ========== CHAT PANEL ========== -->
     <section class="panel active" id="panel-chat">
-      <h2 class="section-title">对话</h2>
       <p class="section-subtitle">随时写下你的感受。以下快捷问题可直接使用。</p>
 
       <div class="chat-area" id="chatArea">
+        <div class="history-top" id="historyTop" style="display:none">
+          <button type="button" id="historyBtn" onclick="loadOlderHistory()">↑ 上拉 / 点击查看更早的对话</button>
+        </div>
         <div class="welcome">
           <h3>你好，很高兴见到你</h3>
           <p>你可以直接告诉我你的感受，或使用快捷按钮开始交流。</p>
@@ -1936,9 +2250,27 @@
       </div>
 
       <div class="chat-input-row">
-        <input type="text" id="messageInput" placeholder="输入你的感受或问题…" onkeypress="handleKeyPress(event)">
+        <div class="input-wrap" id="inputWrap">
+          <button type="button" id="micBtn" onclick="onMicIconTap()" style="display:none" title="语音输入" aria-label="语音输入">
+            <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3z"></path>
+              <path d="M19 10v2a7 7 0 0 1-14 0v-2"></path>
+              <line x1="12" y1="19" x2="12" y2="22"></line>
+            </svg>
+          </button>
+          <input type="text" id="messageInput" placeholder="输入你的感受或问题…" onkeypress="handleKeyPress(event)">
+          <div class="voice-shell" id="voiceBox" style="display:none" onclick="voiceBoxTap()" role="button" aria-label="语音对话状态条">
+            <span class="vs-icon" id="voiceBoxIcon"></span>
+            <span class="vs-wave" id="voiceWave" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i></span>
+            <span class="vs-label" id="voiceBoxLabel">正在聆听…</span>
+          </div>
+        </div>
         <button id="sendBtn" onclick="sendMessage()">发送</button>
         <button type="button" class="reset-btn" onclick="resetSession()">重置会话</button>
+      </div>
+      <div id="voiceRow" style="display:none; margin-top:6px; font-size:12px; color:var(--muted);">
+        <button type="button" id="muteBtn" aria-pressed="false" title="当前开声；点击静音（静音时不合成语音，节省成本）" style="display:none"></button>
+        <span id="micHint" style="margin-left:12px"></span>
       </div>
 
       <p class="disclaimer">
@@ -1947,6 +2279,12 @@
 
       <div class="debug-box">
         <h4>调试信息</h4>
+        <div class="meta-bar">
+          <div class="meta-item"><span class="k">页面版本</span><span class="v" id="uiVersion">dev-v1</span></div>
+          <div class="meta-item"><span class="k">模型</span><span class="v" id="modelName">加载中…</span></div>
+          <div class="meta-item"><span class="k">当前模式</span><span class="v" id="currentMode">未开始</span></div>
+          <div class="meta-item"><span class="k">回复来源</span><span class="v" id="replySource">未开始</span></div>
+        </div>
         <div class="debug-log" id="debugLog">等待发送消息…
         </div>
       </div>
@@ -1954,7 +2292,6 @@
 
     <!-- ========== TOOLS PANEL (练习 + 评估，分段切换) ========== -->
     <section class="panel" id="panel-tools">
-      <h2 class="section-title">工具</h2>
       <p class="section-subtitle">想整理一下情绪，或了解一下最近的状态——都在这里。练习随时可做，量表建议间隔两周以上。</p>
 
       <div class="tools-seg" id="toolsSeg">
@@ -2025,7 +2362,6 @@
 
     <!-- ========== CHECKIN PANEL (C3) ========== -->
     <section class="panel" id="panel-checkin">
-      <h2 class="section-title">每日打卡</h2>
       <p class="section-subtitle">每天仅可打卡一次，提交后不可修改。请诚实记录当下的状态。</p>
 
       <div id="checkinSuccess" style="display:none;" class="success-banner">
@@ -2117,7 +2453,6 @@
 
     <!-- ========== ME PANEL (个人信息 + 历史 + 数据管理) ========== -->
     <section class="panel" id="panel-me">
-      <h2 class="section-title">我</h2>
       <p class="section-subtitle">这里只属于你：你的记录、你的数据。随时可以导出，也随时可以抹去。</p>
 
       <div class="record-section">
@@ -2184,7 +2519,7 @@
   <script>
     // ========== Globals ==========
     const API_BASE = window.location.origin;
-    const STORE_KEYS = { EX_HIST: 'np_ex_history', EX_DONE: 'np_ex_done', CK: 'np_checkins', UID: 'np_user_id', TOKEN: 'np_auth_token', PRIVACY_VER: 'np_privacy_ver' };
+    const STORE_KEYS = { EX_HIST: 'np_ex_history', EX_DONE: 'np_ex_done', CK: 'np_checkins', UID: 'np_user_id', TOKEN: 'np_auth_token', PRIVACY_VER: 'np_privacy_ver', GUEST_SECRET: 'np_guest_secret' };
     let USER_ID = localStorage.getItem(STORE_KEYS.UID);
     if (!USER_ID) { USER_ID = 'u_' + Math.random().toString(36).slice(2, 10); localStorage.setItem(STORE_KEYS.UID, USER_ID); }
     let SESSION_ID = null;
@@ -2200,28 +2535,52 @@
       if (AUTH_TOKEN) h['Authorization'] = 'Bearer ' + AUTH_TOKEN;
       return h;
     }
+    // 游客密码必须确定性：旧实现用 Date.now() 随机段，导致 token 失效/服务
+    // 重新部署换 JWT secret 后，register 返回 409 → login 用新随机密码 → 必然
+    // 401，永久无法再认证。改为 localStorage 存一份稳定 secret，注册与登录共用。
+    function guestPassword(userId) {
+      let secret = localStorage.getItem(STORE_KEYS.GUEST_SECRET);
+      if (!secret) {
+        secret = Math.random().toString(36).slice(2) + Math.random().toString(36).slice(2);
+        localStorage.setItem(STORE_KEYS.GUEST_SECRET, secret);
+      }
+      return 'guest-' + userId + '-' + secret;
+    }
+    // 单次认证尝试：register（409 则 login）。成功存 token 返回 true。
+    async function guestAuthAttempt(userId) {
+      const pw = guestPassword(userId);
+      let reg = await fetch(API_BASE + '/v1/auth/register', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ username: userId, password: pw })
+      });
+      if (reg.status === 409) {                               // 游客账号已存在
+        reg = await fetch(API_BASE + '/v1/auth/login', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ username: userId, password: pw })
+        });
+      }
+      if (!reg.ok) return false;
+      const data = await reg.json();
+      AUTH_TOKEN = data.access_token;
+      localStorage.setItem(STORE_KEYS.TOKEN, AUTH_TOKEN);
+      if (data.user_id) { USER_ID = data.user_id; localStorage.setItem(STORE_KEYS.UID, USER_ID); }
+      return true;
+    }
     async function ensureGuestAuth() {
       try {
         const probe = await fetch(API_BASE + '/v1/checkins?user_id=' + encodeURIComponent(USER_ID), { headers: authHeaders() });
-        if (probe.status !== 401) return;                       // 认证关闭或 token 有效
+        // 401 = token 失效；403 = 身份冲突（token 有效但 sub ≠ USER_ID：历史版
+        // 本 JS 会轮换 USER_ID 而保留旧 token，破坏对留在 localStorage）。
+        // 两者都要重认证；只认 401 会把 403 锁死成永久故障。
+        if (probe.status !== 401 && probe.status !== 403) return;  // 认证关闭或配对完好
         AUTH_TOKEN = null;
-        // 游客 username 需 3-64 位字母数字-_；user_id 已满足（u_ 前缀 + 随机串）
-        let reg = await fetch(API_BASE + '/v1/auth/register', {
-          method: 'POST', headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ username: USER_ID, password: 'guest-' + USER_ID + '-' + (Date.now() % 100000) })
-        });
-        if (reg.status === 409) {                               // 游客账号已存在（换设备/清缓存）
-          reg = await fetch(API_BASE + '/v1/auth/login', {
-            method: 'POST', headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ username: USER_ID, password: 'guest-' + USER_ID + '-' + (Date.now() % 100000) })
-          });
-        }
-        if (reg.ok) {
-          const data = await reg.json();
-          AUTH_TOKEN = data.access_token;
-          localStorage.setItem(STORE_KEYS.TOKEN, AUTH_TOKEN);
-          if (data.user_id) { USER_ID = data.user_id; localStorage.setItem(STORE_KEYS.UID, USER_ID); }
-        }
+        localStorage.removeItem(STORE_KEYS.TOKEN);
+        if (await guestAuthAttempt(USER_ID)) return;
+        // 自愈：历史版本用随机密码注册的旧账号无法登录（密码不可恢复）——
+        // 轮换新身份重新注册，保证任何情况下都不会被永久锁死。
+        USER_ID = 'u_' + Math.random().toString(36).slice(2, 10);
+        localStorage.setItem(STORE_KEYS.UID, USER_ID);
+        await guestAuthAttempt(USER_ID);
       } catch (e) { /* 探测失败（后端未起等）不阻断页面 */ }
     }
 
@@ -2244,7 +2603,7 @@
         const listHtml = agreement.privacy_points.map(p => '<li>' + escapeHtml(p) + '</li>').join('');
         const dpHtml = agreement.data_processing_points.map(p => '<li>' + escapeHtml(p) + '</li>').join('');
         mask.innerHTML =
-          '<div style="background:#fff;border-radius:14px;max-width:520px;width:100%;max-height:80vh;overflow:auto;padding:22px;">' +
+          '<div style="background:var(--card);border-radius:14px;max-width:520px;width:100%;max-height:80vh;overflow:auto;padding:22px;">' +
           '<div style="font-weight:700;font-size:17px;margin-bottom:10px;">隐私协议与数据处理说明</div>' +
           '<div style="font-size:13px;color:#444;line-height:1.7;">' +
           '<div style="font-weight:600;margin:6px 0;">隐私协议</div><ul style="padding-left:18px;margin:0 0 8px;">' + listHtml + '</ul>' +
@@ -2383,6 +2742,8 @@
         bindTabs();
         bindQuickChips();
         loadSystemInfo();
+        initVoice();
+        initHistory();
         renderExerciseGrid();
         renderScaleList();
         renderTrend();
@@ -2438,6 +2799,7 @@
       const input = document.getElementById('messageInput');
       const message = input.value.trim();
       if (!message || isLoading) return;
+      pcmEnsureCtx(); // 手势内预建/恢复 AudioContext：iOS 要求创建于手势栈，异步创建会一直 suspended（无声+字幕假爬）
       isLoading = true;
       document.getElementById('sendBtn').disabled = true;
       input.value = '';
@@ -2446,12 +2808,346 @@
       // 多条气泡之间的打字节奏恢复"正在输入"（见 renderBotParts）。
       showTyping(ECHO_WAIT_TEXT);
       clearStaleChips();
+      abortAllPlayback(); // 新消息 = 上一轮朗读整体作废（只掐当前句会让队列继续播）
       try {
-        const res = await fetch(API_BASE + '/v1/conversations/respond', {
+        await sendMessageStream(message);
+      } catch (streamErr) {
+        // 流式路径任何异常（网络/协议/不支持）→ 回退整段 /respond，零风险
+        console.warn('stream fallback:', streamErr);
+        hideTyping();
+        await sendMessageFallback(message);
+      } finally {
+        isLoading = false;
+        document.getElementById('sendBtn').disabled = false;
+        document.getElementById('messageInput').focus();
+      }
+    }
+
+    // ---- LLM→TTS 句子级流式（/respond/stream SSE）----
+    const TTS_QUEUE = { items: [], playing: false, aborted: false, reviseText: null, anySpoken: false, prefetched: {} };
+
+    async function sendMessageStream(message) {
+      TTS_QUEUE.items = [];
+      TTS_QUEUE.playing = false;
+      TTS_QUEUE.aborted = false;
+      TTS_QUEUE.reviseText = null;
+      TTS_QUEUE.anySpoken = false;
+      TTS_QUEUE.prefetched = {};
+      LIVE_TEXT_SHOWN_CHARS = 0; // 新回合字幕预算清零
+      const sendBody = () => JSON.stringify({ user_id: USER_ID, session_id: SESSION_ID, message });
+      let res = await fetch(API_BASE + '/v1/conversations/respond/stream', {
+        method: 'POST',
+        headers: authHeaders(),
+        body: sendBody(),
+      });
+      if (res.status === 401 || res.status === 403) {
+        // 身份配对失效（token 坏/身份冲突）：当场静默重注册，用新头重发一次，
+        // 不要求用户刷新页面。body 必须在重认证后重建（USER_ID 可能已轮换）。
+        await ensureGuestAuth();
+        res = await fetch(API_BASE + '/v1/conversations/respond/stream', {
           method: 'POST',
           headers: authHeaders(),
-          body: JSON.stringify({ user_id: USER_ID, session_id: SESSION_ID, message })
+          body: sendBody(),
         });
+      }
+      if (!res.ok || !res.body) throw new Error('HTTP ' + res.status);
+      if (VOICE.mode === 'thinking' || VOICE.mode === 'paused') beginSpeaking(); // 首句未到先占位（黄框），防 VAD 抢录
+      // setVoiceMode('speaking') 会清掉等待泡（它的本意是清"正在聆听"）——
+      // 首句音频/文字就位前重新挂上回声泡，屏幕不留空白断档
+      if (VOICE.mode === 'speaking') showTyping(ECHO_WAIT_TEXT);
+
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let sseBuf = '';
+      let finalData = null;
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        sseBuf += decoder.decode(value, { stream: true });
+        let idx;
+        while ((idx = sseBuf.indexOf('\n\n')) !== -1) {
+          const frame = sseBuf.slice(0, idx);
+          sseBuf = sseBuf.slice(idx + 2);
+          const line = frame.split('\n').find((l) => l.startsWith('data: '));
+          if (!line) continue;
+          const ev = JSON.parse(line.slice(6));
+          if (ev.type === 'sentence') handleStreamSentence(ev.text);
+          else if (ev.type === 'revise') handleStreamRevise(ev.text);
+          else if (ev.type === 'final') finalData = ev.response;
+        }
+      }
+      if (!finalData) throw new Error('stream ended without final');
+      handleStreamFinal(finalData);
+    }
+
+    function handleStreamSentence(text) {
+      turnMark('firstSentence'); // LLM 流式首句到达（打字轮无 TURN.t，空操作）
+      // LLM 流式句 → 直灌 TTS 单会话 WS（say）；文本渲染由 final 统一 renderBotParts 分气泡，播放按 sentence_end 串行驱动
+      if (VOICE.ttsAvailable && VOICE.ttsPref && !TTS_LIVE.failed) {
+        ttsLiveSay(text); // 有声轮：字幕由 sentence_end 随语音起播对齐铺字
+      } else {
+        // 静音/未配置/WS 故障轮：文字自己就是流——句子到达即按朗读语速
+        // （~220ms/字，9s 封顶）模拟铺字，不再干等 final 整段蹦出
+        liveTextAppend(text, 0, Math.max(700, Math.min(9000, text.length * 220)));
+      }
+    }
+
+    function prefetchTts(text) {
+      // 预取当前句的合成音频（去重；失败静默，播放时现场重试）
+      if (TTS_QUEUE.prefetched[text] || !VOICE.ttsAvailable || !VOICE.ttsPref) return;
+      TTS_QUEUE.prefetched[text] = fetch(API_BASE + '/v1/voice/speak', {
+        method: 'POST',
+        headers: { ...authHeaders(), 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text }),
+      }).then((res) => {
+        if (!res.ok) throw new Error('HTTP ' + res.status);
+        return res.blob();
+      });
+    }
+
+    function handleStreamRevise(text) {
+      // 全文审查与已朗读内容不一致（或投机快路径无 sentence）：
+      // 停止旧轮朗读 + 用修正后文本重新开始一轮。
+      stopVoicePlayback();
+      if (TTS_LIVE.ws) { ttsLiveSend({ type: 'abort' }); killLiveWs(TTS_LIVE.ws); }
+      pcmStopAll();
+      TTS_LIVE.curBytes = []; TTS_LIVE.curChars = 0; TTS_LIVE.pendingTexts = [];
+      liveTextClear(); // 旧文字的 live 泡作废（新内容文字等 final 定稿）
+      TTS_LIVE.chain = Promise.resolve();
+      TTS_LIVE.roundDone = null;
+      TTS_LIVE.ended = false;
+      TTS_LIVE.roundStarted = false;
+      // 重新朗读修正后全文
+      beginSpeaking();
+      if (VOICE.ttsAvailable && !TTS_LIVE.failed) {
+        ttsLiveRound(text)
+          .then(() => endSpeaking())
+          .catch((err) => {
+            appendDebug('tts revise fallback: ' + err.message);
+            TTS_LIVE.failed = true;
+            ttsLiveReset();
+            TTS_LIVE.failed = true;
+            reviseHttpFallback(text);
+          });
+        return;
+      }
+      reviseHttpFallback(text);
+    }
+
+    // revise 的 HTTP 句队列回退（WS 不可用时）
+    function reviseHttpFallback(text) {
+      TTS_QUEUE.items = []; TTS_QUEUE.playing = false; TTS_QUEUE.aborted = false;
+      TTS_QUEUE.anySpoken = false;
+      const sentences = splitIntoSentences(text);
+      for (const s of sentences) { TTS_QUEUE.items.push(s); prefetchTts(s); }
+      pumpTtsQueueUntilDone().then(() => endSpeaking());
+    }
+
+    function handleStreamFinal(data) {
+      SESSION_ID = data.session_id;
+      updateRiskIndicator(data.risk);
+      updateDebugState(data);
+      const isCrisis = data.mode === 'crisis' || !!(data.risk && data.risk.needs_crisis_mode);
+      // 文本气泡：按 reply.messages 渲染成多个气泡（打字节奏），与旧非流式一致
+      liveTextClear(); // live 泡交棒正式气泡（同帧替换，无闪断）
+      hideTyping();
+      const parts = (data.reply && Array.isArray(data.reply.messages) && data.reply.messages.length)
+        ? data.reply.messages.slice(0, 3)
+        : [(data.reply && data.reply.text) || ''];
+      const hasText = parts.some((p) => (p || '').trim());
+      const dbg = data.debug || {};
+      const postRender = () => {
+        // 聊天入口卡片化：评估引导轮附「打开评估页」深链卡（与 fallback 路径同条件）
+        if (data.mode === 'assessment' && dbg.source === 'assessment_card' && dbg.assessment_type) {
+          renderAssessDeepLink(dbg.assessment_type);
+        }
+        // 图内练习进度标签（GPT Voice 式陪伴练习的可见进度）
+        if (dbg.source === 'practice_guide' && dbg.practice_action) {
+          renderPracticeBadge(dbg.practice_action, dbg.practice_step);
+        }
+        if (Array.isArray(data.question_options) && data.question_options.length) {
+          renderScaleChips(data.question_options);
+        }
+      };
+      if (hasText) {
+        // 定稿渲染跟音频走，三态：
+        // - 音频正在放（PCM 有积压）→ 空泡按剩余音频铺字，跳过 live 已铺字数；
+        // - 音频在途未起播（投机轮常态：WS 握手中、首块未到）→ 先不渲染，
+        //   等「第一声」起播再接管（live 泡继续随句上屏），6s 兜底直出——
+        //   音频真不来时不再按估算假爬几十秒（2026-09-10 无声+慢爬实证）；
+        // - 无音频轮（静音/未配置/WS 失败/ctx 被系统挂起）→ 即时渲染。
+        const audioCtxReady = !!(PCM.ctx && PCM.ctx.state === 'running');
+        const audioOn = !!(VOICE.ttsAvailable && VOICE.ttsPref && !TTS_LIVE.failed && audioCtxReady);
+        const pcmRemain = audioCtxReady ? Math.max(0, (PCM.cursor - PCM.ctx.currentTime) * 1000) : 0;
+        const pendingChars = (TTS_LIVE.pending.join('') + TTS_LIVE.pendingTexts.join('')).length;
+        const takeOver = () => {
+          // ctx 状态现查现用：waitFirstAudio 的 6s 等待期间 suspended→running
+          // 的转变很常见（resume() 异步完成），闭包旧值会误走即时渲染
+          const ctxReady = !!(PCM.ctx && PCM.ctx.state === 'running');
+          const totalChars = parts.reduce((n, p) => n + (p || '').length, 0);
+          const rem = ctxReady ? Math.max(0, (PCM.cursor - PCM.ctx.currentTime) * 1000) : 0;
+          const pend = (TTS_LIVE.pending.join('') + TTS_LIVE.pendingTexts.join('')).length * 220;
+          const remMs = Math.max(rem, pend);
+          if (remMs > 500 && totalChars > 0) {
+            TTS_LIVE.finalTakeover = true; // 此后 sentence_end 不再上屏字幕
+            liveTextClear();
+            renderBotParts(parts, data.mode, data.risk, postRender, {
+              audioRemainingMs: remMs,
+              revealedChars: Math.min(totalChars, LIVE_TEXT_SHOWN_CHARS),
+            });
+          } else {
+            renderBotParts(parts, data.mode, data.risk, postRender);
+          }
+        };
+        if (!audioOn) {
+          renderBotParts(parts, data.mode, data.risk, postRender);
+        } else if (pcmRemain > 300 || pendingChars === 0) {
+          takeOver();
+        } else {
+          showTyping(TYPING_TEXT);
+          const deadline = performance.now() + 6000;
+          const waitFirstAudio = () => {
+            const rem = (PCM.ctx && PCM.ctx.state === 'running') ? Math.max(0, (PCM.cursor - PCM.ctx.currentTime) * 1000) : 0;
+            if (rem > 300 || performance.now() > deadline || TTS_LIVE.failed || !TTS_LIVE.pendingTexts.length) {
+              takeOver();
+            } else {
+              setTimeout(waitFirstAudio, 250);
+            }
+          };
+          waitFirstAudio();
+        }
+      } else {
+        postRender();
+      }
+      // 朗读收尾：流式轮用 ttsLiveEndRound 收束；投机/无 sentence 轮用
+      // speakReply；HTTP 回退队列用 interval 等。危机则退出对话模式。
+      const finish = () => {
+        if (VOICE.mode === 'speaking') {
+          VOICE.lastCrisis = isCrisis; // endSpeaking：危机→退出；用户暂停过→回白框；否则黄→绿
+          endSpeaking();
+        }
+      };
+      if (TTS_LIVE.roundStarted && !TTS_LIVE.ended) {
+        // 流式轮：句已通过 WS say 发送，final 到了收束
+        ttsLiveEndRound().then(finish);
+      } else if (TTS_LIVE.roundStarted && TTS_LIVE.ended) {
+        // revise 已启动一轮（say+end），等 round_done
+        TTS_LIVE.chain.then(finish);
+      } else if (TTS_QUEUE.playing || TTS_QUEUE.items.length > 0) {
+        const timer = setInterval(() => {
+          if (!TTS_QUEUE.playing && TTS_QUEUE.items.length === 0) { clearInterval(timer); finish(); }
+        }, 300);
+      } else if (!TTS_LIVE.roundStarted && !TTS_QUEUE.anySpoken && hasText) {
+        // 无 sentence/revise 事件（极端情况）：兜底整段朗读
+        speakReply(data.reply, isCrisis);
+      } else {
+        finish();
+      }
+    }
+
+    async function pumpTtsQueue() {
+      if (TTS_QUEUE.playing || TTS_QUEUE.aborted) return;
+      const text = TTS_QUEUE.items.shift();
+      if (!text) return;
+      TTS_QUEUE.playing = true;
+      TTS_QUEUE.anySpoken = true;
+      try {
+        await speakSentenceStream(text);
+      } catch (err) {
+        appendDebug('tts queue skip: ' + err.message); // 单句失败不阻塞后续句
+      }
+      TTS_QUEUE.playing = false;
+      pumpTtsQueue();
+    }
+
+    async function speakSentenceStream(text) {
+      // 优先用预取的合成音频（句子到达时已开始合成，播放零等待）；
+      // 无预取（兜底/revise 场景）则现场调流式端点。resolve 于播放结束。
+      return new Promise((resolve, reject) => {
+        beginSpeaking(); // 暂停白框中的排队句也会拉起黄框，并记住播完回暂停
+        const blobPromise = TTS_QUEUE.prefetched[text]
+          ? TTS_QUEUE.prefetched[text].catch(() => null)
+          : null;
+        const play = (blob) => {
+          const url = URL.createObjectURL(blob);
+          const audio = new Audio(url);
+          // iOS 打断（来电/Siri/切后台）可能让 onended 与 onerror 都不触发：
+          // 超时看护强制推进队列，杜绝整条朗读链死锁。
+          const watchdog = setTimeout(() => {
+            try { audio.pause(); } catch (err) { /* 已停止 */ }
+            URL.revokeObjectURL(url);
+            if (VOICE.audioEl === audio) VOICE.audioEl = null;
+            resolve();
+          }, 4000 + text.length * 400);
+          const finish = () => {
+            clearTimeout(watchdog);
+            URL.revokeObjectURL(url);
+            if (VOICE.audioEl === audio) VOICE.audioEl = null;
+            resolve();
+          };
+          audio.onended = finish;
+          audio.onerror = () => { clearTimeout(watchdog); URL.revokeObjectURL(url); reject(new Error('audio error')); };
+          VOICE.audioEl = audio;
+          audio.play().then(() => { turnMark('firstAudio'); turnTryReport(); liveTextAppend(text, 0, Math.max(700, blob.size * 0.125)); })
+            .catch((e) => { clearTimeout(watchdog); URL.revokeObjectURL(url); reject(e); });
+        };
+        if (blobPromise) {
+          blobPromise.then((blob) => {
+            delete TTS_QUEUE.prefetched[text];
+            if (blob && blob.size > 1000) { play(blob); return; }
+            // 预取失败 → 现场调流式端点
+            return fetch(API_BASE + '/v1/voice/speak/stream', {
+              method: 'POST',
+              headers: { ...authHeaders(), 'Content-Type': 'application/json' },
+              body: JSON.stringify({ text }),
+            }).then((res) => {
+              if (!res.ok || !res.body) throw new Error('HTTP ' + res.status);
+              return res.blob();
+            }).then(play);
+          }).catch(reject);
+          return;
+        }
+        fetch(API_BASE + '/v1/voice/speak/stream', {
+          method: 'POST',
+          headers: { ...authHeaders(), 'Content-Type': 'application/json' },
+          body: JSON.stringify({ text }),
+        }).then((res) => {
+          if (!res.ok || !res.body) throw new Error('HTTP ' + res.status);
+          return res.blob();
+        }).then((blob) => {
+          const url = URL.createObjectURL(blob);
+          const audio = new Audio(url);
+          audio.onended = () => {
+            URL.revokeObjectURL(url);
+            if (VOICE.audioEl === audio) VOICE.audioEl = null;
+            resolve();
+          };
+          audio.onerror = () => { URL.revokeObjectURL(url); reject(new Error('audio error')); };
+          VOICE.audioEl = audio;
+          audio.play().then(() => { turnMark('firstAudio'); turnTryReport(); liveTextAppend(text, 0, Math.max(700, blob.size * 0.125)); })
+            .catch((e) => { URL.revokeObjectURL(url); reject(e); });
+        }).catch(reject);
+      });
+    }
+
+    async function sendMessageFallback(message) {
+      // 整段 /respond（与历史行为一致）：流式失败时的零风险回退
+      showTyping(ECHO_WAIT_TEXT);
+      try {
+        const sendBody = () => JSON.stringify({ user_id: USER_ID, session_id: SESSION_ID, message });
+        let res = await fetch(API_BASE + '/v1/conversations/respond', {
+          method: 'POST',
+          headers: authHeaders(),
+          body: sendBody()
+        });
+        if (res.status === 401 || res.status === 403) {
+          await ensureGuestAuth(); // 同流式路径：401/403 当场修复身份，重发一次
+          res = await fetch(API_BASE + '/v1/conversations/respond', {
+            method: 'POST',
+            headers: authHeaders(),
+            body: sendBody()
+          });
+        }
         if (!res.ok) throw new Error('HTTP ' + res.status);
         const data = await res.json();
         SESSION_ID = data.session_id;
@@ -2466,17 +3162,21 @@
           if (data.mode === 'assessment' && dbg.source === 'assessment_card' && dbg.assessment_type) {
             renderAssessDeepLink(dbg.assessment_type);
           }
+          // 图内练习进度标签（GPT Voice 式陪伴练习的可见进度）
+          if (dbg.source === 'practice_guide' && dbg.practice_action) {
+            renderPracticeBadge(dbg.practice_action, dbg.practice_step);
+          }
           if (Array.isArray(data.question_options) && data.question_options.length) {
             renderScaleChips(data.question_options);
           }
         });
+        // 语音朗读（气泡渲染与朗读并行）。危机回复绕过静音强制照读——
+        // 热线号码读出来更可达，安全设计优先于成本开关。
+        speakReply(data.reply, data.mode === 'crisis' || !!(data.risk && data.risk.needs_crisis_mode));
       } catch (err) {
         console.error(err);
         addMessage('bot', '抱歉，遇到了问题：' + err.message + '。请确认后端服务正在运行。');
-      } finally {
-        isLoading = false;
-        document.getElementById('sendBtn').disabled = false;
-        document.getElementById('messageInput').focus();
+        if (VOICE.mode === 'thinking') scheduleResumeListening(); // 网络失败后免提循环继续
       }
     }
 
@@ -2484,7 +3184,20 @@
       try {
         const res = await fetch(API_BASE + '/system/info');
         const data = await res.json();
-        document.getElementById('modelName').textContent = data.default_model || '未知';
+        // 模型实况单行 flex：对话/转写/朗读三角色（未配置语音时自动隐藏）；
+        // 展示名去网关后缀，保持单行紧凑
+        const m = data.models || {};
+        const short = (name) => String(name).replace(/-note-prev$|-hd$/, '');
+        const roles = [['聊', m.llm || data.default_model || '未知'], ['听', m.stt], ['说', m.tts]];
+        document.getElementById('modelName').innerHTML =
+          '<div class="model-line">' +
+          roles.filter(([, v]) => v)
+            .map(([k, v]) => {
+              const [name, provider] = String(v).split(/ \(|\)/).filter(Boolean);
+              return '<span><span class="mk">' + k + '</span>' + escapeHtml(short(name)) +
+                (provider ? '<span class="mk">·' + escapeHtml(provider) + '</span>' : '') + '</span>';
+            }).join('') +
+          '</div>';
         appendDebug('system/info => ' + JSON.stringify(data, null, 2));
       } catch (err) {
         document.getElementById('modelName').textContent = '加载失败';
@@ -2509,12 +3222,108 @@
     }
 
     function resetSession() {
-      USER_ID = 'u_' + Math.random().toString(36).slice(2, 10);
-      localStorage.setItem(STORE_KEYS.UID, USER_ID);
+      // 重置会话 ≠ 清屏：插入分割线，之前的消息保持可见（上下文可见性）；
+      // 身份（USER_ID）不变，只开新会话（SESSION_ID=null），下拉历史仍完整可用。
+      if (VOICE.mode !== 'idle') exitConversation();
       SESSION_ID = null;
+      const chatArea = document.getElementById('chatArea');
+      const div = document.createElement('div');
+      div.className = 'chat-divider';
+      div.textContent = '会话已重置 · 新会话开始 · ' + fmtHistoryDate(new Date().toISOString());
+      chatArea.appendChild(div);
+      chatArea.scrollTop = chatArea.scrollHeight;
       document.getElementById('currentMode').textContent = '未开始';
       document.getElementById('replySource').textContent = '已重置';
-      appendDebug('session reset => user_id=' + USER_ID);
+      appendDebug('session reset => divider inserted, history kept');
+    }
+
+    // ===== 历史上下文：刷新后顶部下拉分页加载旧会话 =====
+    // 数据源为后端既有接口：/v1/conversations/history（会话列表，新→旧）
+    // + /v1/conversations/{sid}/messages（会话内消息，旧→新）。一次下拉
+    // 加载一个旧会话，插到顶部并保持视口不跳动。
+    const HISTORY = { loading: false, done: false, sessions: null, idx: 0 };
+
+    function fmtHistoryDate(iso) {
+      const d = new Date(/Z|[+-]\d\d:?\d\d$/.test(iso) ? iso : iso + 'Z');
+      if (isNaN(d.getTime())) return '';
+      const p = (n) => (n < 10 ? '0' : '') + n;
+      return d.getFullYear() + '-' + p(d.getMonth() + 1) + '-' + p(d.getDate())
+        + ' ' + p(d.getHours()) + ':' + p(d.getMinutes());
+    }
+
+    function setHistoryUI(state) {
+      const top = document.getElementById('historyTop');
+      if (!top) return;
+      if (state === 'hidden') { top.style.display = 'none'; return; }
+      top.style.display = '';
+      if (state === 'loading') {
+        top.innerHTML = '<span class="history-note">加载中…</span>';
+      } else if (state === 'done') {
+        top.innerHTML = '<span class="history-note">— 历史开头 —</span>';
+      } else {
+        const label = state === 'error' ? '↑ 加载失败，点击重试' : '↑ 上拉 / 点击查看更早的对话';
+        top.innerHTML = '<button type="button" onclick="loadOlderHistory()">' + label + '</button>';
+      }
+    }
+
+    async function initHistory() {
+      try {
+        const res = await fetch(API_BASE + '/v1/conversations/history?user_id='
+          + encodeURIComponent(USER_ID) + '&limit=1', { headers: authHeaders() });
+        if (!res.ok) return;
+        const list = await res.json();
+        setHistoryUI(list.length ? 'idle' : 'hidden');
+      } catch (err) { /* 服务不可用：不显示提示，不影响当前会话 */ }
+    }
+
+    function historyBubble(role, content) {
+      const d = document.createElement('div');
+      d.className = 'msg ' + (role === 'user' ? 'user' : 'bot');
+      const inner = role === 'user' ? escapeHtml(content) : renderMarkdown(content);
+      d.innerHTML = '<div class="bubble">' + inner + '</div>';
+      return d;
+    }
+
+    async function loadOlderHistory() {
+      if (HISTORY.loading || HISTORY.done) return;
+      HISTORY.loading = true;
+      setHistoryUI('loading');
+      const chatArea = document.getElementById('chatArea');
+      try {
+        if (!HISTORY.sessions) {
+          const res = await fetch(API_BASE + '/v1/conversations/history?user_id='
+            + encodeURIComponent(USER_ID) + '&limit=100', { headers: authHeaders() });
+          if (!res.ok) throw new Error('HTTP ' + res.status);
+          HISTORY.sessions = (await res.json()).reverse(); // 升序；下拉从最新旧会话开始
+          HISTORY.idx = HISTORY.sessions.length;
+        }
+        if (!HISTORY.idx) { HISTORY.done = true; setHistoryUI('done'); return; }
+        const sess = HISTORY.sessions[--HISTORY.idx];
+        const res = await fetch(API_BASE + '/v1/conversations/'
+          + encodeURIComponent(sess.session_id) + '/messages', { headers: authHeaders() });
+        if (!res.ok) throw new Error('HTTP ' + res.status);
+        const msgs = (await res.json()).filter((m) => (m.content || '').trim());
+        const prevHeight = chatArea.scrollHeight;
+        const prevTop = chatArea.scrollTop;
+        const frag = document.createDocumentFragment();
+        const divider = document.createElement('div');
+        divider.className = 'chat-divider';
+        divider.textContent = fmtHistoryDate(sess.created_at) + ' · 更早的对话';
+        frag.appendChild(divider);
+        for (const m of msgs) frag.appendChild(historyBubble(m.role, m.content));
+        if (msgs.length) {
+          chatArea.insertBefore(frag, document.getElementById('historyTop').nextSibling);
+          // 顶部插入后保持视口位置：补回新增高度
+          chatArea.scrollTop = prevTop + (chatArea.scrollHeight - prevHeight);
+        }
+        if (!HISTORY.idx) { HISTORY.done = true; setHistoryUI('done'); }
+        else setHistoryUI('idle');
+      } catch (err) {
+        appendDebug('history load error => ' + err.message);
+        setHistoryUI('error');
+      } finally {
+        HISTORY.loading = false;
+      }
     }
 
     function handleKeyPress(e) {
@@ -2544,10 +3353,12 @@
       msgDiv.innerHTML = header + '<div class="bubble">' + bodyInner + '</div>';
       chatArea.appendChild(msgDiv);
       chatArea.scrollTop = chatArea.scrollHeight;
+      return msgDiv;
     }
 
     // 等待占位气泡：sendWaiting=发送后的等待期（回声文案）；气泡间打字节奏用"正在输入"。
     function showTyping(text) {
+      hideTyping(); // 同一时刻只保留一个等待气泡（录音/转写/回复渲染共用）
       const chatArea = document.getElementById('chatArea');
       const d = document.createElement('div');
       d.className = 'msg bot';
@@ -2566,18 +3377,97 @@
       if (t) t.remove();
     }
 
+    // live 文本泡与正式气泡共用一条揭示引擎（revealText）：文字沿近线性缓尾
+    // 曲线逐字铺出，总时长由调用方决定（= 该句音频时长 / 剩余音频预算）。
+    // LIVE_TEXT_ROUND 管排程字幕作废；REVEALS 登记在跑的动画（元素被移除即
+    // 自然停；打断时 finishAllReveals 把正式气泡瞬间补全，不留半截字）。
+    // LIVE_TEXT_SHOWN_CHARS 记本轮 live 泡已上屏字数——final 正式渲染据此
+    // 跳过已出现的字，杜绝「final 整段重铺」的突兀替换。
+    let LIVE_TEXT_ROUND = 0;
+    let LIVE_TEXT_SHOWN_CHARS = 0;
+    const REVEALS = new Set();
+    function revealText(bubble, text, elapsedMs, totalMs, htmlFinish) {
+      const job = {};
+      job.settle = () => {
+        if (htmlFinish) bubble.innerHTML = renderMarkdown(text);
+        else bubble.textContent = text;
+      };
+      REVEALS.add(job);
+      const t0 = performance.now() - Math.max(0, elapsedMs || 0);
+      const chatArea = document.getElementById('chatArea');
+      const tick = (now) => {
+        if (!REVEALS.has(job)) return;
+        if (!bubble.isConnected) { REVEALS.delete(job); return; }
+        const p = totalMs > 0 ? Math.min(1, (now - t0) / totalMs) : 1;
+        const e = 1 - Math.pow(1 - p, 1.25); // 近线性缓尾
+        if (p < 1) {
+          bubble.textContent = text.slice(0, Math.round(text.length * e));
+          chatArea.scrollTop = chatArea.scrollHeight;
+          requestAnimationFrame(tick);
+        } else {
+          job.settle();
+          REVEALS.delete(job);
+        }
+      };
+      requestAnimationFrame(tick);
+    }
+    function finishAllReveals() {
+      REVEALS.forEach((j) => { try { j.settle(); } catch (err) { /* 已随元素移除 */ } });
+      REVEALS.clear();
+    }
+    function liveTextAppend(text, elapsedMs, totalMs) {
+      if (!text) return;
+      hideTyping(); // 等待泡由实内容接管
+      const chatArea = document.getElementById('chatArea');
+      const el = document.createElement('div');
+      el.className = 'msg bot live-msg';
+      el.innerHTML = '<div class="bubble"></div>';
+      chatArea.appendChild(el);
+      LIVE_TEXT_SHOWN_CHARS += text.length;
+      revealText(el.querySelector('.bubble'), text, elapsedMs, totalMs, false);
+    }
+    function liveTextAppendRound(round, text, elapsedMs, totalMs) {
+      if (round === LIVE_TEXT_ROUND) liveTextAppend(text, elapsedMs, totalMs);
+    }
+    function liveTextClear() {
+      LIVE_TEXT_ROUND++;
+      document.querySelectorAll('.live-msg').forEach((el) => el.remove());
+    }
+
     // Render a reply as consecutive IM-style bubbles with typing rhythm between them.
-    function renderBotParts(parts, mode, risk, onDone) {
+    // sync={audioRemainingMs,revealedChars}：final 到达时音频仍在放——正式气泡
+    // 逐段揭示、总时长摊到剩余音频，跳过 live 泡已上屏的字数；无 sync（静音/
+    // 音频已完）照旧整气泡直出，不拖累阅读速度。
+    function renderBotParts(parts, mode, risk, onDone, sync) {
       let i = 0;
+      let consumed = sync ? Math.max(0, sync.revealedChars | 0) : 0;
       const step = () => {
         hideTyping();
         const first = i === 0;
-        addMessage('bot', parts[i], first ? mode : '', first ? risk : {}, first);
+        const text = parts[i] || '';
+        if (first) { turnMark('final'); turnTryReport(); } // 首个气泡可见 = 文本全链终点
+        if (!sync) {
+          addMessage('bot', text, first ? mode : '', first ? risk : {}, first);
+          i++;
+          if (i < parts.length) {
+            setTimeout(() => { showTyping(TYPING_TEXT); setTimeout(step, 700); }, 400);
+          } else if (onDone) {
+            onDone();
+          }
+          return;
+        }
+        // 音频同步定稿：空泡上屏 → 按"剩余音频 × 本段未揭示字数占比"铺字
+        const skip = Math.min(consumed, text.length);
+        consumed -= skip;
+        const remainingTotal = Math.max(1, parts.slice(i).reduce((n, p) => n + (p || '').length, 0));
+        const dur = Math.max(500, sync.audioRemainingMs * ((text.length - skip) / remainingTotal));
+        const msgEl = addMessage('bot', '', first ? mode : '', first ? risk : {}, first);
+        revealText(msgEl.querySelector('.bubble'), text, 0, dur, true);
         i++;
         if (i < parts.length) {
-          setTimeout(() => { showTyping(TYPING_TEXT); setTimeout(step, 700); }, 400);
-        } else if (onDone) {
-          onDone();
+          setTimeout(step, dur + 250); // 本段铺完稍候即下段（音频即节奏，不再插"正在输入"）
+        } else {
+          setTimeout(() => { if (onDone) onDone(); }, dur + 250);
         }
       };
       step();
@@ -2618,9 +3508,18 @@
       d.className = 'msg bot';
       let btns = '';
       options.forEach(o => {
-        btns += '<button type="button" class="chip" data-value="' + o.value + '" style="margin:3px"' +
-          ' onclick="pickScale(' + Number(o.value) + ')">' +
-          escapeHtml(String(o.value) + ' · ' + (o.label || '')) + '</button>';
+        // 动作 chip（练习同意/暂停等）：send 为回传文本，label 为展示文案；
+        // 数值 chip（问卷选项）维持原 scale 回传。
+        if (typeof o.send === 'string' && o.send) {
+          const sendText = o.send.replace(/'/g, "\\'");
+          btns += '<button type="button" class="chip" style="margin:3px"' +
+            ' onclick="pickChip(\'' + sendText + '\')">' +
+            escapeHtml(o.label || o.send) + '</button>';
+        } else {
+          btns += '<button type="button" class="chip" data-value="' + o.value + '" style="margin:3px"' +
+            ' onclick="pickScale(' + Number(o.value) + ')">' +
+            escapeHtml(String(o.value) + ' · ' + (o.label || '')) + '</button>';
+        }
       });
       d.innerHTML = '<div class="bubble"><div class="scale-options" data-live="1">' + btns + '</div></div>';
       chatArea.appendChild(d);
@@ -2631,6 +3530,973 @@
       clearStaleChips();
       document.getElementById('messageInput').value = String(value);
       sendMessage();
+    }
+
+    // 动作 chip（图内练习同意/暂停）：回传固定文本，气泡显示该文本。
+    function pickChip(text) {
+      clearStaleChips();
+      document.getElementById('messageInput').value = text;
+      sendMessage();
+    }
+
+    // ===== 语音 I/O（GPT Voice 式陪伴的语音层）=====
+    // STT：MediaRecorder 录音 → /v1/voice/transcribe → 文本自动发送（转写文本
+    // 就是普通聊天消息，完整走对话管线与风险筛查）。TTS：回复到达后拼接
+    // messages 走 /v1/voice/speak，未配置降级浏览器 SpeechSynthesis；新一轮
+    // 发送/录音即中断播放。隐私：音频即转即弃，不落任何存储。
+    const VOICE = {
+      sttAvailable: false,
+      ttsAvailable: false,
+      recording: false,
+      recorder: null,
+      chunks: [],
+      audioEl: null,
+      mode: 'idle',          // 免提对话状态机：idle | listening | thinking | speaking | paused
+      pausedHint: false,     // 暂停白框：先显「转写已暂停」，随即切「点击进入收音」
+      pauseHintTimer: 0,
+      resumeAfterSpeak: false, // 朗读时用户已暂停 → 黄框播完回到暂停白框
+      stream: null,          // 免提模式常驻麦克风流
+      vad: null,             // VAD 上下文（analyser/timer/基线/预滚环）
+      preRoll: null,         // 开口时取走的预滚 PCM（Float32Array, 麦克风采样率）
+      preRollRate: 16000,
+      mime: '',
+      discardUtterance: false,
+      sttFailStreak: 0,      // 免提连续转写失败计数：≥2 看门狗暂停拾音
+      sttDegraded: false,    // 服务端上游连续失败观察标志（/status stt_degraded）
+      bcUrls: [],            // P1 反馈应答预取 blob（"嗯嗯"类在场感短句）
+      bcNext: 0,
+      bcEl: null,
+      lastCrisis: false,     // 上一轮是否危机回复（朗读结束后决定是否继续听）
+      usedMic: localStorage.getItem('np_voice_used') === '1',
+      // ttsPref 语义=「开声」。默认开声：仅显式存过 '0'（用户点过静音）才关
+      ttsPref: localStorage.getItem('np_tts_pref') !== '0',
+    };
+
+    async function initVoice(retried) {
+      let data = null;
+      try {
+        const res = await fetch(API_BASE + '/v1/voice/status', { headers: authHeaders() });
+        if (!res.ok) {
+          // 401 等：鉴权刚自愈/令牌竞态——延迟重试一次，仍失败则提示刷新
+          if (!retried) { setTimeout(() => initVoice(true), 2500); return; }
+          document.getElementById('micHint').textContent = '语音不可用（' + res.status + '）：请强制刷新页面（Ctrl/Cmd+Shift+R）';
+          return;
+        }
+        data = await res.json();
+        VOICE.sttAvailable = !!data.stt;
+        VOICE.ttsAvailable = !!data.tts;
+        VOICE.sttDegraded = !!data.stt_degraded;
+        if (VOICE.ttsAvailable) loadBackchannels(); // P1：预取应答短句（失败静默）
+      } catch (err) {
+        appendDebug('voice/status error => ' + err.message);
+        if (!retried) { setTimeout(() => initVoice(true), 2500); return; }
+        return;
+      }
+      const micBtn = document.getElementById('micBtn');
+      const voiceRow = document.getElementById('voiceRow');
+      if (VOICE.sttAvailable) {
+        micBtn.style.display = '';
+        voiceRow.style.display = '';
+        document.getElementById('micHint').textContent = '点左侧麦克风进入免提对话；说完自动发送';
+        syncVoiceUI();
+      } else {
+        voiceRow.style.display = 'none';
+      }
+      // 静音按钮（成本开关）：静音时回复不调 TTS（危机回复除外，照读热线）。
+      const muteBtn = document.getElementById('muteBtn');
+      if (VOICE.ttsAvailable) {
+        muteBtn.style.display = '';
+        renderMuteBtn();
+        muteBtn.onclick = () => {
+          VOICE.ttsPref = !VOICE.ttsPref; // ttsPref 语义=「开声」
+          localStorage.setItem('np_tts_pref', VOICE.ttsPref ? '1' : '0');
+          renderMuteBtn();
+          if (!VOICE.ttsPref) {
+            // 静音即时生效：三路全掐——Audio 元素（旧 mp3）、PCM 队列（MiMo
+            // 主路径）、live 会话（否则后续 say 仍会在静音后继续合成出声）
+            stopVoicePlayback();
+            if (TTS_LIVE.ws) { ttsLiveSend({ type: 'abort' }); killLiveWs(TTS_LIVE.ws); }
+            pcmStopAll();
+            finishAllReveals(); // 不再跟随音频：在铺的气泡即刻补全
+          }
+        };
+      } else {
+        muteBtn.style.display = 'none';
+      }
+    }
+
+    // 静音按钮双态图标（音量开 ⇄ 静音叉），与麦克风按钮同一线性图标语言
+    const SPEAKER_ON_SVG =
+      '<svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' +
+      '<path d="M11 5 6 9H2v6h4l5 4V5z" fill="currentColor" stroke="none"></path>' +
+      '<path d="M15.5 8.5a5 5 0 0 1 0 7"></path>' +
+      '</svg>';
+    const SPEAKER_OFF_SVG =
+      '<svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' +
+      '<path d="M11 5 6 9H2v6h4l5 4V5z" fill="currentColor" stroke="none"></path>' +
+      '<line x1="16" y1="9" x2="22" y2="15"></line>' +
+      '<line x1="22" y1="9" x2="16" y2="15"></line>' +
+      '</svg>';
+
+    function renderMuteBtn() {
+      const btn = document.getElementById('muteBtn');
+      if (!btn) return;
+      // aria-pressed=true 表示「已静音」
+      btn.setAttribute('aria-pressed', VOICE.ttsPref ? 'false' : 'true');
+      btn.innerHTML = VOICE.ttsPref
+        ? SPEAKER_ON_SVG + '<span> 静音</span>'
+        : SPEAKER_OFF_SVG + '<span> 已静音</span>';
+      btn.title = VOICE.ttsPref
+        ? '点击静音（静音时不合成语音，节省成本）'
+        : '已静音：回复不朗读（危机求助信息仍会照读）。点击恢复开声';
+    }
+
+    function effectiveTtsOn(isCrisis) {
+      // 朗读生效条件：非静音，或危机回复强制朗读（热线可达性优先于静音）；
+      // 且需有可用的合成通道（服务端 TTS 或浏览器合成）。
+      const canSpeak = VOICE.ttsAvailable || 'speechSynthesis' in window;
+      if (!canSpeak) return false;
+      return (isCrisis || VOICE.ttsPref);
+    }
+
+    function stopVoicePlayback() {
+      if (VOICE.audioEl) { VOICE.audioEl.pause(); VOICE.audioEl = null; }
+      if ('speechSynthesis' in window) window.speechSynthesis.cancel();
+      if (VOICE.mode === 'speaking') {
+        // pause() 不触发 onended：手动收尾，防止模式卡死在 speaking。
+        // 麦还开着 → 回绿框继续听；否则退回打字输入态
+        VOICE.mode = VOICE.stream ? 'listening' : 'idle';
+        syncVoiceUI();
+        hideTyping();
+        document.getElementById('micHint').textContent = VOICE.stream
+          ? '免提对话中：直接说话即可；点输入框暂停转写；点键盘或 ESC 退出'
+          : '点左侧麦克风进入免提对话；说完自动发送';
+      }
+    }
+
+    // 左缘图标：麦克风（点击进入语音对话）⇄ 键盘（对话中，点击退出打字）
+    const MIC_ICON_SVG =
+      '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' +
+      '<path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3z"></path>' +
+      '<path d="M19 10v2a7 7 0 0 1-14 0v-2"></path>' +
+      '<line x1="12" y1="19" x2="12" y2="22"></line>' +
+      '</svg>';
+    const KBD_ICON_SVG =
+      '<svg viewBox="0 0 24 24" width="19" height="19" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' +
+      '<rect x="2.4" y="5.4" width="19.2" height="13.2" rx="2.2"></rect>' +
+      '<path d="M6.2 9h1.3M10 9h1.3M13.8 9h1.3M17.6 9h.6"></path>' +
+      '<path d="M6.2 12.1h1.3M10 12.1h1.3M13.8 12.1h1.3M17.6 12.1h.6"></path>' +
+      '<path d="M7.6 15.4h8.8"></path>' +
+      '</svg>';
+    const PAUSE_ICON_SVG =
+      '<svg viewBox="0 0 24 24" width="13" height="13" fill="currentColor" stroke="none" aria-hidden="true">' +
+      '<rect x="6" y="4.5" width="4" height="15" rx="1.6"></rect>' +
+      '<rect x="14" y="4.5" width="4" height="15" rx="1.6"></rect>' +
+      '</svg>';
+
+    // 整框文案（绿/黄/白三态即全部交互语言）
+    function voiceBoxText(mode) {
+      if (mode === 'listening') return '正在聆听，请讲…';
+      if (mode === 'thinking') return '思考中…';
+      if (mode === 'speaking') return '暂停中';
+      if (mode === 'paused') return VOICE.pausedHint ? '点击进入收音' : '转写已暂停';
+      return '';
+    }
+
+    // 沉浸式对话条：输入框本体即语音条——绿=聆听（人声时白色波形）、
+    // 黄=朗读暂停中、白=转写已暂停（点击进入收音）。不再用红色录音框。
+    function syncVoiceUI() {
+      const wrap = document.getElementById('inputWrap');
+      const btn = document.getElementById('micBtn');
+      const box = document.getElementById('voiceBox');
+      if (!wrap || !btn || !box) return;
+      const mode = VOICE.mode;
+      const inConv = mode !== 'idle';
+      wrap.classList.toggle('voice-on', inConv);
+      wrap.classList.toggle('vo-speaking', mode === 'speaking');
+      wrap.classList.toggle('vo-paused', mode === 'paused');
+      wrap.classList.toggle('vo-hint', mode === 'paused' && VOICE.pausedHint);
+      btn.innerHTML = inConv ? KBD_ICON_SVG : MIC_ICON_SVG;
+      btn.title = inConv ? '退出语音对话，回到打字' : '点击进入语音对话';
+      btn.setAttribute('aria-label', inConv ? '退出语音对话' : '语音输入');
+      box.style.display = inConv ? '' : 'none';
+      box.classList.toggle('vo-paused-text', mode === 'paused');
+      box.classList.toggle('vo-hint-text', mode === 'paused' && VOICE.pausedHint);
+      const icon = document.getElementById('voiceBoxIcon');
+      icon.innerHTML = mode === 'speaking' ? PAUSE_ICON_SVG
+        : (mode === 'paused' && VOICE.pausedHint) ? MIC_ICON_SVG : '';
+      icon.classList.toggle('dark', mode === 'paused');
+      document.getElementById('voiceBoxLabel').textContent = voiceBoxText(mode);
+      document.getElementById('voiceWave').classList.toggle('on', mode === 'listening' && VOICE.recording);
+      document.getElementById('sendBtn').style.display = inConv ? 'none' : '';
+    }
+
+    function setVoiceMode(mode) {
+      VOICE.mode = mode;
+      syncVoiceUI();
+      if (mode === 'listening') { showTyping('正在聆听'); ensureMicAlive(); }
+      if (mode === 'speaking' || mode === 'paused') hideTyping();
+      syncMicPlaybackExclusion(mode);
+    }
+
+    // ---- 媒体/通话模式互斥（跨设备"不出音/音量小"根治）----
+    // 朗读时挂起麦克风会话：mic track 禁用 + AudioContext suspend，让系统
+    // 退回纯媒体播放路由（扬声器全音量）；播完恢复采集。AudioContext 不参与
+    // 任何播放（只做 VAD 分析），挂起不影响 TTS 音频。
+    function syncMicPlaybackExclusion(mode) {
+      // 朗读中或用户「转写已暂停」都挂起采集：让系统退回纯媒体播放路由，
+      // 暂停时也让系统麦克风指示熄灭（转写确实停了）
+      const speaking = mode === 'speaking' || mode === 'paused';
+      try {
+        if (VOICE.stream) VOICE.stream.getAudioTracks().forEach((t) => { t.enabled = !speaking; });
+      } catch (err) { /* track 操作失败不阻塞播放 */ }
+      const vad = VOICE.vad;
+      if (vad && vad.ctx) {
+        try {
+          if (speaking) { if (vad.ctx.state === 'running') vad.ctx.suspend(); }
+          else if (vad.ctx.state === 'suspended') vad.ctx.resume();
+        } catch (err) { /* 恢复失败由 VAD tick 的自愈兜底 */ }
+      }
+    }
+
+    // ---------------- 免提对话模式（能量 VAD 自动听-说循环） ----------------
+    // 麦克风一键进入：常驻 stream + AnalyserNode 本地能量检测——检测到人声
+    // 自动开录，静音 1.5s 自动停止并走既有「转写→发送」链路；回复朗读期间
+    // 暂停聆听（防回声），播完自动恢复。VAD 只算 RMS，音频不上传。
+
+    const VAD = {
+      TICK_MS: 100,          // 采样周期
+      START_MS: 200,         // 连续超阈 200ms 判定开口
+      END_SILENCE_MS: 1500,  // 静音 1.5s 判定说完
+      MIN_UTTERANCE_MS: 800, // 短于此的有效语音丢弃（防咳嗽/碰撞误触）
+      MAX_UTTERANCE_MS: 60000,
+      PRE_ROLL_MS: 400,      // 开口前原始 PCM 缓存：覆盖判阈延迟，找回开头音素
+    };
+
+    // ---- 语音回合分阶段打点（借鉴 WhisperLiveKit remaining_time_* 分段）----
+    // 只记免提回合的时间线（打字轮没有 speechEnd 锚点，不计数）；阶段齐了
+    // 把差值 POST /v1/voice/turn_metrics——纯数值，无任何文本/音频内容。
+    const TURN = { t: null };
+    function turnBegin() { TURN.t = { speechEnd: performance.now() }; }
+    function turnMark(stage) { if (TURN.t && !TURN.t[stage]) TURN.t[stage] = performance.now(); }
+    function turnTryReport() {
+      const t = TURN.t;
+      if (!t || !t.stt || !t.final) return;
+      const ttsOn = !!(VOICE.ttsAvailable && VOICE.ttsPref);
+      if (ttsOn && !t.firstAudio) {
+        // 首句音频未起播：再等 4s（可能还在合成/回退链路上），超时按可报部分上报
+        if (!t.audioWaited) { t.audioWaited = true; setTimeout(turnTryReport, 4000); return; }
+      }
+      TURN.t = null;
+      const d = (a, b) => (t[a] && t[b]) ? Math.round(t[b] - t[a]) : undefined;
+      const payload = {
+        speech_end_to_stt_ms: d('speechEnd', 'stt'),
+        stt_to_first_sentence_ms: d('stt', 'firstSentence'),
+        first_sentence_to_final_ms: d('firstSentence', 'final'),
+        final_to_first_audio_ms: d('final', 'firstAudio'),
+        speech_end_to_first_audio_ms: d('speechEnd', 'firstAudio'),
+        tts_enabled: ttsOn,
+      };
+      fetch(API_BASE + '/v1/voice/turn_metrics', {
+        method: 'POST',
+        headers: { ...authHeaders(), 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      }).catch(() => {}); // 打点尽力而为，绝不影响对话
+    }
+
+    // iOS play() 手势策略：播放必须在用户手势调用栈内首次启动。在进入免提
+    // 的点击里静音播一段静音音频完成"解锁"（解锁对所有后续 Audio 生效），
+    // 之后 STT→LLM 异步链后的真实朗读不再被 NotAllowedError 拦截。
+    let iOSAudioUnlocked = false;
+    function unlockAudioForIos() {
+      if (iOSAudioUnlocked || !window.AudioContext && !window.webkitAudioContext) return;
+      try {
+        const AC = window.AudioContext || window.webkitAudioContext;
+        const ctx = new AC();
+        const buffer = ctx.createBuffer(1, 1, 22050); // 1 帧静音
+        const src = ctx.createBufferSource();
+        src.buffer = buffer;
+        src.connect(ctx.destination);
+        if (ctx.state === 'suspended') ctx.resume();
+        src.start(0);
+        src.onended = () => { ctx.close && ctx.close(); };
+        iOSAudioUnlocked = true;
+      } catch (err) { /* 解锁失败不阻塞主流程（各播放点仍有降级） */ }
+    }
+
+    // 交互链闭环：麦克风进入（绿框·自动开 STT）→ 朗读时黄框「暂停中」→
+    // 播完回绿框继续识别（人声时白色波形）→ 点绿框暂停（白框「转写已暂停」
+    // →「点击进入收音」）→ 点击继续收音；键盘图标退出语音回到打字。
+    function onMicIconTap() {
+      if (VOICE.mode !== 'idle') { exitConversation(); return; } // 对话态左图标=键盘：退出打字
+      startConversation();
+    }
+
+    function startConversation() {
+      if (!navigator.mediaDevices || !window.MediaRecorder) {
+        addMessage('bot', '当前浏览器不支持录音，请直接打字。');
+        return;
+      }
+      abortAllPlayback();
+      showTyping('正在开启麦克风');
+      unlockAudioForIos(); // 用户手势内解锁音频播放（iOS play() 策略）
+      pcmEnsureCtx(); // 同上：手势内预建 PCM 播放上下文
+      navigator.mediaDevices.getUserMedia({
+        audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
+      }).then((stream) => {
+        VOICE.stream = stream;
+        wireMicGuards(stream); // 采集流死亡自愈（iOS 后台切换/系统中断常态）
+        VOICE.sttFailStreak = 0; // 每次重新进入免提都给看门狗一次机会
+        setupVad(stream);
+        setVoiceMode('listening');
+        showTyping('正在聆听');
+        document.getElementById('micHint').textContent = '免提对话中：直接说话即可；点输入框暂停转写；点键盘或 ESC 退出';
+        if (VOICE.sttDegraded) addMessage('bot', '提示：语音服务最近连续报错，转写可能暂时不可用；若失败请直接打字，稍后会自动恢复。');
+      }).catch(() => {
+        hideTyping();
+        syncVoiceUI();
+        addMessage('bot', '无法访问麦克风，请检查浏览器权限后重试。');
+      });
+    }
+
+    function voiceBoxTap() {
+      const mode = VOICE.mode;
+      if (mode === 'idle') { startConversation(); return; }
+      if (mode === 'speaking') {
+        // 点黄框打断朗读：非危机且麦还开着 → 回绿框继续听；
+        // 若打断前用户处于暂停 → 恢复白框（不违背用户意图）
+        const wasCrisis = VOICE.lastCrisis;
+        const backToPaused = VOICE.resumeAfterSpeak;
+        abortAllPlayback();
+        if (wasCrisis || !VOICE.stream) { exitConversation(); return; }
+        if (backToPaused) { enterPaused(); return; }
+        setVoiceMode('listening');
+        return;
+      }
+      if (mode === 'paused') { resumeListening(); return; }
+      enterPaused(); // 绿框（listening/thinking）点击 → 暂停转写
+    }
+
+    function enterPaused() {
+      clearTimeout(VOICE.pauseHintTimer);
+      VOICE.resumeAfterSpeak = false;
+      VOICE.pausedHint = false;
+      if (VOICE.recording) { // 正在采集的段落随暂停一并丢弃
+        VOICE.discardUtterance = true;
+        stopUtterance();
+      }
+      setVoiceMode('paused');
+      document.getElementById('micHint').textContent = '转写已暂停：点白框继续收音；点键盘或 ESC 退出语音对话';
+      // 先显示「转写已暂停」，随即切换为「点击进入收音」提示
+      VOICE.pauseHintTimer = setTimeout(() => {
+        if (VOICE.mode !== 'paused') return;
+        VOICE.pausedHint = true;
+        syncVoiceUI();
+      }, 1100);
+    }
+
+    function resumeListening() {
+      clearTimeout(VOICE.pauseHintTimer);
+      VOICE.pausedHint = false;
+      setVoiceMode('listening');
+      document.getElementById('micHint').textContent = '免提对话中：直接说话即可；点输入框暂停转写；点键盘或 ESC 退出';
+    }
+
+    // 彻底停掉一轮朗读：当前音频 + 句级队列 + 整轮 WS 会话（打断路径用，
+    // stopVoicePlayback 只掐当前句，队列/串播链会继续推下一句）
+    function abortAllPlayback() {
+      stopVoicePlayback();
+      TTS_QUEUE.aborted = true;
+      TTS_QUEUE.items = [];
+      if (TTS_LIVE.ws) { ttsLiveSend({ type: 'abort' }); killLiveWs(TTS_LIVE.ws); }
+      pcmStopAll(); // PCM 队列即刻噤声（旧路径靠 stopVoicePlayback 掐元素，这里掐 source 队列）
+      TTS_LIVE.curBytes = []; TTS_LIVE.curChars = 0; TTS_LIVE.pendingTexts = [];
+      TTS_LIVE.sentenceStart = null; TTS_LIVE.firstAudioMarked = false; TTS_LIVE.sentenceSamples = 0;
+      pcmStopAll();
+      TTS_LIVE.chain = Promise.resolve();
+      liveTextClear();
+      finishAllReveals(); // 铺到一半的正式气泡瞬间补全，不留半截字
+      const done = TTS_LIVE.roundDone;
+      TTS_LIVE.roundDone = null;
+      if (done) done();
+    }
+
+    // ---- 麦克风采集流自愈 ----
+    // iOS 后台切换/系统中断/Siri 抢占会悄悄杀掉采集流（track 变 muted 或
+    // ended，VAD 从此全零），用户感知就是「说话识别不了」。muted/ended
+    // 事件触发就地重取：权限已授权不会弹窗；旧 AudioContext/VAD 拆掉重建。
+    let MIC_RESTARTING = false;
+    function wireMicGuards(stream) {
+      stream.getTracks().forEach((t) => {
+        t.onended = () => restartMic('track ended');
+        t.onmute = () => restartMic('track muted');
+      });
+    }
+    async function restartMic(reason) {
+      if (MIC_RESTARTING) return;
+      if (VOICE.mode !== 'listening' && VOICE.mode !== 'thinking') return; // 朗读/暂停/退出态的静音是故意的
+      MIC_RESTARTING = true;
+      appendDebug('mic restart: ' + reason);
+      try {
+        if (VOICE.stream) {
+          VOICE.stream.getTracks().forEach((t) => { t.onended = null; t.onmute = null; t.stop(); });
+        }
+        const stream = await navigator.mediaDevices.getUserMedia({
+          audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
+        });
+        VOICE.stream = stream;
+        wireMicGuards(stream);
+        if (VOICE.vad) {
+          clearInterval(VOICE.vad.timer);
+          if (VOICE.vad.preNode) { try { VOICE.vad.preNode.disconnect(); } catch (e) { /* 已随 ctx 关闭 */ } }
+          try { VOICE.vad.ctx.close(); } catch (e) { /* 已关 */ }
+          VOICE.vad = null;
+        }
+        setupVad(stream);
+        appendDebug('mic restart ok');
+      } catch (err) {
+        appendDebug('mic restart failed: ' + err.message);
+      }
+      MIC_RESTARTING = false;
+    }
+    function ensureMicAlive() {
+      // 回到聆听态时显式体检：上一轮朗读后流被系统杀掉的话立刻重取，
+      // 不等用户开口才发现（macOS Edge 二轮识别失败的防线之一）
+      const t = VOICE.stream && VOICE.stream.getTracks()[0];
+      if (!t || t.readyState !== 'live' || t.muted) restartMic('dead on resume');
+    }
+
+    function setupVad(stream) {
+      const ctx = new (window.AudioContext || window.webkitAudioContext)();
+      const analyser = ctx.createAnalyser();
+      analyser.fftSize = 1024;
+      const srcNode = ctx.createMediaStreamSource(stream);
+      srcNode.connect(analyser);
+      const vad = {
+        ctx, analyser,
+        buf: new Float32Array(analyser.fftSize),
+        baseline: 0.006, calibrating: true, calSum: 0, calN: 0,
+        voiceStartAt: null, lastVoiceAt: 0, utterStartAt: 0,
+        pre: null, preNode: null,
+      };
+      VOICE.vad = vad;
+      // 预滚环形缓冲：VAD 判开口要连续超阈 200ms，MediaRecorder 再晚一拍才
+      // 真开始编码——开头音素必丢，直接伤首词识别（WhisperLiveKit 用
+      // speech_pad 回垫的思路，我们回垫整段原始 PCM）。持续缓存最近
+      // PRE_ROLL_MS 帧，开口时 takePreRoll() 拼进转写音频。
+      try {
+        const createSP = ctx.createScriptProcessor
+          ? ctx.createScriptProcessor.bind(ctx)
+          : ctx.createJavaScriptNode.bind(ctx); // 老 webkit
+        const cap = Math.ceil(ctx.sampleRate * VAD.PRE_ROLL_MS / 1000);
+        const pre = { cap, chunks: [], n: 0 };
+        vad.pre = pre;
+        const node = createSP(1024, 1, 1);
+        node.onaudioprocess = (e) => {
+          const d = e.inputBuffer.getChannelData(0);
+          pre.chunks.push(d.slice(0)); // 回调复用缓冲：必须拷贝
+          pre.n += d.length;
+          while (pre.n > pre.cap) {
+            const head = pre.chunks[0];
+            const excess = pre.n - pre.cap;
+            if (head.length <= excess) { pre.chunks.shift(); pre.n -= head.length; }
+            else { pre.chunks[0] = head.subarray(excess); pre.n = pre.cap; }
+          }
+        };
+        // 输出保持静音（不写 outputBuffer）：连接 destination 只为驱动回调，
+        // 不回放麦克风（ScriptProcessorNode 已废弃但全平台可用，含 iOS——
+        // AudioWorklet 需要异步 addModule 且老 Safari 缺失，此处取兼容）
+        srcNode.connect(node);
+        node.connect(ctx.destination);
+        vad.preNode = node;
+      } catch (err) {
+        vad.pre = null; // 建环失败：无预滚也能录音，只是开头少 400ms
+      }
+      vad.timer = setInterval(() => {
+        if (!VOICE.vad) return;
+        analyser.getFloatTimeDomainData(vad.buf);
+        let sum = 0;
+        for (let i = 0; i < vad.buf.length; i++) sum += vad.buf[i] * vad.buf[i];
+        const rms = Math.sqrt(sum / vad.buf.length);
+        if (vad.calibrating) {
+          // 开场 500ms 采环境底噪，阈值 = 底噪 × 3（有下限防完全静音环境）
+          vad.calSum += rms; vad.calN++;
+          if (vad.calN >= 5) {
+            vad.calibrating = false;
+            vad.baseline = Math.max(0.004, (vad.calSum / vad.calN) * 3);
+          }
+          return;
+        }
+        vadTick(rms);
+      }, VAD.TICK_MS);
+    }
+
+    function vadTick(rms) {
+      const vad = VOICE.vad;
+      const now = Date.now();
+      // 回声防护/用户暂停：非聆听态不采集，也不去抢挂起的 AudioContext
+      if (VOICE.mode !== 'listening') { vad.lastVoiceAt = now; return; }
+      // iOS 规则：AudioContext 被系统中断后进入 suspended 且不自动恢复，
+      // AnalyserNode 会一直返回全零——tick 里发现挂起立即拉起（自愈）。
+      if (vad.ctx && vad.ctx.state === 'suspended') vad.ctx.resume().catch(() => {});
+      const voiced = rms > vad.baseline * 3;
+      if (!VOICE.recording) {
+        if (voiced) {
+          vad.voiceStartAt = vad.voiceStartAt || now;
+          if (now - vad.voiceStartAt >= VAD.START_MS) startUtterance();
+        } else {
+          vad.voiceStartAt = null;
+        }
+        return;
+      }
+      // 录音中：说完（静音 1.5s）自动发送；超长强制切段
+      if (voiced) vad.lastVoiceAt = now;
+      const voicedMs = now - vad.utterStartAt;
+      if (now - vad.lastVoiceAt >= VAD.END_SILENCE_MS) {
+        // 有效语音过短（咳嗽/碰撞）→ 丢弃不上传
+        VOICE.discardUtterance = voicedMs < VAD.MIN_UTTERANCE_MS;
+        stopUtterance();
+      } else if (voicedMs >= VAD.MAX_UTTERANCE_MS) {
+        stopUtterance();
+      }
+    }
+
+    function takePreRoll() {
+      const vad = VOICE.vad;
+      if (!vad || !vad.pre || !vad.pre.n) return null;
+      const out = new Float32Array(vad.pre.n);
+      let off = 0;
+      for (const c of vad.pre.chunks) { out.set(c, off); off += c.length; }
+      return out;
+    }
+
+    function startUtterance() {
+      stopBackchannel(); // 用户抢先开口：应答让位，且不带着短音尾巴进录音
+      // 取走预滚（此刻环形缓冲尾 = 判定开口的瞬间，MediaRecorder 从这之后
+      // 才开始编码——两段首尾相接、无重叠）
+      VOICE.preRoll = takePreRoll();
+      VOICE.preRollRate = (VOICE.vad && VOICE.vad.ctx && VOICE.vad.ctx.sampleRate) || 16000;
+      // 编码优先级：MiniMax ASR 支持 mp4/aac 与 ogg/opus，不支持 webm 容器
+      const mime = ['audio/mp4', 'audio/ogg;codecs=opus', 'audio/webm']
+        .find((m) => MediaRecorder.isTypeSupported(m)) || '';
+      const recorder = new MediaRecorder(VOICE.stream, mime ? { mimeType: mime } : undefined);
+      VOICE.chunks = [];
+      VOICE.discardUtterance = false;
+      VOICE.recorder = recorder;
+      VOICE.mime = mime;
+      VOICE.vad.utterStartAt = Date.now();
+      VOICE.vad.lastVoiceAt = Date.now();
+      recorder.ondataavailable = (e) => { if (e.data.size) VOICE.chunks.push(e.data); };
+      recorder.onstop = onUtteranceStop;
+      recorder.start();
+      VOICE.recording = true;
+      syncVoiceUI(); // 激活绿框内的白色说话波形（不再用红色录音框）
+      showTyping('正在聆听');
+    }
+
+    function stopUtterance() {
+      if (VOICE.recorder && VOICE.recorder.state === 'recording') VOICE.recorder.stop();
+    }
+
+    function onUtteranceStop() {
+      VOICE.recording = false;
+      syncVoiceUI(); // 收起波形
+      const blob = new Blob(VOICE.chunks, { type: VOICE.mime || 'audio/webm' });
+      if (VOICE.mode === 'idle' || VOICE.mode === 'paused') return; // 暂停/退出时不上传刚截的段
+      if (VOICE.discardUtterance || blob.size <= 1000) {
+        if (VOICE.mode === 'listening') setVoiceMode('listening'); // 丢弃段：继续听
+        return;
+      }
+      setVoiceMode('thinking');
+      turnBegin(); // 回合时间线起点：VAD 判「说完」的瞬间
+      scheduleBackchannel(); // P1：若这轮要等一会儿，先给一声"嗯——"
+      // 各家 ASR 支持的容器不一：统一转 16kHz 单声道 WAV 上传（供应商无关）；
+      // 预滚段拼在最前，找回 VAD 判阈期间丢掉的开头音素
+      const preRoll = VOICE.preRoll;
+      const preRollRate = VOICE.preRollRate;
+      VOICE.preRoll = null;
+      transcodeToWav(blob, preRoll, preRollRate)
+        .then((wav) => {
+          if (wav.size > 1000) return uploadForTranscribe(wav, 'audio/wav');
+          setVoiceMode('listening');
+        })
+        .catch(() => {
+          if (voiceSttFailed()) return; // 连续失败：看门狗已接管，不再叠加提示
+          addMessage('bot', '录音处理失败，请直接打字或再试一次。');
+          scheduleResumeListening();
+        });
+    }
+
+    function scheduleResumeListening() {
+      if (VOICE.mode === 'idle') return;
+      // 等回复气泡渲染节奏走完再回听，避免用户听到「正在输入」就抢答
+      setTimeout(() => { if (VOICE.mode === 'thinking') setVoiceMode('listening'); }, 1200);
+    }
+
+    // ---- P1 反馈应答（backchannel）：thinking 死区的在场感短音 ----
+    // initVoice 时一次性预取成 blob（服务端文本缓存，上游至多各打一次）；
+    // 说完话 650ms 后若仍在 thinking 且没在录，55% 概率播一条轮换短句（≤0.8s）。
+    // 停止点三层：用户抢先开口（startUtterance）、真回复开声让位（beginSpeaking）、
+    // 退出免提（exitConversation）。风险记录：极快接话时录音头可能带入短句
+    // 尾音（≈0.2s "嗯"），ASR 容忍，真机观察。
+    async function loadBackchannels() {
+      if (VOICE.bcUrls.length) return;
+      try {
+        const res = await fetch(API_BASE + '/v1/voice/backchannel', { headers: authHeaders() });
+        if (!res.ok) return;
+        const n = ((await res.json()).count || 0);
+        const urls = await Promise.all(Array.from({ length: n }, (_, i) =>
+          fetch(API_BASE + '/v1/voice/backchannel/' + i, { headers: authHeaders() })
+            .then((r) => (r.ok ? r.blob() : null))
+            .then((b) => (b && b.size > 500 ? URL.createObjectURL(b) : null))
+            .catch(() => null)));
+        VOICE.bcUrls = urls.filter(Boolean);
+      } catch (err) { /* 预取失败 = 无应答，一切照旧 */ }
+    }
+    const BACKCHANNEL_ENABLED = false; // 2026-09-10 实证风险：thinking 态麦克风开启，短音有污染录音头/打断 iOS 麦克风会话风险，待独立验证后再放开
+    function scheduleBackchannel() {
+      if (!BACKCHANNEL_ENABLED || !VOICE.bcUrls.length) return;
+      setTimeout(() => {
+        if (VOICE.mode !== 'thinking' || VOICE.recording) return;
+        if (Math.random() > 0.55) return;
+        stopBackchannel();
+        const el = new Audio(VOICE.bcUrls[VOICE.bcNext % VOICE.bcUrls.length]);
+        VOICE.bcNext++;
+        el.volume = 0.85;
+        VOICE.bcEl = el;
+        el.onended = () => { if (VOICE.bcEl === el) VOICE.bcEl = null; };
+        el.play().catch(() => {}); // 非手势/权限态静默失败
+      }, 650);
+    }
+    function stopBackchannel() {
+      if (VOICE.bcEl) { try { VOICE.bcEl.pause(); } catch (err) { /* 已停 */ } VOICE.bcEl = null; }
+    }
+
+    function voiceSttFailed() {
+      // Fail-loud 看门狗（WhisperLiveKit silent-backend guard 的同款立场）：
+      // 连续失败对着一台坏掉的上游反复重说比直接停更残忍。第 2 次连续失败
+      // 即退出免提 + 说明；成功转写或重新进入免提都会归零。
+      VOICE.sttFailStreak++;
+      if (VOICE.sttFailStreak < 2) return false;
+      exitConversation();
+      addMessage('bot', '语音识别连续失败了几次，我先暂停拾音了。请直接打字，稍后再点麦克风试一次。');
+      return true;
+    }
+
+    function exitConversation() {
+      clearTimeout(VOICE.pauseHintTimer);
+      stopBackchannel();
+      VOICE.pausedHint = false;
+      VOICE.resumeAfterSpeak = false;
+      VOICE.discardUtterance = true; // 退出时正在录的段落直接丢弃
+      stopUtterance();
+      if (VOICE.vad) {
+        clearInterval(VOICE.vad.timer);
+        if (VOICE.vad.preNode) { try { VOICE.vad.preNode.disconnect(); } catch (e) { /* 已随 ctx 关闭 */ } }
+        VOICE.vad.ctx && VOICE.vad.ctx.close();
+        VOICE.vad = null;
+      }
+      VOICE.preRoll = null;
+      if (VOICE.stream) { VOICE.stream.getTracks().forEach((t) => t.stop()); VOICE.stream = null; }
+      stopVoicePlayback();
+      // PCM 时代补全停播三件套：断 live 会话、掐队列、补全在铺的字（旧实现只
+      // 掐 Audio 元素，PCM 队列会在退出后继续出声）
+      if (TTS_LIVE.ws) { ttsLiveSend({ type: 'abort' }); killLiveWs(TTS_LIVE.ws); }
+      pcmStopAll();
+      finishAllReveals();
+      VOICE.mode = 'idle';
+      syncVoiceUI();
+      hideTyping();
+      document.getElementById('micHint').textContent = '点左侧麦克风进入免提对话；说完自动发送';
+    }
+
+    async function transcodeToWav(blob, preRoll, preRollRate) {
+      // 浏览器内转码：decodeAudioData 解任意 MediaRecorder 容器 →
+      // OfflineAudioContext 重采样 16kHz 单声道 → 手工编码 16-bit PCM WAV。
+      // preRoll（可选）为麦克风采样率的原始 PCM 帧，作为另一个 bufferSource
+      // 排在录音段之前，与主段走同一条离线重采样链（免手写插值、免变速错位）。
+      const arrayBuf = await blob.arrayBuffer();
+      const ctx = new (window.AudioContext || window.webkitAudioContext)();
+      let decoded;
+      try {
+        decoded = await ctx.decodeAudioData(arrayBuf);
+      } finally {
+        ctx.close && ctx.close();
+      }
+      const targetRate = 16000;
+      const preRate = preRollRate || targetRate;
+      const preDur = preRoll && preRoll.length ? preRoll.length / preRate : 0;
+      const offline = new OfflineAudioContext(1, Math.max(1, Math.ceil((decoded.duration + preDur) * targetRate)), targetRate);
+      if (preDur > 0) {
+        const pb = offline.createBuffer(1, preRoll.length, preRate);
+        pb.getChannelData(0).set(preRoll);
+        const ps = offline.createBufferSource();
+        ps.buffer = pb;
+        ps.connect(offline.destination);
+        ps.start(0);
+      }
+      const src = offline.createBufferSource();
+      src.buffer = decoded;
+      src.connect(offline.destination);
+      src.start(preDur);
+      const rendered = await offline.startRendering();
+      const ch = rendered.getChannelData(0);
+      const buf = new ArrayBuffer(44 + ch.length * 2);
+      const view = new DataView(buf);
+      const wstr = (off, s) => { for (let i = 0; i < s.length; i++) view.setUint8(off + i, s.charCodeAt(i)); };
+      wstr(0, 'RIFF'); view.setUint32(4, 36 + ch.length * 2, true); wstr(8, 'WAVE');
+      wstr(12, 'fmt '); view.setUint32(16, 16, true); view.setUint16(20, 1, true); view.setUint16(22, 1, true);
+      view.setUint32(24, targetRate, true); view.setUint32(28, targetRate * 2, true);
+      view.setUint16(32, 2, true); view.setUint16(34, 16, true);
+      wstr(36, 'data'); view.setUint32(40, ch.length * 2, true);
+      for (let i = 0, off = 44; i < ch.length; i++, off += 2) {
+        const s = Math.max(-1, Math.min(1, ch[i]));
+        view.setInt16(off, s < 0 ? s * 0x8000 : s * 0x7FFF, true);
+      }
+      return new Blob([buf], { type: 'audio/wav' });
+    }
+
+    async function uploadForTranscribe(blob, mime) {
+      showTyping('正在转写');
+      try {
+        const ext = mime.includes('wav') ? 'wav' : mime.includes('ogg') ? 'ogg' : (mime.includes('mp4') || mime.includes('m4a')) ? 'm4a' : 'webm';
+        const fd = new FormData();
+        fd.append('file', blob, 'recording.' + ext);
+        // multipart 上传不能带固定 Content-Type：authHeaders 注入的
+        // application/json 会覆盖浏览器自动生成的 boundary，服务端解析 422。
+        const uploadHeaders = authHeaders();
+        delete uploadHeaders['Content-Type'];
+        const res = await fetch(API_BASE + '/v1/voice/transcribe', {
+          method: 'POST',
+          headers: uploadHeaders,
+          body: fd,
+        });
+        hideTyping();
+        if (!res.ok) throw new Error('HTTP ' + res.status);
+        const data = await res.json();
+        const text = (data.text || '').trim();
+        if (!text) throw new Error('empty transcript');
+        turnMark('stt');
+        VOICE.sttFailStreak = 0;
+        VOICE.usedMic = true;
+        localStorage.setItem('np_voice_used', '1');
+        document.getElementById('messageInput').value = text;
+        sendMessage();
+      } catch (err) {
+        hideTyping();
+        if (voiceSttFailed()) return; // 连续失败：看门狗已接管，不再叠加提示
+        addMessage('bot', '转写失败（' + err.message + '），请直接打字或再试一次。');
+        if (VOICE.mode === 'thinking') scheduleResumeListening(); // 免提模式失败后继续听
+      }
+    }
+
+    function beginSpeaking() {
+      stopBackchannel(); // 真回复开声即让位（应答不叠真声）
+      // 朗读期间暂停聆听（防助手声音触发 VAD 的回声循环）→ 整框变黄「暂停中」；
+      // 若用户处于暂停白框，本轮也显示黄框，播完回到暂停而非自动续听
+      if (VOICE.mode === 'paused') VOICE.resumeAfterSpeak = true;
+      if (VOICE.mode === 'listening' || VOICE.mode === 'thinking' || VOICE.mode === 'paused') setVoiceMode('speaking');
+    }
+
+    function endSpeaking() {
+      VOICE.audioEl = null;
+      if (VOICE.mode === 'speaking') {
+        if (VOICE.lastCrisis) {
+          // 危机回复读完即停：把注意力交还给用户与求助资源，不自动继续听
+          exitConversation();
+        } else if (VOICE.resumeAfterSpeak) {
+          enterPaused(); // 黄框播完 → 回到「转写已暂停」，由用户决定继续
+        } else {
+          setVoiceMode('listening'); // 黄框播完 → 绿框继续识别
+        }
+      }
+    }
+
+    // ---- P1：整轮单会话 TTS（WS /v1/voice/tts/live）----
+    // 一条 WS 服务一轮：say(句/整段) → 服务器同个 MiniMax 会话 task_continue →
+    // ---- TTS live 管线（P1 抽取：TTS_LIVE/PCM/ttsLive*/分句 原样迁至 /static/js/voice/）----
+    // 动态 import 在 IIFE 闭包内接线：沿用原符号名，既有调用点全部无感；
+    // 模块本身可在 node --test 用假 WebSocket/AudioContext 单测（tests/frontend/）。
+    // 模块就绪前给安全桩：failed=true → 有声轮走 HTTP 句队列回退、final 走
+    // 即时渲染——竞态窗口（页面打开~百毫秒）内不崩、可恢复，而非 TypeError。
+    let PCM = { ctx: null, cursor: 0, rate: 32000, sources: [], warnedSuspended: false, speed: 1.0 };
+    let TTS_LIVE = { ws: null, failed: true, pending: [], roundStarted: false, ended: true, curBytes: [], curChars: 0, pendingTexts: [], pcm: false, sentenceStart: null, firstAudioMarked: false, sentenceSamples: 0, pendingEnd: false, finalTakeover: false, chain: Promise.resolve(), roundDone: null };
+    let ttsLiveReset = () => {};
+    let ttsLiveRound = () => Promise.resolve();
+    let ttsLiveSay = () => {};
+    let ttsLiveSend = () => {};
+    let ttsLiveEndRound = () => Promise.resolve();
+    let killLiveWs = () => {};
+    let pcmEnsureCtx = () => null;
+    let pcmStopAll = () => {};
+    let pcmDrained = () => Promise.resolve();
+    let splitIntoSentences = (text) => (text.trim() ? [text.trim()] : []);
+    import('/static/js/voice/pcm.js')
+      .then((m) => import('/static/js/voice/live.js').then((lm) => import('/static/js/voice/sentences.js').then((sm) => {
+        const pcm = m.createPcm({
+          createContext: () => { try { const AC = window.AudioContext || window.webkitAudioContext; return AC ? new AC() : null; } catch (err) { return null; } },
+          getSpeed: () => { const v = parseFloat(localStorage.getItem('np_tts_speed') || ''); return v >= 0.8 && v <= 1.4 ? v : 1.0; },
+          debug: appendDebug,
+        });
+        PCM = pcm.state;
+        pcmEnsureCtx = pcm.ensureCtx; pcmStopAll = pcm.stopAll; pcmDrained = pcm.drained;
+        const live = lm.createTtsLive({
+          wsUrl: () => {
+            const proto = location.protocol === 'https:' ? 'wss' : 'ws';
+            const qs = AUTH_TOKEN ? '?token=' + encodeURIComponent(AUTH_TOKEN) : '';
+            return proto + '://' + location.host + '/v1/voice/tts/live' + qs;
+          },
+          debug: appendDebug,
+          pcm,
+          playBlob: playTtsBlob,
+          ui: {
+            getRound: () => LIVE_TEXT_ROUND,
+            appendRound: liveTextAppendRound,
+            turnMark,
+            turnTryReport,
+            resetShownChars: () => { LIVE_TEXT_SHOWN_CHARS = 0; },
+          },
+          fallbackToQueue: (texts) => {
+            const rest = texts.filter(Boolean);
+            if (rest.length && !TTS_QUEUE.aborted) {
+              TTS_QUEUE.items = TTS_QUEUE.items.concat(rest);
+              pumpTtsQueue();
+            }
+          },
+        });
+        TTS_LIVE = live.state;
+        ttsLiveReset = live.ttsLiveReset; ttsLiveRound = live.ttsLiveRound; ttsLiveSay = live.ttsLiveSay;
+        ttsLiveSend = live.ttsLiveSend; ttsLiveEndRound = live.ttsLiveEndRound; killLiveWs = live.killLiveWs;
+        splitIntoSentences = sm.splitIntoSentences;
+      })))
+      .catch((err) => appendDebug('voice modules load failed: ' + err.message));
+
+    // 播一句（blob），resolve 于播放结束；带 iOS 打断超时看护。
+    // speakText：该句文字在音频真实起播瞬间上屏（眼耳同步的挂点）
+    function playTtsBlob(blob, approxChars, speakText) {
+      return new Promise((resolve) => {
+        const url = URL.createObjectURL(blob);
+        const audio = new Audio(url);
+        const watchdog = setTimeout(() => {
+          try { audio.pause(); } catch (err) { /* 已停 */ }
+          URL.revokeObjectURL(url);
+          if (VOICE.audioEl === audio) VOICE.audioEl = null;
+          resolve();
+        }, 4000 + approxChars * 400);
+        const finish = () => {
+          clearTimeout(watchdog);
+          URL.revokeObjectURL(url);
+          if (VOICE.audioEl === audio) VOICE.audioEl = null;
+          resolve();
+        };
+        audio.onended = finish;
+        audio.onerror = finish;
+        VOICE.audioEl = audio;
+        audio.play().then(() => { turnMark('firstAudio'); turnTryReport(); liveTextAppend(speakText, 0, Math.max(700, blob.size * 0.125)); })
+          .catch(() => { clearTimeout(watchdog); URL.revokeObjectURL(url); resolve(); });
+      });
+    }
+
+    async function speakReply(reply, isCrisis) {
+      VOICE.lastCrisis = !!isCrisis;
+      // 静音闸门（成本开关）：静音时零 TTS 请求；危机回复例外（强制照读）
+      if (!effectiveTtsOn(isCrisis)) { scheduleResumeListening(); return; }
+      const parts = (reply && Array.isArray(reply.messages) && reply.messages.length)
+        ? reply.messages.slice(0, 3)
+        : [(reply && reply.text) || ''];
+      const text = parts.join(' ').trim();
+      if (!text) { scheduleResumeListening(); return; }
+      beginSpeaking();
+      if (VOICE.ttsAvailable) {
+        if (!TTS_LIVE.failed) {
+          // P1 主路径：整轮单会话 WS（合成与播放重叠，句间零往返）
+          try {
+            await ttsLiveRound(text);
+            endSpeaking();
+            return;
+          } catch (err) {
+            appendDebug('tts live fallback: ' + err.message);
+          }
+          ttsLiveReset();
+          TTS_LIVE.failed = true; // 本页会话内不再重试 WS（回退句级 HTTP 队列）
+        }
+        // 回退：客户端分句 → 句级 HTTP 队列（预取流水线）
+        TTS_QUEUE.items = [];
+        TTS_QUEUE.playing = false;
+        TTS_QUEUE.aborted = false;
+        TTS_QUEUE.anySpoken = false;
+        const sentences = splitIntoSentences(text);
+        for (const sent of sentences) {
+          TTS_QUEUE.items.push(sent);
+          prefetchTts(sent);
+        }
+        pumpTtsQueueUntilDone().then(() => endSpeaking());
+        return;
+      }
+      // 未配置服务端 TTS 的部署：浏览器合成是仅有的朗读手段
+      speakWithBrowser(text);
+    }
+
+    // 队列顺序播完（speakReply 专用）：不依赖免提状态机——打字轮（idle 态）
+    // 也要能完整朗读；会话态收尾由调用方的 endSpeaking 处理
+    function pumpTtsQueueUntilDone() {
+      return new Promise((resolve) => {
+        const step = () => {
+          if (TTS_QUEUE.aborted) { resolve(); return; }
+          const text = TTS_QUEUE.items.shift();
+          if (!text) { resolve(); return; }
+          TTS_QUEUE.playing = true;
+          TTS_QUEUE.anySpoken = true;
+          speakSentenceStream(text)
+            .catch((err) => appendDebug('tts skip: ' + err.message)) // 单句失败不阻塞
+            .then(() => {
+              TTS_QUEUE.playing = false;
+              if (TTS_QUEUE.items.length && !TTS_QUEUE.aborted) setTimeout(step, 120); // 句间小喘息，自然感
+              else resolve();
+            });
+        };
+        step();
+      });
+    }
+
+    function speakWithBrowser(text) {
+      if (!('speechSynthesis' in window)) { endSpeaking(); return; }
+      try {
+        const utter = new SpeechSynthesisUtterance(text);
+        utter.lang = 'zh-CN';
+        utter.rate = 0.95;
+        utter.onend = endSpeaking;
+        utter.onerror = endSpeaking;
+        window.speechSynthesis.cancel();
+        window.speechSynthesis.speak(utter);
+      } catch (err) {
+        endSpeaking(); // 静默降级：语音不可用不影响文字
+      }
+    }
+
+    // 图内练习进度标签：气泡流上方的小徽标（🪨 5-4-3-2-1 · 第 N/5 步）。
+    // 动作语义映射为进度文案；完成/暂停显示状态而非步数。
+    function renderPracticeBadge(action, step) {
+      const chatArea = document.getElementById('chatArea');
+      const d = document.createElement('div');
+      d.className = 'msg bot';
+      let label = '';
+      if (action === 'advance' || action === 'resume') {
+        const n = (typeof step === 'number' ? step : 0) + 1;
+        label = '5-4-3-2-1 · 第 ' + n + '/5 步';
+      } else if (action === 'offer') {
+        label = '5-4-3-2-1 接地练习';
+      } else if (action === 'start' || action === 'restart') {
+        label = '5-4-3-2-1 · 第 1/5 步';
+      } else if (action === 'complete') {
+        label = '5-4-3-2-1 · 完成 🌿';
+      } else if (action === 'pause') {
+        label = '5-4-3-2-1 · 已暂停';
+      }
+      if (!label) return;
+      d.innerHTML = '<div class="practice-badge">🪨 ' + escapeHtml(label) + '</div>';
+      chatArea.appendChild(d);
+      chatArea.scrollTop = chatArea.scrollHeight;
     }
 
     function updateRiskIndicator(risk) {
@@ -3341,7 +5207,7 @@
       if (!log) return;
       const bubble = document.createElement('div');
       bubble.style.cssText = 'max-width:88%;padding:8px 12px;border-radius:12px;font-size:13px;line-height:1.6;' +
-        (role === 'user' ? 'align-self:flex-end;background:#57affa;color:#fff;' : 'align-self:flex-start;background:#f2f2f2;');
+        (role === 'user' ? 'align-self:flex-end;background:#57affa;color:var(--card);' : 'align-self:flex-start;background:var(--soft);');
       bubble.textContent = text;
       log.appendChild(bubble);
       log.scrollTop = log.scrollHeight;
@@ -3648,6 +5514,47 @@
       }
     }
 
+    // 历史下拉手势：顶部继续上滚（滚轮/触屏下拉）即加载更早会话
+    (function bindHistoryPull() {
+      const chatArea = document.getElementById('chatArea');
+      chatArea.addEventListener('wheel', (e) => {
+        if (chatArea.scrollTop <= 0 && e.deltaY < -16) loadOlderHistory();
+      }, { passive: true });
+      let touchY = null;
+      chatArea.addEventListener('touchstart', (e) => {
+        touchY = e.touches[0].clientY;
+      }, { passive: true });
+      chatArea.addEventListener('touchmove', (e) => {
+        if (touchY === null) return;
+        if (chatArea.scrollTop <= 0 && e.touches[0].clientY - touchY > 50) {
+          touchY = null;
+          loadOlderHistory();
+        }
+      }, { passive: true });
+      chatArea.addEventListener('touchend', () => { touchY = null; }, { passive: true });
+    })();
+
+    // 免提对话退出通道：ESC 退出；页面隐藏时释放麦克风（隐私）
+    document.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape' && VOICE.mode !== 'idle') exitConversation();
+    });
+    // iOS 的 visibilitychange 触发极激进（下拉通知/控制中心都会 hidden），
+    // 直接退出免提会让用户"以为还在听"。改为：真离开页面才释放麦克风，
+    // 短暂遮挡（<30s 回来）保留会话。
+    let hiddenSince = 0;
+    document.addEventListener('visibilitychange', () => {
+      if (document.hidden) {
+        if (VOICE.mode !== 'idle') {
+          hiddenSince = Date.now();
+          stopUtterance(); // 正在录的段丢弃，避免回来后提交过期语音
+          hideTyping();
+        }
+      } else if (hiddenSince && Date.now() - hiddenSince > 30000 && VOICE.mode !== 'idle') {
+        exitConversation(); // 离开超 30s：释放麦克风（隐私优先）
+        hiddenSince = 0;
+      }
+    });
+
     // shadcn 式键盘快捷键：数字键 1-N 选择选项，←→ 切题（仅评估分页视图内生效）
     document.addEventListener('keydown', (e) => {
       if (!curAssess || !curAssess.localAnswers) return;
@@ -3901,19 +5808,19 @@
       const y = v => PAD_T + (10 - Math.max(0, Math.min(10, v))) * (H - PAD_T - PAD_B) / 10;
       const path = key => points.map((p, i) => (i ? 'L' : 'M') + x(i).toFixed(1) + ',' + y(p[key]).toFixed(1)).join(' ');
       const gridLines = [0, 5, 10].map(v =>
-        '<line x1="' + PAD_L + '" y1="' + y(v) + '" x2="' + (W - PAD_R) + '" y2="' + y(v) + '" stroke="#eeeeee" stroke-width="1"/>' +
-        '<text x="4" y="' + (y(v) + 3) + '" font-size="9" fill="#666666" font-family="Courier New">' + v + '</text>'
+        '<line x1="' + PAD_L + '" y1="' + y(v) + '" x2="' + (W - PAD_R) + '" y2="' + y(v) + '" stroke="#E7E0D6" stroke-width="1"/>' +
+        '<text x="4" y="' + (y(v) + 3) + '" font-size="9" fill="#6E655C" font-family="Courier New">' + v + '</text>'
       ).join('');
       const labelEvery = Math.max(1, Math.ceil(n / 6));
       const xLabels = points.map((p, i) => i % labelEvery === 0
-        ? '<text x="' + x(i) + '" y="' + (H - 6) + '" font-size="9" fill="#666666" text-anchor="middle" font-family="Courier New">' + escapeHtml(p.date.slice(5)) + '</text>'
+        ? '<text x="' + x(i) + '" y="' + (H - 6) + '" font-size="9" fill="#6E655C" text-anchor="middle" font-family="Courier New">' + escapeHtml(p.date.slice(5)) + '</text>'
         : '').join('');
-      const dots = key => points.map((p, i) => '<circle cx="' + x(i).toFixed(1) + '" cy="' + y(p[key]).toFixed(1) + '" r="2.2" fill="#111111"/>').join('');
+      const dots = key => points.map((p, i) => '<circle cx="' + x(i).toFixed(1) + '" cy="' + y(p[key]).toFixed(1) + '" r="2.2" fill="#2B2620"/>').join('');
       body.innerHTML =
         '<svg viewBox="0 0 ' + W + ' ' + H + '" style="width:100%;height:auto;display:block;">' +
         gridLines +
-        '<path d="' + path('mood_score') + '" fill="none" stroke="#111111" stroke-width="2"/>' +
-        '<path d="' + path('anxiety_score') + '" fill="none" stroke="#666666" stroke-width="1.5" stroke-dasharray="4 3"/>' +
+        '<path d="' + path('mood_score') + '" fill="none" stroke="#2B2620" stroke-width="2"/>' +
+        '<path d="' + path('anxiety_score') + '" fill="none" stroke="#6E655C" stroke-width="1.5" stroke-dasharray="4 3"/>' +
         dots('mood_score') +
         xLabels +
         '</svg>' +
