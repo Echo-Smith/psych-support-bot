@@ -31,21 +31,23 @@
 
 ## 冗余 PR 整理
 
-用户已同意清理旧入口：#2、#3、#21、#25、#29。功能由 #30 承接，
-其中 #29 与 #28 补丁等价，#25 为适配后的实现，#2/#3/#21 已进入并演进于功能链。
+用户最新确认仅清理旧入口 #3、#21、#25；#2 与 #29 均保留，撤回其原关闭建议。
+功能由 #30 承接，#25 为适配后的实现，#2/#3/#21 已进入并演进于功能链。
+#29 保留为智能调度独立审阅入口；其补丁与 #28 等价，合并前需核对重复应用。
 保留 #22 → #23 → #24 → #26 → #27 → #28 → #30 的阶段审阅链。
 当前上游 main 仍为 255169f，尚未合入承接功能。
 
 实际权限检查：Echo-Smith 对上游及两个来源 fork 均只有 pull 权限。
 关闭 #29 的 API 操作被 GitHub 的 ClosePullRequest 权限检查拒绝；其他四个 PR
-也由其他作者创建。上述五个 PR 尚未关闭，来源分支没有删除，
-已分别发布覆盖关系与关闭建议，等待有权限的维护者执行。
+也由其他作者创建。browser-skill 实测浏览器仍登录 Echo-Smith，#2/#29 页面没有关闭按钮。
+待清理的三个 PR 尚未关闭，来源分支没有删除，已分别发布覆盖关系与关闭建议，
+等待有权限的维护者执行；#2/#29 继续保持开放。
 
-- [#2 关闭建议](https://github.com/redmaplewww/psych-support-bot/pull/2#issuecomment-5986800108)
+- [#2 保留说明](https://github.com/redmaplewww/psych-support-bot/pull/2#issuecomment-5986800108)
 - [#3 关闭建议](https://github.com/redmaplewww/psych-support-bot/pull/3#issuecomment-5986800334)
 - [#21 关闭建议](https://github.com/redmaplewww/psych-support-bot/pull/21#issuecomment-5986800556)
 - [#25 关闭建议](https://github.com/redmaplewww/psych-support-bot/pull/25#issuecomment-5986800788)
-- [#29 关闭建议](https://github.com/redmaplewww/psych-support-bot/pull/29#issuecomment-5986801007)
+- [#29 保留说明](https://github.com/redmaplewww/psych-support-bot/pull/29#issuecomment-5986801007)
 
 未完成验收已迁入独立 issue，#27/#30 描述同步了链接：
 [语音真机与线上身份恢复 #31](https://github.com/redmaplewww/psych-support-bot/issues/31)、
