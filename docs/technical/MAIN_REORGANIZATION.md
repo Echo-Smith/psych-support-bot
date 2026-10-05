@@ -23,3 +23,7 @@ The first replacement PR targets upstream main. Dependent replacements target th
 SQLite 迁移仍使用第一层的包内 runner，新增记录、练习、认证及报告字段迁移随后端交付。无 Mirror 文件或接口。
 
 验证：完整单元与集成测试首轮 555 通过，唯一失败为本层尚不存在的流式接口测试；该测试归还第四层，当前读取与普通续聊的跨用户拒绝检查全部通过。构建与迁移启动单独验证。
+
+## 第三层：产品前端
+
+只同步 b7202bc 的静态前端、图标与 manifest，对应第二层已有的认证、练习、评估分页、打卡与个人记录 API；不引入语音或画像记忆实现。源码及隔离 wheel 的页面/静态资源启动验证与后端 CI 共同保障接口兼容。
