@@ -1,8 +1,9 @@
-"""分句双端一致性（服务端侧）：_split_complete_sentences 对照共享 fixture。
+"""分句服务端语义 fixture 回归：_split_complete_sentences 对照共享 fixture。
 
-fixture（tests/frontend/fixtures/sentences.json）同时被前端特征测试
-（tests/frontend/sentences.test.mjs）消费。任何一端改分句语义必须同步
-fixture 与另一端实现——对端测试会红。差异语义见 fixture._comment。
+历史说明：fixture 原为前后端双端一致性而设（客户端朗读分句
+splitIntoSentences 已随 HTTP 句队列退役——对话朗读二选一收敛到 WS live，
+见 VOICE_DECISIONS.md D6），现仅钉住服务端切分语义防漂移。
+golden/server 各节的期望值维持不变。
 """
 
 import json

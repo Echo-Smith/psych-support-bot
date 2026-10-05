@@ -186,21 +186,15 @@ def classify_risk(state: GraphState) -> GraphState:
                 try:
                     llm_result = futures[0].result()
                     llm_risk, semantic_read = llm_result
-                except Exception:
-                    logger.warning(
-                        "LLM risk classifier unavailable; keeping rule verdict.",
-                        exc_info=True,
-                    )
+                except Exception:  # noqa: BLE001 - semantic risk enhancement is fail-open
+                    logger.warning("LLM risk classifier unavailable; keeping rule verdict")
                     llm_risk = None
                     semantic_read = None
                 if len(futures) > 1:
                     try:
                         speculative_reply = futures[1].result()
-                    except Exception:
-                        logger.warning(
-                            "Speculative reply generation failed; serial path will regenerate.",
-                            exc_info=True,
-                        )
+                    except Exception:  # noqa: BLE001 - speculative work is optional
+                        logger.warning("Speculative reply generation failed; serial path will regenerate")
                         speculative_reply = None
 
             if llm_risk is not None:
@@ -208,10 +202,9 @@ def classify_risk(state: GraphState) -> GraphState:
                 merged = _merge_upgrade(risk_result, llm_risk)
                 if merged.risk_level != risk_result.risk_level:
                     logger.info(
-                        "LLM semantic upgrade: %s -> %s (%s)",
+                        "LLM semantic risk upgrade: %s -> %s",
                         risk_result.risk_level,
                         merged.risk_level,
-                        merged.reason,
                     )
                 state["risk_result"] = merged
                 # 语义读数随 LLM 可用性落 state：topics 与关键词检测在

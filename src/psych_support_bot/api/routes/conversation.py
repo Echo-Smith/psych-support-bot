@@ -42,6 +42,17 @@ def _verify_session_ownership(payload: ConversationRequest, request: Request, se
         raise HTTPException(status_code=404, detail="Session not found")
 
 
+def _attach_vad_metadata(payload: ConversationRequest, request: Request) -> None:
+    """从 X-Vad-Metadata 请求头读取前端 VAD 元数据，存入 payload。"""
+    import contextlib
+
+    raw = request.headers.get("X-Vad-Metadata", "")
+    if not raw:
+        return
+    with contextlib.suppress(json.JSONDecodeError, TypeError):
+        payload.vad_metadata = json.loads(raw)
+
+
 @router.post("/respond", response_model=ConversationResponse)
 def respond(
     payload: ConversationRequest,
@@ -50,6 +61,7 @@ def respond(
 ) -> ConversationResponse:
     _verify_session_ownership(payload, request, session)
     payload.user_id = request_user_id(request, payload.user_id)
+    _attach_vad_metadata(payload, request)
     return conversation_service.respond(payload, session=session)
 
 
@@ -68,6 +80,7 @@ async def respond_stream(
     """
     _verify_session_ownership(payload, request, session)
     payload.user_id = request_user_id(request, payload.user_id)
+    _attach_vad_metadata(payload, request)
     gen = conversation_service.respond_stream(payload, session=session)
 
     async def _sse():

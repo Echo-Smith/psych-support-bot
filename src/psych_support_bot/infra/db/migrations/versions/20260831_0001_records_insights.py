@@ -9,9 +9,8 @@ entry points share one history table, and creates usage_events for
 commercialization metering (action metadata only, never mood content).
 """
 
-from alembic import op
 import sqlalchemy as sa
-
+from alembic import op
 
 revision = "20260831_0001"
 down_revision = "20260820_0001"

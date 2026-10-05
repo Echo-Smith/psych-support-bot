@@ -2,10 +2,9 @@
 
 - POST /transcribe：multipart 音频 → 转写文本。音频即转即弃（不落库、
   不写日志）；转写文本作为普通聊天消息的输入由前端走既有 /respond。
-- POST /speak：文本 → audio/mpeg。未配置 503，前端降级浏览器朗读。
-  危机回复照读（热线号码读出来更可达）。
-- POST /speak/stream：同上但 chunked 流式返回（边合成边转），前端 MSE
-  边下边播，感知延迟 ≈ 上游首块（实测 ~0.5s vs 整段 ~2s）。
+- POST /speak、/speak/stream：**已废弃**（对话朗读二选一收敛到 WS
+  /tts/live，前端句队列已删除——运行时双路径的静默逐句跳过是不可观测
+  的劣化，20260912 实证）。端点保留一个版本供旧前端兼容，勿新增调用。
 - GET /status：前端探测（是否配置 STT/TTS），决定麦克风按钮显隐与朗读开关。
 
 阻塞的上游调用走 asyncio.to_thread：适配层是同步 httpx / asyncio.run 包裹
@@ -23,7 +22,7 @@ from typing import Any
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, UploadFile, WebSocket, WebSocketDisconnect
 from fastapi.responses import Response, StreamingResponse
 
-from psych_support_bot.api.auth import decode_access_token, require_auth
+from psych_support_bot.api.auth import require_auth
 from psych_support_bot.infra.config.settings import get_settings
 from psych_support_bot.infra.voice.adapter import (
     _MINIMAX_SAMPLE_RATE,
@@ -36,6 +35,7 @@ from psych_support_bot.infra.voice.adapter import (
     synthesize,
     synthesize_stream,
     transcribe,
+    transcribe_stream,
     tts_media_type,
 )
 from psych_support_bot.infra.voice.protocol import (
@@ -47,8 +47,18 @@ from psych_support_bot.infra.voice.protocol import (
     LiveRoundEnd,
     LiveSay,
     LiveSentenceEnd,
+    LiveSentenceStart,
     LiveServerEvent,
+    LiveTtsProfile,
+    SttAbort,
+    SttEnd,
+    SttError,
+    SttFinal,
+    SttPartial,
+    SttReady,
+    SttServerEvent,
     parse_live_client_message,
+    parse_stt_client_message,
 )
 
 logger = logging.getLogger(__name__)
@@ -138,14 +148,14 @@ async def transcribe_audio(request: Request, file: UploadFile, _sub: str = Depen
         text = await asyncio.to_thread(transcribe, audio, filename)
     except VoiceNotConfigured as exc:
         # 配置性未配置 ≠ 上游故障：不计入看门狗 streak
-        raise HTTPException(status_code=503, detail=str(exc)) from exc
+        raise HTTPException(status_code=503, detail="Voice STT is not configured") from exc
     except VoiceProviderError as exc:
         streak = _stt_fail_note(failed=True)
         # 连续失败升格为 ERROR（WhisperLiveKit 教训：静默故障只打 warning，
         # 用户看到的是「永远转不出来」）
         log = logger.error if streak >= 2 else logger.warning
-        log("Voice transcribe failed (streak=%d): %s", streak, exc)
-        raise HTTPException(status_code=502, detail=f"Transcription failed: {exc}") from exc
+        log("Voice transcribe failed (streak=%d, provider_error)", streak)
+        raise HTTPException(status_code=502, detail="Transcription failed") from exc
     _stt_fail_note(failed=False)
     # 服务端 STT 段耗时（前端 /turn_metrics 上报的是含网络的全链差值，
     # 两行日志对账即可切分出「网络+排队」与「上游合成」各占多少）
@@ -190,7 +200,10 @@ async def turn_metrics(request: Request, payload: dict[str, Any], _sub: str = De
 
 
 @router.post("/speak")
+@router.post("/speak", deprecated=True)
 async def speak_text(request: Request, payload: dict[str, Any], _sub: str = Depends(require_auth)) -> Response:
+    """文本 → audio（已废弃）：对话朗读已收敛到 WS /tts/live（二选一，
+    见 VOICE_DECISIONS.md D6）。仅为旧前端保留一个版本，勿新增调用。"""
     text = str(payload.get("text") or "").strip()
     if not text:
         raise HTTPException(status_code=422, detail="Empty text")
@@ -199,16 +212,17 @@ async def speak_text(request: Request, payload: dict[str, Any], _sub: str = Depe
     try:
         audio = await asyncio.to_thread(synthesize, text)
     except VoiceNotConfigured as exc:
-        raise HTTPException(status_code=503, detail=str(exc)) from exc
+        raise HTTPException(status_code=503, detail="Voice TTS is not configured") from exc
     except VoiceProviderError as exc:
-        logger.warning("Voice speak failed: %s", exc)
-        raise HTTPException(status_code=502, detail=f"Speech synthesis failed: {exc}") from exc
+        logger.warning("Voice speak failed (provider_error)")
+        raise HTTPException(status_code=502, detail="Speech synthesis failed") from exc
     return Response(content=audio, media_type=tts_media_type())
 
 
 @router.post("/speak/stream")
+@router.post("/speak/stream", deprecated=True)
 async def speak_stream(request: Request, payload: dict[str, Any], _sub: str = Depends(require_auth)):
-    """文本 → mp3 流（chunked）：上游音频块即产即转，前端边下边播。
+    """文本 → mp3 流（chunked）（已废弃）：同 /speak，仅为旧前端保留。
 
     感知延迟 ≈ 上游首块到达时间（MiniMax 实测 ~0.5s），远低于整段合成。
     首个字节前的配置/校验错误仍返回 JSON 错误码；流出后中途失败只能
@@ -226,9 +240,9 @@ async def speak_stream(request: Request, payload: dict[str, Any], _sub: str = De
     def _gen():
         try:
             yield from synthesize_stream(text)
-        except VoiceProviderError as exc:
+        except VoiceProviderError:
             # 流已开始：状态码不可改，截断表达（前端播放已收到的部分）
-            logger.warning("Voice speak stream interrupted: %s", exc)
+            logger.warning("Voice speak stream interrupted (provider_error)")
 
     return StreamingResponse(_gen(), media_type=tts_media_type())
 
@@ -257,10 +271,10 @@ async def backchannel_audio(index: int, _sub: str = Depends(require_auth)) -> Re
     try:
         audio = await asyncio.to_thread(synthesize, _BACKCHANNEL_PHRASES[index])
     except VoiceNotConfigured as exc:
-        raise HTTPException(status_code=503, detail=str(exc)) from exc
+        raise HTTPException(status_code=503, detail="Voice TTS is not configured") from exc
     except VoiceProviderError as exc:
-        logger.warning("Voice backchannel failed: %s", exc)
-        raise HTTPException(status_code=502, detail=f"Backchannel synthesis failed: {exc}") from exc
+        logger.warning("Voice backchannel failed (provider_error)")
+        raise HTTPException(status_code=502, detail="Backchannel synthesis failed") from exc
     return Response(content=audio, media_type=tts_media_type())
 
 
@@ -299,7 +313,10 @@ async def _tts_live_mimo(websocket: WebSocket, config, text_q: asyncio.Queue, re
     import threading
     from contextlib import suppress
 
-    await _send_event(websocket, LiveReady(audio=LiveAudioFormat(sample_rate=24000)))
+    # 复刻模型（兼容模式流式）整句合成完才返回：首包预算同步放宽，
+    # 前端「无首音收束」按此放宽（缺省/预置音色维持 6s 快收束还麦）
+    tts_profile = LiveTtsProfile(first_audio_timeout_ms=20_000) if "voiceclone" in (config.model or "") else None
+    await _send_event(websocket, LiveReady(audio=LiveAudioFormat(sample_rate=24000), tts=tts_profile))
     loop = asyncio.get_running_loop()
 
     async def pump_say(text: str) -> None:
@@ -334,11 +351,15 @@ async def _tts_live_mimo(websocket: WebSocket, config, text_q: asyncio.Queue, re
                 await _send_event(websocket, LiveRoundEnd())
                 return
             try:
-                await pump_say(item)
-                await _send_event(websocket, LiveSentenceEnd())
-            except VoiceProviderError as exc:
-                logger.warning("TTS live mimo: %s", exc)
-                await _send_event(websocket, LiveError(detail=str(exc)[:200]))
+                # Legacy internal callers may still enqueue bare text.
+                utterance = item if isinstance(item, LiveSay) else LiveSay(text=item)
+                identity = {"round_id": utterance.round_id, "sentence_id": utterance.sentence_id}
+                await _send_event(websocket, LiveSentenceStart(**identity))
+                await pump_say(utterance.text)
+                await _send_event(websocket, LiveSentenceEnd(**identity))
+            except VoiceProviderError:
+                logger.warning("TTS live mimo failed (provider_error)")
+                await _send_event(websocket, LiveError(detail="Speech synthesis failed"))
                 await _send_event(websocket, LiveRoundEnd())
                 return
     except WebSocketDisconnect:
@@ -352,13 +373,26 @@ async def _tts_live_mimo(websocket: WebSocket, config, text_q: asyncio.Queue, re
 
 @ws_router.websocket("/tts/live")
 async def tts_live(websocket: WebSocket, token: str = Query(default="")):
+    from psych_support_bot.api.auth import validate_account_token
+
     settings = get_settings()
+    user_id = websocket.query_params.get("user_id", "")
     if settings.auth_enabled:
         try:
-            decode_access_token(token)
+            user_id = validate_account_token(token)
         except Exception:  # noqa: BLE001 —— 任何签发/解码/过期错误一律拒绝（fail-closed）
             await websocket.close(code=4401)
             return
+
+    from psych_support_bot.api.privacy import check_privacy_consent
+    from psych_support_bot.infra.db.session import SessionLocal
+
+    try:
+        with SessionLocal() as session:
+            check_privacy_consent(session, user_id)
+    except HTTPException:
+        await websocket.close(code=4403)
+        return
 
     config = get_tts_config()
     await websocket.accept()
@@ -381,7 +415,7 @@ async def tts_live(websocket: WebSocket, token: str = Query(default="")):
                 if isinstance(msg, LiveSay):
                     text = msg.text.strip()
                     if text:
-                        await text_q.put(text)
+                        await text_q.put(msg.model_copy(update={"text": text}))
                 elif isinstance(msg, LiveEnd):
                     await text_q.put(None)
                     return
@@ -442,7 +476,7 @@ async def tts_live(websocket: WebSocket, token: str = Query(default="")):
                 started = json.loads(await asyncio.wait_for(mmws.recv(), timeout=15))
             if started.get("event") != "task_started":
                 base = started.get("base_resp") or {}
-                logger.warning("TTS live task_start failed: %s", base)
+                logger.warning("TTS live task_start failed (status=%s)", base.get("status_code"))
                 await _send_event(websocket, LiveError(detail=f"task_start failed: {base.get('status_code')}"))
                 await _send_event(websocket, LiveRoundEnd())
                 return
@@ -450,6 +484,10 @@ async def tts_live(websocket: WebSocket, token: str = Query(default="")):
             reader_task = asyncio.ensure_future(read_client())
             live_tasks.add(reader_task)
             reader_task.add_done_callback(live_tasks.discard)
+
+            sentence_complete = asyncio.Event()
+            sentence_complete.set()
+            active_identity: dict = {}
 
             async def client_to_mm() -> None:
                 # 客户端句子 → MiniMax task_continue；end → task_finish；
@@ -461,11 +499,16 @@ async def tts_live(websocket: WebSocket, token: str = Query(default="")):
                         await mmws.send(json.dumps({"event": "task_cancel"}))
                         return
                     if item is None:
+                        await sentence_complete.wait()
                         if not sent_finish:
                             await mmws.send(json.dumps({"event": "task_finish"}))
                             sent_finish = True
                         return
-                    await mmws.send(json.dumps({"event": "task_continue", "text": item}))
+                    await sentence_complete.wait()
+                    sentence_complete.clear()
+                    active_identity.update(round_id=item.round_id, sentence_id=item.sentence_id)
+                    await _send_event(websocket, LiveSentenceStart(**active_identity))
+                    await mmws.send(json.dumps({"event": "task_continue", "text": item.text}))
 
             ct = asyncio.ensure_future(client_to_mm())
             live_tasks.add(ct)
@@ -476,10 +519,10 @@ async def tts_live(websocket: WebSocket, token: str = Query(default="")):
                 base = msg.get("base_resp") or {}
                 status = base.get("status_code", 0)
                 if status != 0:
-                    logger.warning("TTS live upstream error %s: %s", status, base.get("status_msg"))
+                    logger.warning("TTS live upstream error (status=%s)", status)
                     # 错误显式下发（round_end 前）：前端据此把剩余句子转投 HTTP
                     # 队列续读——上游半途故障不再表现为"音频静默消失"
-                    await _send_event(websocket, LiveError(detail=f"upstream {status}: {base.get('status_msg')}"))
+                    await _send_event(websocket, LiveError(detail=f"Speech synthesis failed ({status})"))
                     await _send_event(websocket, LiveRoundEnd())
                     return
                 event = msg.get("event")
@@ -491,14 +534,15 @@ async def tts_live(websocket: WebSocket, token: str = Query(default="")):
                 if msg.get("is_final"):
                     # 句级边界：前端以此切分播放单元（sentence_start/end 事件
                     # 名沿用语义）。会话不终态，下一句 task_continue 继续喂。
-                    await _send_event(websocket, LiveSentenceEnd())
+                    await _send_event(websocket, LiveSentenceEnd(**active_identity))
+                    sentence_complete.set()
                 if event in ("task_finished", "task_failed"):
                     await _send_event(websocket, LiveRoundEnd())
                     return
     except WebSocketDisconnect:
         logger.info("TTS live: client disconnected")
-    except Exception as exc:
-        logger.warning("TTS live session ended: %s", exc, exc_info=True)
+    except Exception:  # noqa: BLE001 - disconnects and provider failures end this isolated session
+        logger.warning("TTS live session ended")
     finally:
         pending = list(live_tasks)
         for task in pending:
@@ -507,3 +551,162 @@ async def tts_live(websocket: WebSocket, token: str = Query(default="")):
         await asyncio.gather(*pending, return_exceptions=True)
         with contextlib.suppress(Exception):
             await websocket.close()
+
+
+# ---------------------------------------------------------------------------
+# STT live（/v1/voice/stt/live）—— 流式语音识别
+# ---------------------------------------------------------------------------
+
+
+@ws_router.websocket("/stt/live")
+async def stt_live(websocket: WebSocket, token: str = Query(default="")):
+    """流式 STT WebSocket：前端持续发送 PCM 帧，服务端转写后回传 partial/final。
+
+    协议：
+    - Client → Server：binary PCM 帧（16kHz mono s16le）、text {"type":"end"}、text {"type":"abort"}
+    - Server → Client：ready / stt_partial / stt_final / stt_error
+    """
+    from psych_support_bot.api.auth import validate_account_token
+
+    settings = get_settings()
+    user_id = websocket.query_params.get("user_id", "")
+    if settings.auth_enabled:
+        try:
+            user_id = validate_account_token(token)
+        except Exception:  # noqa: BLE001
+            await websocket.close(code=4401)
+            return
+
+    from psych_support_bot.api.privacy import check_privacy_consent
+    from psych_support_bot.infra.db.session import SessionLocal
+
+    try:
+        with SessionLocal() as session:
+            check_privacy_consent(session, user_id)
+    except HTTPException:
+        await websocket.close(code=4403)
+        return
+
+    config = get_stt_config()
+    await websocket.accept()
+    if config is None:
+        await _send_stt_event(websocket, SttError(detail="STT not configured"))
+        await websocket.close()
+        return
+
+    # 流式供应商（mimo/dots）走 SSE delta；其他走批量降级
+    streaming_capable = config.provider in ("mimo", "dots")
+    await _send_stt_event(websocket, SttReady(provider=config.provider, streaming=streaming_capable))
+
+    audio_buf = bytearray()
+    buf_lock = asyncio.Lock()
+    end_event = asyncio.Event()
+    abort_event = asyncio.Event()
+
+    async def read_client() -> None:
+        """接收客户端 PCM 帧和控制消息。"""
+        try:
+            while True:
+                msg = await websocket.receive()
+                if msg.get("type") == "websocket.receive":
+                    if msg.get("bytes"):
+                        async with buf_lock:
+                            audio_buf.extend(msg["bytes"])
+                    elif msg.get("text"):
+                        try:
+                            parsed = parse_stt_client_message(msg["text"])
+                        except ValueError:
+                            continue
+                        if isinstance(parsed, SttEnd):
+                            end_event.set()
+                            return
+                        elif isinstance(parsed, SttAbort):
+                            abort_event.set()
+                            return
+        except Exception:  # noqa: BLE001 —— 断连不杀会话
+            pass
+        finally:
+            end_event.set()
+
+    async def transcribe_and_send() -> None:
+        """等待 end 信号后转写音频，流式回传结果。"""
+        await end_event.wait()
+        if abort_event.is_set():
+            return
+
+        async with buf_lock:
+            audio_bytes = bytes(audio_buf)
+
+        if not audio_bytes or len(audio_bytes) < 1000:
+            await _send_stt_event(websocket, SttFinal(text=""))
+            return
+
+        filename = "audio.wav"  # 前端发送的是 16kHz mono s16le，适配器按扩展名推断 MIME
+        language = settings.voice_stt_language or ""
+
+        try:
+            if streaming_capable:
+                # 流式路径：在独立线程中消费 transcribe_stream 生成器
+                loop = asyncio.get_running_loop()
+                queue: asyncio.Queue[str | None] = asyncio.Queue()
+
+                def _run_stream():
+                    try:
+                        for chunk in transcribe_stream(audio_bytes, filename, language_hint=language):
+                            loop.call_soon_threadsafe(queue.put_nowait, chunk)
+                    except Exception as exc:  # noqa: BLE001
+                        loop.call_soon_threadsafe(queue.put_nowait, exc)
+                    finally:
+                        loop.call_soon_threadsafe(queue.put_nowait, None)
+
+                thread = asyncio.to_thread(_run_stream)  # noqa: F841
+                # 手动启动线程（to_thread 返回 awaitable，但我们不需要 await）
+                import threading as _threading
+
+                t = _threading.Thread(target=_run_stream, daemon=True)
+                t.start()
+
+                parts: list[str] = []
+                while True:
+                    item = await queue.get()
+                    if item is None:
+                        break
+                    if isinstance(item, Exception):
+                        await _send_stt_event(websocket, SttError(detail=str(item)))
+                        return
+                    parts.append(item)
+                    await _send_stt_event(websocket, SttPartial(text="".join(parts)))
+
+                final_text = "".join(parts).strip()
+                # 剥离可能的思维链痕迹
+                from psych_support_bot.infra.voice.adapter import _strip_reasoning_artifacts
+
+                final_text = _strip_reasoning_artifacts(final_text)
+                await _send_stt_event(websocket, SttFinal(text=final_text))
+            else:
+                # 批量降级：在独立线程中调用 transcribe()
+                result = await asyncio.to_thread(transcribe, audio_bytes, filename, language_hint=language)
+                await _send_stt_event(websocket, SttFinal(text=result))
+        except VoiceNotConfigured:
+            await _send_stt_event(websocket, SttError(detail="STT not configured"))
+        except VoiceProviderError as exc:
+            _stt_fail_note(failed=True)
+            await _send_stt_event(websocket, SttError(detail=str(exc)))
+        except Exception as exc:  # noqa: BLE001
+            await _send_stt_event(websocket, SttError(detail="STT internal error"))
+            logger.warning("STT live error: %s", exc)
+
+    try:
+        read_task = asyncio.create_task(read_client())
+        write_task = asyncio.create_task(transcribe_and_send())
+        await asyncio.gather(read_task, write_task)
+    except Exception:  # noqa: BLE001
+        pass
+    finally:
+        with contextlib.suppress(Exception):
+            await websocket.close()
+
+
+async def _send_stt_event(websocket: WebSocket, event: SttServerEvent) -> None:
+    """发送 STT 服务端事件。"""
+    await websocket.send_text(event.model_dump_json())

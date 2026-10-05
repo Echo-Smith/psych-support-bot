@@ -8,9 +8,8 @@ Create Date: 2026-08-31 00:00:02
 reflection_note/completed_at），对话内完成与页面完成共用一张表。
 """
 
-from alembic import op
 import sqlalchemy as sa
-
+from alembic import op
 
 revision = "20260831_0002"
 down_revision = "20260831_0001"

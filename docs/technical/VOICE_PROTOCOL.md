@@ -52,22 +52,28 @@
 **打断**：`abort` → 前端立即 `killLiveWs`（连接作废，不等服务端）；服务端发
 `task_cancel` 后关连。在途残余帧被连接代次守卫丢弃（防串音）。
 
-## 降级契约（error 的前端行为）
+## 降级契约（error 的前端行为；20260912 起二选一语义）
 
-1. 把「已 say 未播」的剩余句子转投 HTTP 句级队列（`/v1/voice/speak/stream`）续读——
-   上游半途故障不表现为"音频静默消失"。
-2. 置 `TTS_LIVE.failed = true`：本页会话内 WS 通道弃用，后续轮直接走 HTTP 队列。
+1. 本轮剩余 say 静默丢弃（文字照常由 final 上屏）——**不做 HTTP 逐句回退**：
+   运行时双路径的"单句失败静默跳过"是不可观测的劣化（20260912 实证：
+   只读到最后一句），已随前端句队列一并删除。
+2. 置 `TTS_LIVE.failed = true`：本轮 WS 通道弃用；下一轮
+   `ttsLiveBeginTurn()` 重置降级标志，自动重试探路。
 3. `error` 后服务端必发 `round_end`：前端总能收到终态，黄框不悬挂。
+
+对话朗读唯一通道 = live WS（`/speak`、`/speak/stream` 已废弃，仅为旧前端
+保留一个版本）；决策记录见 VOICE_DECISIONS.md D6。
 
 ## 超时对齐（三方互相兜底，数值耦合是有意的）
 
 | 位置 | 值 | 说明 |
 |---|---|---|
 | 服务端上游 recv 空闲 | 30s（`_TTS_LIVE_UPSTREAM_RECV_TIMEOUT`） | 句间间隔实测 <1s，卡 30s=上游挂起 |
-| 前端 round 收束硬上限 | 25s（`ttsLiveEndRound`） | **略小于服务端**：前端先收束，麦克风不被假死挂起 |
-| MiMo 流 read 超时 | 8s（adapter `_mimo_stream`） | 句级合成块间隔 <1s，卡 8s=上游挂起 |
+| 前端 round 收束硬上限（首音已出） | 25s（`ttsLiveEndRound`） | **略小于服务端**：前端先收束，麦克风不被假死挂起 |
+| 前端 round 收束硬上限（首音未出） | 6s / ready.tts 下发值（`ttsLiveEndRound`） | 预置音色 6s（挂死无回声可防，快收束还麦）；音色复刻为兼容模式流式（整句合成完才返回单块，首包 5-20s），服务端经 `ready.tts.first_audio_timeout_ms` 下发 20s（20260912：6s 会掐掉整轮，只读到最短一句）。字段可选，旧前端忽略 |
+| 服务端 MiMo 流 read 超时 | 8s 预置 / 30s 复刻（adapter `_mimo_stream`） | 预置音色块间隔 <1s，卡 8s=上游挂起；复刻整句合成完才出块，read 须覆盖整句合成时长 |
 
-改其中任何一个，其余两个的注释必须同步复核。
+改其中任何一个，其余的注释必须同步复核。
 
 ## 兼容性约定
 

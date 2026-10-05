@@ -54,6 +54,7 @@ def upsert_user_profile(
     goals: str,
     support_preferences: str,
     risk_notes: str,
+    background_json: str = "",
 ) -> UserProfile:
     ensure_user(session, user_id)
     profile = session.get(UserProfile, user_id)
@@ -66,6 +67,8 @@ def upsert_user_profile(
     profile.goals = goals
     profile.support_preferences = support_preferences
     profile.risk_notes = risk_notes
+    if background_json:
+        profile.background_json = background_json
     session.commit()
     session.refresh(profile)
     return profile
@@ -105,7 +108,7 @@ def get_recent_messages(session: Session, user_id: str, limit: int = 10) -> list
     stmt = (
         select(Message.role, Message.content)
         .where(Message.session_id.in_(session_ids))
-        .order_by(desc(Message.created_at), desc(Message.id))
+        .order_by(desc(Message.created_at))
         .limit(limit)
     )
     rows = list(session.execute(stmt))
@@ -221,37 +224,73 @@ def get_user_assessments(session: Session, user_id: str, *, limit: int = 50) -> 
     return list(session.execute(stmt).scalars())
 
 
-def build_memory_snapshot(session: Session, user_id: str, *, language: str = "") -> str:
+def build_memory_snapshot(
+    session: Session,
+    user_id: str,
+    *,
+    language: str = "",
+    user_message: str = "",
+    recent_risk_level: str = "",
+) -> str:
     latest_summary = get_latest_summary(session, user_id)
     recent_messages = get_recent_messages(session, user_id)
     profile = get_user_profile(session, user_id)
+    from psych_support_bot.infra.db.profile_repositories import is_profile_memory_enabled
 
-    # 记录层（评估/打卡/练习）改为热插拔模块渲染（ai/memory_modules.py），
-    # 单层失败只跳过该层；MEMORY_MODULE_* 开关关闭时该层不出现在 prompt。
-    from psych_support_bot.ai.memory_modules import render_record_layers
-
-    record_layers = render_record_layers(session, user_id, language)
+    profile_memory_enabled = is_profile_memory_enabled(session, user_id)
 
     # Last five turns with speaker labels — thin excerpts were the root cause
     # of the bot forgetting events like "we just finished a breathing exercise"
     # and re-asking the user whether they wanted to start one.
     recent_excerpt = "\n".join(_safe(msg) for msg in reversed(recent_messages[-5:])) if recent_messages else ""
     profile_summary = ""
-    if profile is not None:
-        profile_summary = " || ".join(
-            _safe(piece)
-            for piece in [
-                profile.primary_concerns,
-                profile.goals,
-                profile.support_preferences,
-                profile.risk_notes,
-            ]
-            if piece
-        )
+    if profile is not None and profile_memory_enabled:
+        pieces = [
+            profile.primary_concerns,
+            profile.goals,
+            profile.support_preferences,
+            profile.risk_notes,
+        ]
+        # 结构化背景（11 维度）追加到 profile summary。
+        if profile.background_json and profile.background_json != "{}":
+            import json as _json
+
+            try:
+                bg = _json.loads(profile.background_json)
+                bg_parts = [f"{k}:{v}" for k, v in bg.items() if v and not k.startswith("_")]
+                if bg_parts:
+                    pieces.append("背景：" + "，".join(bg_parts))
+            except (TypeError, ValueError):
+                pass
+        profile_summary = " || ".join(_safe(piece) for piece in pieces if piece)
+
+    # 记录层（评估/打卡/练习/画像）热插拔模块渲染（ai/memory_modules.py），
+    # 单层失败只跳过该层；MEMORY_MODULE_* 开关关闭时该层不出现在 prompt。
+    # 画像层需要本轮上下文（用户消息 → 主题相关性 + 动态预算；近端风险 →
+    # D7 优先），tail_load 是画像动态预算的供给侧输入，故先算再渲染。
+    from psych_support_bot.ai.memory_modules import render_record_layers
+
+    turn_context = {
+        "user_message": user_message,
+        "recent_risk_level": recent_risk_level,
+        "tail_load": len(latest_summary) + len(recent_excerpt) + len(profile_summary),
+    }
+    record_layers = render_record_layers(session, user_id, language, turn_context=turn_context)
+
+    # K3 结构性理解：切片完成时综合生成，渲染到 memory snapshot。
+    understanding_text = ""
+    try:
+        from psych_support_bot.ai.profile.synthesis import render_understanding
+
+        understanding_text = render_understanding(session, user_id, language) or ""
+    except Exception:  # noqa: BLE001
+        pass
+
     pieces = [
         piece
         for piece in [
             profile_summary,
+            understanding_text,
             latest_summary,
             record_layers,
             recent_excerpt,
@@ -266,6 +305,7 @@ def save_conversation_result(
     response: ConversationResponse,
     user_message: str,
     user_id: str,
+    slice_id: str = "",  # Phase 3: 切片ID（可选）
 ) -> None:
     ensure_user(session, user_id)
     session.merge(
@@ -280,6 +320,7 @@ def save_conversation_result(
     session.add(
         Message(
             session_id=response.session_id,
+            slice_id=slice_id or None,  # Phase 3: 关联切片
             role="user",
             content=user_message,
             safety_flag=response.risk.needs_crisis_mode,
@@ -288,6 +329,7 @@ def save_conversation_result(
     session.add(
         Message(
             session_id=response.session_id,
+            slice_id=slice_id or None,  # Phase 3: 关联切片
             role="assistant",
             content=response.reply.text,
             safety_flag=response.risk.needs_crisis_mode,
@@ -369,8 +411,8 @@ def record_usage_event(session: Session, user_id: str, event_type: str, **metada
                     metadata_json=json.dumps(metadata or {}, ensure_ascii=False, default=str),
                 )
             )
-    except Exception:
-        logger.warning("Usage event recording failed (non-blocking): %s", event_type, exc_info=True)
+    except Exception:  # noqa: BLE001 - analytics recording is intentionally non-blocking
+        logger.warning("Usage event recording failed (non-blocking): %s", event_type)
 
 
 def create_questionnaire_session(
@@ -536,6 +578,79 @@ def save_checkin(session: Session, user_id: str, checkin: DailyCheckin) -> Check
     session.commit()
     session.refresh(record)
     return record
+
+
+def checkin_to_d2_beliefs(session: Session, user_id: str) -> None:
+    """打卡趋势→D2 画像信念：连续 3+ 天异常时创建/更新 D2 信念（fail-open）。"""
+    try:
+        from psych_support_bot.ai.profile.extractor import d2_assessment_claim
+        from psych_support_bot.infra.db.profile_repositories import record_claim
+
+        recent = get_recent_checkins(session, user_id, limit=7)
+        if len(recent) < 3:
+            return
+        # 按日期排序（最新在前）取最近 3 天
+        recent_sorted = sorted(recent, key=lambda r: r.checkin_date, reverse=True)
+        last3 = recent_sorted[:3]
+
+        # 心情持续低落（≤4 连续 3 天）
+        if all(r.mood_score <= 4 for r in last3):
+            claim = d2_assessment_claim(
+                "checkin_mood",
+                "moderate",
+                score=int(sum(r.mood_score for r in last3) / 3),
+            )
+            if claim:
+                record_claim(
+                    session,
+                    user_id,
+                    dimension=claim.dimension,
+                    key=claim.key,
+                    claim_text=claim.claim_text,
+                    value=claim.value,
+                    relation=claim.relation,
+                    confidence=claim.confidence,
+                )
+
+        # 焦虑持续偏高（≥7 连续 3 天）
+        if all(r.anxiety_score >= 7 for r in last3):
+            claim = d2_assessment_claim(
+                "checkin_anxiety",
+                "moderate",
+                score=int(sum(r.anxiety_score for r in last3) / 3),
+            )
+            if claim:
+                record_claim(
+                    session,
+                    user_id,
+                    dimension=claim.dimension,
+                    key=claim.key,
+                    claim_text=claim.claim_text,
+                    value=claim.value,
+                    relation=claim.relation,
+                    confidence=claim.confidence,
+                )
+
+        # 睡眠持续不足（≤5h 连续 3 天）
+        if all(r.sleep_hours <= 5 for r in last3):
+            claim = d2_assessment_claim(
+                "checkin_sleep",
+                "moderate",
+                score=int(sum(r.sleep_hours for r in last3) / 3),
+            )
+            if claim:
+                record_claim(
+                    session,
+                    user_id,
+                    dimension=claim.dimension,
+                    key=claim.key,
+                    claim_text=claim.claim_text,
+                    value=claim.value,
+                    relation=claim.relation,
+                    confidence=claim.confidence,
+                )
+    except Exception:  # noqa: BLE001 — checkin extraction must not block checkin save
+        pass
 
 
 def get_recent_checkins(session: Session, user_id: str, limit: int = 7) -> list[CheckinRecord]:
