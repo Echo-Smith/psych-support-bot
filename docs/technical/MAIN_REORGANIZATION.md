@@ -15,3 +15,11 @@ Local validation: 74 unit tests passed; installed wheel startup/health/static pa
 ## Review order
 
 The first replacement PR targets upstream main. Dependent replacements target the previous branch in Echo-Smith's fork so their review diffs show only their own increment. Promote them to upstream after the prerequisite is merged; avoid creating several cumulative PRs against the same unchanged upstream main.
+
+## 第二层：对话及产品 API 基础
+
+来自原 #22/#23/#24/#26 的稳定后端快照 b7202bc。身份认证、安全护栏、Prompt 分层、近史上下文、知识检索、练习记录、报告及问卷 API 相互引用，保留为同一后端层，前端资源单独提交。额外提前接入 fcd6130 的会话归属校验与消息同时间戳排序修复；流式接口及其归属测试在语音层恢复。
+
+SQLite 迁移仍使用第一层的包内 runner，新增记录、练习、认证及报告字段迁移随后端交付。无 Mirror 文件或接口。
+
+验证：完整单元与集成测试首轮 555 通过，唯一失败为本层尚不存在的流式接口测试；该测试归还第四层，当前读取与普通续聊的跨用户拒绝检查全部通过。构建与迁移启动单独验证。
