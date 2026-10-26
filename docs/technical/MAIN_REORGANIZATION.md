@@ -49,3 +49,39 @@ SQLite 迁移仍使用第一层的包内 runner，新增记录、练习、认证
 真实回复 eval runner 依赖 LLM API Key，原先在无凭据时以降级模板参与语义/结构验收会产生误判（首轮 7 个案例失败）；现与 judge 一样明确列为需配置凭据的 slow 验收。离线 CI 不把这些未运行项记为成功；保留 #32 的真实模型验收要求。
 
 最终验证：1128 后端测试通过；2 项真实模型验收因无凭据跳过；3 个既有语义检索缺口按 strict xfail 保留；32 前端测试通过。完整 src/tests Ruff 检查通过。wheel 及 1Panel 包的隔离启动、全部 ORM 表/列迁移、旧计划记录保留与百分号 URL 回归通过。默认 Compose 也透传 .env，使身份、语音及记忆配置与 server 入口一致。
+
+## Status (recorded 2026-10-26)
+
+**This delivery line is stalled at layer 1 and is kept as an archive. No action
+is pending on it.**
+
+- Only layer 1 was ever proposed upstream: PR #33 (`codex/reorg-build-runtime`),
+  OPEN, MERGEABLE, 20 files, +592/-182. Layers 2-5 were never opened as PRs —
+  they must be based on layer 1, so they are blocked behind it. This branch
+  (`codex/reorg-psy-memory`, layer 5) is the top of that unused stack.
+- PR #33 has no reviews, no comments and no CI checks. The upstream repository
+  has no CI configured, so nothing will ever run automatically.
+- Upstream `redmaplewww/psych-support-bot` has not been pushed to since
+  `255169f` on 2026-07-04 — its creation day. Its owner is active on other
+  repositories (through 2026-10-22) but not on this one.
+- Merge rate upstream is 0 of 32 PRs. Every closed PR there was closed by its
+  author, not merged.
+- Echo-Smith holds `pull` (not `push`) permission on upstream, so direct pushes
+  are impossible; changes can only arrive through a PR, and no PR is being
+  reviewed.
+
+Consequences for anyone reading this later:
+
+- This 6-commit stack is not a backup of the working tree. It is a trimmed
+  packaging (32 files fewer: README, CONTRIBUTING, Makefile, .pre-commit-config,
+  the whole `dev/` toolset). Merging it back into the main line would delete
+  those files.
+- This layer's source is byte-identical to the main line's profile
+  implementation at its source snapshot `0b64c5c`; reorg adds no unique product
+  code. Mirror memory integration is explicitly out of scope here.
+- The main line (`codex/complete-open-prs`) is the complete, tested branch and
+  carries the Mirror pilot work. Both lines share `255169f` as a merge base;
+  neither depends on the other.
+
+Revisit only if upstream resumes accepting contributions or the owner asks for
+the stacked PRs.
