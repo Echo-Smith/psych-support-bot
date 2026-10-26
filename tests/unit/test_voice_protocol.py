@@ -62,11 +62,18 @@ def test_parse_say_empty_text_is_valid_frame() -> None:
 
 def test_outgoing_wire_shapes_unchanged() -> None:
     """前端（含线上旧版本）按 type 分派：字段名/形状漂移=全体用户静默故障。"""
-    assert LiveReady(audio={"format": "pcm", "sample_rate": 24000}).model_dump() == {
+    ready = LiveReady(audio={"format": "pcm", "sample_rate": 24000}).model_dump()
+    assert ready == {
         "type": "ready",
         "audio": {"format": "pcm", "sample_rate": 24000},
+        "tts": None,  # 预置音色：无延迟画像，前端按 null 走 6s 快收束
     }
-    assert LiveSentenceEnd().model_dump() == {"type": "sentence_end"}
+    clone_ready = LiveReady(
+        audio={"format": "pcm", "sample_rate": 24000},
+        tts={"first_audio_timeout_ms": 20000},
+    ).model_dump()
+    assert clone_ready["tts"] == {"first_audio_timeout_ms": 20000}
+    assert LiveSentenceEnd().model_dump() == {"type": "sentence_end", "round_id": "", "sentence_id": 0}
     assert LiveRoundEnd().model_dump() == {"type": "round_end"}
     assert LiveError(detail="boom").model_dump() == {"type": "error", "detail": "boom"}
 
@@ -85,11 +92,18 @@ def test_ready_accepts_prebuilt_audio_dict() -> None:
 def test_exported_schema_covers_all_events() -> None:
     schema = export_json_schema()
     assert schema["$schema"].startswith("https://json-schema.org")
-    client_types = json.dumps(schema["client_message"])
-    server_types = json.dumps(schema["server_event"])
+    # TTS 协议
+    tts_client = json.dumps(schema["tts"]["client_message"])
+    tts_server = json.dumps(schema["tts"]["server_event"])
     for t in ("say", "end", "abort"):
-        assert f'"const": "{t}"' in client_types
+        assert f'"const": "{t}"' in tts_client
     for t in ("ready", "sentence_end", "round_end", "error"):
-        assert f'"const": "{t}"' in server_types
-    # 文档描述字段在前（给读 schema 的人），事件模型在后
-    assert "client_message" in schema and "server_event" in schema
+        assert f'"const": "{t}"' in tts_server
+    # STT 协议
+    stt_client = json.dumps(schema["stt"]["client_message"])
+    stt_server = json.dumps(schema["stt"]["server_event"])
+    for t in ("end", "abort"):
+        assert f'"const": "{t}"' in stt_client
+    for t in ("ready", "stt_partial", "stt_final", "stt_error"):
+        assert f'"const": "{t}"' in stt_server
+    assert "tts" in schema and "stt" in schema

@@ -42,6 +42,16 @@
           "text": {
             "title": "Text",
             "type": "string"
+          },
+          "round_id": {
+            "default": "",
+            "title": "Round Id",
+            "type": "string"
+          },
+          "sentence_id": {
+            "default": 0,
+            "title": "Sentence Id",
+            "type": "integer"
           }
         },
         "required": [
@@ -124,6 +134,17 @@
           },
           "audio": {
             "$ref": "#/$defs/LiveAudioFormat"
+          },
+          "tts": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/LiveTtsProfile"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
           }
         },
         "required": [
@@ -153,9 +174,56 @@
             "default": "sentence_end",
             "title": "Type",
             "type": "string"
+          },
+          "round_id": {
+            "default": "",
+            "title": "Round Id",
+            "type": "string"
+          },
+          "sentence_id": {
+            "default": 0,
+            "title": "Sentence Id",
+            "type": "integer"
           }
         },
         "title": "LiveSentenceEnd",
+        "type": "object"
+      },
+      "LiveSentenceStart": {
+        "description": "Identifies the text associated with the following PCM frames.",
+        "properties": {
+          "type": {
+            "const": "sentence_start",
+            "default": "sentence_start",
+            "title": "Type",
+            "type": "string"
+          },
+          "round_id": {
+            "default": "",
+            "title": "Round Id",
+            "type": "string"
+          },
+          "sentence_id": {
+            "default": 0,
+            "title": "Sentence Id",
+            "type": "integer"
+          }
+        },
+        "title": "LiveSentenceStart",
+        "type": "object"
+      },
+      "LiveTtsProfile": {
+        "description": "TTS 延迟画像：前端据 first_audio_timeout_ms 放宽「无首音」收束上限。\n\n预置音色首包 ~1-2s（6s 收束够）；音色复刻为兼容模式流式——整句合成完\n才返回单块，首包 5-20s，6s 会掐掉整轮（20260912 实证：只读到最短一句）。\n可选字段：旧前端忽略（前向兼容约定）。",
+        "properties": {
+          "first_audio_timeout_ms": {
+            "title": "First Audio Timeout Ms",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "first_audio_timeout_ms"
+        ],
+        "title": "LiveTtsProfile",
         "type": "object"
       }
     },
@@ -164,13 +232,17 @@
         "error": "#/$defs/LiveError",
         "ready": "#/$defs/LiveReady",
         "round_end": "#/$defs/LiveRoundEnd",
-        "sentence_end": "#/$defs/LiveSentenceEnd"
+        "sentence_end": "#/$defs/LiveSentenceEnd",
+        "sentence_start": "#/$defs/LiveSentenceStart"
       },
       "propertyName": "type"
     },
     "oneOf": [
       {
         "$ref": "#/$defs/LiveReady"
+      },
+      {
+        "$ref": "#/$defs/LiveSentenceStart"
       },
       {
         "$ref": "#/$defs/LiveSentenceEnd"

@@ -16,6 +16,46 @@ from psych_support_bot.domain.assessments.schemas import (
     QuestionnaireSessionView,
 )
 
+# Standard Error of Measurement for Reliable Change Index computation.
+# SEM = SD * sqrt(1 - reliability); values from published psychometric data.
+_RCI_SEM: dict[str, float] = {
+    "phq9": 2.15,  # Kroenke et al. 2001, Cronbach α ≈ 0.89, SD ≈ 6.14
+    "gad7": 2.07,  # Spitzer et al. 2006, α ≈ 0.92, SD ≈ 5.85
+    "isi": 2.59,  # Bastien et al. 2001, α ≈ 0.90, SD ≈ 8.17
+}
+
+
+def reliable_change_index(assessment_type: AssessmentType, prev_score: int, new_score: int) -> float | None:
+    """RCI (Jacobson & Truax, 1991): |Δ| / (SEM * √2).
+
+    Returns the absolute RCI value, or None when SEM data is unavailable.
+    RCI > 1.96 indicates a clinically reliable change (p < .05).
+    """
+    sem = _RCI_SEM.get(assessment_type)
+    if sem is None:
+        return None
+    return abs(new_score - prev_score) / (sem * (2**0.5))
+
+
+def classify_change(
+    assessment_type: AssessmentType,
+    prev_score: int,
+    new_score: int,
+    prev_severity: str,
+    new_severity: str,
+) -> dict[str, object]:
+    """Classify a score change along three axes: reliability, direction, band shift."""
+    rci = reliable_change_index(assessment_type, prev_score, new_score)
+    direction = "improved" if new_score < prev_score else ("deteriorated" if new_score > prev_score else "stable")
+    # For ISI, lower is better; for PHQ-9/GAD-7, lower is better. All follow the same direction.
+    band_changed = prev_severity != new_severity
+    return {
+        "rci": round(rci, 2) if rci is not None else None,
+        "reliable": rci is not None and rci > 1.96,
+        "direction": direction,
+        "band_changed": band_changed,
+    }
+
 
 def severity_for_score(assessment_type: AssessmentType, score: int) -> str:
     bands = {
@@ -420,8 +460,21 @@ def build_progress_prefix(title: str, current_index: int, total_items: int, lang
     return f"[{title} · Question {current_index}/{total_items}]\n\n"
 
 
-def format_trend_line(language: str, *, prev_score: int, days_since: int, new_score: int) -> str:
-    """One-line comparison against the previous completed run of the same scale."""
+def format_trend_line(
+    language: str,
+    *,
+    prev_score: int,
+    days_since: int,
+    new_score: int,
+    assessment_type: str = "",
+    prev_severity: str = "",
+    new_severity: str = "",
+) -> str:
+    """One-line comparison against the previous completed run of the same scale.
+
+    When ``assessment_type`` and both severity bands are supplied, an RCI-based
+    clinical significance note is appended.
+    """
     if language == "zh":
         when = f"（{days_since} 天前）" if days_since else ""
         if new_score < prev_score:
@@ -432,18 +485,37 @@ def format_trend_line(language: str, *, prev_score: int, days_since: int, new_sc
             )
         else:
             verdict = "和上次基本持平。"
-        return f"对比一下：你上次的得分是 {prev_score}{when}，这次是 {new_score} 分，{verdict}"
-    when = f" ({days_since} days ago)" if days_since else ""
-    if new_score < prev_score:
-        verdict = f"that is {prev_score - new_score} points lower than last time — things have eased somewhat."
-    elif new_score > prev_score:
-        verdict = (
-            f"that is {new_score - prev_score} points higher than last time. "
-            "A change in score does not necessarily mean things got worse; we can look at which items moved."
-        )
+        base = f"对比一下：你上次的得分是 {prev_score}{when}，这次是 {new_score} 分，{verdict}"
     else:
-        verdict = "essentially unchanged from last time."
-    return f"For comparison: you scored {prev_score}{when}, and this time {new_score} points — {verdict}"
+        when = f" ({days_since} days ago)" if days_since else ""
+        if new_score < prev_score:
+            verdict = f"that is {prev_score - new_score} points lower than last time — things have eased somewhat."
+        elif new_score > prev_score:
+            verdict = (
+                f"that is {new_score - prev_score} points higher than last time. "
+                "A change in score does not necessarily mean things got worse; we can look at which items moved."
+            )
+        else:
+            verdict = "essentially unchanged from last time."
+        base = f"For comparison: you scored {prev_score}{when}, and this time {new_score} points — {verdict}"
+
+    # Append RCI clinical significance when enough data is available.
+    if assessment_type and prev_severity and new_severity and prev_score != new_score:
+        change = classify_change(assessment_type, prev_score, new_score, prev_severity, new_severity)
+        if change["reliable"]:
+            if language == "zh":
+                if change["direction"] == "improved":
+                    base += "这个变化达到了可靠改善的标准，说明情况确实在好转。"
+                elif change["direction"] == "deteriorated":
+                    base += "这个变化达到了可靠加重的标准，建议多留意近期的状态变化。"
+            else:
+                if change["direction"] == "improved":
+                    base += (
+                        " This change meets the reliable improvement threshold — things are genuinely getting better."
+                    )
+                elif change["direction"] == "deteriorated":
+                    base += " This change meets the reliable worsening threshold — it may be worth paying closer attention to recent shifts."
+    return base
 
 
 def build_questionnaire_prompt(view: QuestionnaireSessionView, *, error_hint: str | None = None) -> str:

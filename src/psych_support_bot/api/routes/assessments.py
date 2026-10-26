@@ -29,6 +29,7 @@ from psych_support_bot.infra.db.repositories import (
     bulk_submit_questionnaire_answers,
     complete_questionnaire_session,
     create_questionnaire_session,
+    get_latest_assessment,
     get_questionnaire_session,
     get_user_assessments,
     record_usage_event,
@@ -38,6 +39,32 @@ from psych_support_bot.infra.db.session import get_db_session
 from psych_support_bot.infra.llm.generation import LLMUnavailableError, generate_assessment_history_analysis
 
 router = APIRouter(prefix="/v1/assessments", tags=["assessments"])
+
+
+def _fire_d2_profile_claim(
+    session: Session,
+    user_id: str,
+    assessment_type: str,
+    result: AssessmentResult,
+) -> None:
+    """通路1：测评完成时自动创建 D2 严重度画像信念（fail-open）。"""
+    try:
+        from psych_support_bot.ai.profile.extractor import d2_assessment_claim
+        from psych_support_bot.infra.db.profile_repositories import record_claim
+
+        previous = get_latest_assessment(session, user_id, assessment_type)
+        prev_severity = previous.severity_band if previous else ""
+        claim = d2_assessment_claim(
+            assessment_type,
+            result.severity_band,
+            result.score,
+            prev_score=previous.score if previous else None,
+            prev_severity=prev_severity,
+        )
+        if claim:
+            record_claim(session, user_id, claim)
+    except Exception:  # noqa: BLE001 — profile extraction must not block assessment
+        pass
 
 
 class AssessmentRequest(BaseModel):
@@ -199,6 +226,7 @@ def create_assessment(
         language="zh",
     )
     save_assessment(session, payload.user_id, assessment, source="panel")
+    _fire_d2_profile_claim(session, payload.user_id, payload.assessment_type, assessment)
     return assessment
 
 
@@ -324,6 +352,7 @@ def complete_questionnaire_session_route(
         language="zh",
     )
     save_assessment(session, completed.user_id, result, source="panel")
+    _fire_d2_profile_claim(session, completed.user_id, assessment_type, result)
     return QuestionnaireSessionResult(session=session_view, result=result)
 
 
@@ -366,6 +395,7 @@ def bulk_submit_questionnaire_session(
     )
     result = build_assessment_result(assessment_type, answers=answer_set, language="zh")
     save_assessment(session, completed.user_id, result, source="panel")
+    _fire_d2_profile_claim(session, completed.user_id, assessment_type, result)
     return QuestionnaireSessionResult(session=session_view, result=result)
 
 

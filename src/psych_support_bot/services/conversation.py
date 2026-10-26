@@ -14,6 +14,8 @@ from psych_support_bot.ai.practice_flow import (
     PRACTICE_PAUSE_CHIP,
     PRACTICE_TAG,
 )
+from psych_support_bot.ai.profile.display_dict import friendly_label
+from psych_support_bot.ai.profile.extractor import record_turn_interventions, run_turn_extraction
 from psych_support_bot.ai.schemas.messages import (
     ConversationMode,
     ConversationRequest,
@@ -25,6 +27,7 @@ from psych_support_bot.ai.schemas.state import GraphState
 from psych_support_bot.ai.tools.exercises import detect_completed_exercise
 from psych_support_bot.domain.assessments.service import classify_disengage
 from psych_support_bot.domain.consents import DISCLAIMER_VERSION
+from psych_support_bot.infra.config.settings import get_settings
 from psych_support_bot.infra.db.exercise_repositories import save_exercise_record
 from psych_support_bot.infra.db.practice_repositories import (
     complete_practice_session,
@@ -35,6 +38,7 @@ from psych_support_bot.infra.db.practice_repositories import (
     record_practice_step,
     reset_practice_session,
 )
+from psych_support_bot.infra.db.profile_repositories import list_question_candidates
 from psych_support_bot.infra.db.repositories import (
     build_memory_snapshot,
     build_user_history_text,
@@ -46,6 +50,8 @@ from psych_support_bot.infra.db.repositories import (
 )
 from psych_support_bot.infra.telemetry.tracing import trace_span, update_span_output
 from psych_support_bot.services.questionnaire_flow import QuestionnaireFlow
+from psych_support_bot.services.slice_manager import SliceManager, build_slice_context
+from psych_support_bot.services.slice_retrieval import render_slice_history_block, retrieve_relevant_slices
 from psych_support_bot.services.support import _days_since, _detect_expected_language
 
 # How long a screening result with needs_safety_followup keeps enforcing the
@@ -269,21 +275,77 @@ class ConversationService:
             if msg.role in {"user", "assistant"} and (msg.content or "").strip()
         ]
 
+        # ===== Context Slicing (Phase 3) =====
+        # 如果启用切片系统，构建切片上下文；否则使用 recent_history
+        settings = get_settings()
+        if settings.enable_context_slicing:
+            slice_manager = SliceManager()
+            current_slice = slice_manager.get_or_create_slice(session, payload.user_id, session_id, payload.message)
+            slice_context = build_slice_context(session, current_slice.id, max_turns=20)
+            slice_metadata = {
+                "is_new_slice": current_slice.turn_count == 0,
+                "boundary_reason": current_slice.boundary_reason,
+                "boundary_confidence": current_slice.boundary_confidence,
+                "primary_topic": current_slice.primary_topic,
+            }
+            slice_id = current_slice.id
+            logger.info(
+                "Context slicing enabled: is_new_slice=%s reason=%s",
+                slice_metadata["is_new_slice"],
+                slice_metadata["boundary_reason"],
+            )
+        else:
+            # 禁用时使用空值（保留 recent_history）
+            slice_context = []
+            slice_metadata = {}
+            slice_id = ""
+            logger.debug("Context slicing disabled, using recent_history")
+
+        # 结构化风险通道：近 7 天最近一次 high/critical RiskEvent（跨轮升级主来源）。
+        # 取序前移：画像层的动态预算与 D7 优先渲染需要它作为轮次上下文。
+        recent_risk_level = get_recent_risk_level(session, payload.user_id)
+        # K2 质询闭环：待验证画像假设（图内不持 DB 会话，图启动前载入）。
+        profile_question_candidates = [
+            label
+            for belief in list_question_candidates(session, payload.user_id)
+            if (label := friendly_label(belief.key)) is not None
+        ]
         memory_summary = payload.memory_summary or build_memory_snapshot(
-            session, payload.user_id, language=expected_language
+            session,
+            payload.user_id,
+            language=expected_language,
+            user_message=payload.message,
+            recent_risk_level=recent_risk_level,
         )
         # 情绪扫描专用通道：用户原话 + 会话摘要，不含记录层渲染文本。
         user_history_text = payload.memory_summary or build_user_history_text(session, payload.user_id)
-        # 结构化风险通道：近 7 天最近一次 high/critical RiskEvent（跨轮升级主来源）。
-        recent_risk_level = get_recent_risk_level(session, payload.user_id)
+
+        # ===== P5: 画像驱动相关历史检索 =====
+        # 完成切片的摘要作为【相关历史】背景块并入 memory_summary（与
+        # slice_context 的"本次对话"逐字区分工）。不进 user_history_text
+        # 情绪扫描通道——摘要文本不是用户当前情绪表达。fail-open：检索
+        # 层内部已兜底，这里只额外挡住渲染异常。
+        if settings.enable_context_slicing and settings.enable_profile_slice_retrieval and slice_id:
+            try:
+                relevant = retrieve_relevant_slices(
+                    session, payload.user_id, payload.message, exclude_slice_id=slice_id
+                )
+                history_block = render_slice_history_block(relevant, language=expected_language)
+                if history_block:
+                    memory_summary = f"{memory_summary}\n\n{history_block}" if memory_summary else history_block
+                    slice_metadata["relevant_slice_ids"] = [s.slice_id for s in relevant]
+            except Exception:  # noqa: BLE001 - retrieval is optional and fail-open
+                logger.warning("Slice history retrieval failed; continuing without relevant history")
 
         state: GraphState = {
             "user_id": payload.user_id,
             "session_id": session_id,
             "user_message": payload.message,
+            "conversation_intent": "new_request",
             "memory_summary": memory_summary,
             "user_history_text": user_history_text,
             "recent_risk_level": recent_risk_level,
+            "profile_question_candidates": profile_question_candidates,
             "knowledge_context": "",
             "mode": "support",
             "risk_result": RiskResult(
@@ -314,6 +376,8 @@ class ConversationService:
             "no_question_mode": classify_disengage(payload.message) == "quiet",
             # Depth of this conversation; feeds stage-floor escalation.
             "turn_count": len(prior_messages),
+            # VAD 元数据：前端语音输入的起止时间、停顿次数（行为信号层使用）。
+            "vad_metadata": payload.vad_metadata or {},
             # 逐字近史（标准 API 格式，追加在消息末尾）
             "recent_history": recent_history,
             # A recent flagged screening (PHQ-9 item 9 etc.) raises the risk
@@ -343,6 +407,10 @@ class ConversationService:
             "practice_action": "",
             # LLM→TTS 句子级流式开关（默认关；respond_stream 置真）。
             "stream_tokens": False,
+            # ===== Context Slicing (Phase 3) =====
+            "slice_id": slice_id,
+            "slice_context": slice_context,
+            "slice_metadata": slice_metadata,
         }
         return state, session_id, expected_language
 
@@ -371,17 +439,18 @@ class ConversationService:
                 "mode": "support",
             },
             metadata={"memory_summary": state["memory_summary"]},
+            content_input=payload.message,
             session_id=session_id,
             user_id=payload.user_id,
         ) as root_obs:
             try:
                 raw_result = cast(Any, conversation_graph.invoke(cast(Any, state)))
-            except Exception:
+            except Exception:  # noqa: BLE001 - final safety fallback must catch graph failures
                 # 最后一道防线：graph 内部任何未捕获异常（LLM 故障、节点 bug）
                 # 都不能以 500 形式暴露给处于脆弱状态的用户。
                 # Langfuse 巡检（2026-08-23）：越狱输入触发上游 403 后
                 # graph 输出为空，用户端收到错误响应。
-                logger.exception("Conversation graph failed; serving static safety fallback reply.")
+                logger.warning("Conversation graph failed; serving static safety fallback reply")
                 update_span_output(root_obs, {"error": "graph_invoke_failed", "fallback": True})
                 fallback_zh = expected_language == "zh"
                 reply_text = (
@@ -425,20 +494,13 @@ class ConversationService:
                     response=fallback_response,
                     user_message=payload.message,
                     user_id=payload.user_id,
+                    slice_id=state.get("slice_id", ""),  # Phase 3: fallback 也关联切片
                 )
                 return fallback_response
             done_state: GraphState = cast(GraphState, raw_result)
             # Root-level output so the Langfuse UI shows a usable summary row
             # per conversation turn instead of a null output.
-            update_span_output(
-                root_obs,
-                {
-                    "session_id": session_id,
-                    "mode": done_state["mode"],
-                    "risk_level": done_state["risk_result"].risk_level,
-                    "reply_text": done_state["generated_reply"].text[:200],
-                },
-            )
+            update_span_output(root_obs, done_state["generated_reply"].text, include_content=True)
         result: GraphState = cast(GraphState, raw_result)
         return self._finalize(result, payload, session, session_id)
 
@@ -469,37 +531,47 @@ class ConversationService:
         pending = ""
         spoken: list[str] = []
         final_state: GraphState | None = None
-        try:
-            for mode, chunk in conversation_graph.stream(cast(Any, state), stream_mode=["custom", "values"]):
-                if mode == "custom":
-                    text = chunk.get("text", "") if isinstance(chunk, dict) else ""
-                    if not text:
-                        continue
-                    pending += text
-                    sentences, pending = _split_complete_sentences(pending, first=not spoken)
-                    for sent in sentences:
-                        spoken.append(sent)
-                        if scan_sentence_speakable(sent, challenge_allowed=False, expected_language=expected_language):
-                            yield {"type": "sentence", "text": sent}
-                elif mode == "values":
-                    final_state = cast(GraphState, chunk)
-        except Exception:
-            logger.exception("respond_stream graph failed; falling back to non-streaming respond.")
-            yield {"type": "final", "response": self.respond(payload, session)}
-            return
+        with trace_span(
+            "conversation_graph.stream",
+            content_input=payload.message,
+            session_id=session_id,
+            user_id=payload.user_id,
+        ) as root_obs:
+            try:
+                for mode, chunk in conversation_graph.stream(cast(Any, state), stream_mode=["custom", "values"]):
+                    if mode == "custom":
+                        text = chunk.get("text", "") if isinstance(chunk, dict) else ""
+                        if not text:
+                            continue
+                        pending += text
+                        sentences, pending = _split_complete_sentences(pending, first=not spoken)
+                        for sent in sentences:
+                            if scan_sentence_speakable(
+                                sent, challenge_allowed=False, expected_language=expected_language
+                            ):
+                                spoken.append(sent)
+                                yield {"type": "sentence", "text": sent}
+                    elif mode == "values":
+                        final_state = cast(GraphState, chunk)
+            except Exception:  # noqa: BLE001 - streaming must degrade to the safe response path
+                logger.warning("respond_stream graph failed; falling back to non-streaming respond")
+                update_span_output(root_obs, {"failed": True, "fallback_used": True})
+                yield {"type": "final", "response": self.respond(payload, session)}
+                return
 
-        if final_state is None:
-            yield {"type": "final", "response": self.respond(payload, session)}
-            return
+            if final_state is None:
+                update_span_output(root_obs, {"failed": True, "fallback_used": True})
+                yield {"type": "final", "response": self.respond(payload, session)}
+                return
 
-        # 收尾残留（无句末标点结束的尾句）
-        tail = pending.strip()
-        if tail:
-            spoken.append(tail)
-            if scan_sentence_speakable(tail, challenge_allowed=False, expected_language=expected_language):
+            # 收尾残留（无句末标点结束的尾句）
+            tail = pending.strip()
+            if tail and scan_sentence_speakable(tail, challenge_allowed=False, expected_language=expected_language):
+                spoken.append(tail)
                 yield {"type": "sentence", "text": tail}
 
-        response = self._finalize(final_state, payload, session, session_id)
+            response = self._finalize(final_state, payload, session, session_id)
+            update_span_output(root_obs, response.reply.text, include_content=True)
 
         # 全文兜底审查差异 → revise（前端停读并用审查后文本替换气泡）
         reviewed = (response.reply.text or "").strip()
@@ -553,12 +625,56 @@ class ConversationService:
             response=response,
             user_message=payload.message,
             user_id=payload.user_id,
+            slice_id=result.get("slice_id", ""),  # Phase 3: 传递切片ID
         )
         # M3 对话图联动：对话中完成练习时自动落库（exercise_history 之前只
         # 存在于图状态的内存字段，现在持久化）。识别不到不记，宁漏不误。
         completed_tag = detect_completed_exercise(payload.message)
         if completed_tag:
             save_exercise_record(session, payload.user_id, completed_tag, source="chat")
+        # K1b 画像提取（fail-open）：D1 复用图内 topics，D4 吃练习完成信号；
+        # 危机轮零提取；全量统计落 profile_extraction_stats。异常只记日志，
+        # 绝不影响本轮响应（与记忆模块 fail-open 同约定）。
+        try:
+            run_turn_extraction(
+                session,
+                user_id=payload.user_id,
+                session_id=session_id,
+                topics=list(result.get("topics") or []),
+                risk_level=str(result["risk_result"].risk_level),
+                exercise_tag=completed_tag
+                or (PRACTICE_TAG if str(result.get("practice_action") or "") == "complete" else None),
+                valence_text=payload.message,
+                turn_count=int(result.get("turn_count") or 0),
+                slice_id=str(result.get("slice_id") or ""),  # P4: 提取溯源至切片
+            )
+        except Exception:  # noqa: BLE001  # pragma: no cover - optional extraction hook
+            logger.warning("Profile extraction hook failed; conversation response unaffected")
+        # K2c 干预→反应事件（动作元数据 only，fail-open）。
+        try:
+            record_turn_interventions(
+                session,
+                user_id=payload.user_id,
+                session_id=session_id,
+                practice_action=str(result.get("practice_action") or ""),
+                exercise_tag=completed_tag
+                or (PRACTICE_TAG if str(result.get("practice_action") or "") == "complete" else None),
+                question_candidates=list(result.get("profile_question_candidates") or []),
+                no_question_mode=bool(result.get("no_question_mode")),
+                mode=str(result["mode"]),
+                risk_level=str(result["risk_result"].risk_level),
+            )
+        except Exception:  # noqa: BLE001  # pragma: no cover - optional intervention hook
+            logger.warning("Intervention event hook failed; conversation response unaffected")
+
+        # 通路 C：异步画像综合——K1+K2 已同步落库，触发异步 Worker 处理 K3。
+        try:
+            from psych_support_bot.services.profile_evolution import enqueue_evolution_job
+
+            enqueue_evolution_job(session, payload.user_id)
+        except Exception:  # noqa: BLE001 — evolution trigger must not block conversation
+            pass
+
         return response
 
 

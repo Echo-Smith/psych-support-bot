@@ -10,23 +10,28 @@
 """
 
 from datetime import UTC, datetime, timedelta
+from types import SimpleNamespace
 from uuid import uuid4
 
 import jwt as pyjwt
 import pytest
 from fastapi import HTTPException
 from fastapi.testclient import TestClient
+from pydantic import ValidationError
 
 from psych_support_bot.api.auth import (
     PBKDF2_ITERATIONS,
     create_access_token,
     decode_access_token,
     hash_password,
+    validate_account_token,
     verify_password,
 )
 from psych_support_bot.app import app
+from psych_support_bot.domain.auth.identity import VerifiedIdentity, find_identity, link_verified_identity
 from psych_support_bot.domain.auth.service import authenticate_user, register_user
-from psych_support_bot.infra.config.settings import get_settings
+from psych_support_bot.infra.config.settings import Settings, get_settings
+from psych_support_bot.infra.db.models import AuthSession, User, UserCredential
 from psych_support_bot.infra.db.session import SessionLocal
 
 client = TestClient(app)
@@ -87,7 +92,11 @@ def test_token_rejects_expired() -> None:
 
 
 def test_token_rejects_wrong_secret() -> None:
-    forged = pyjwt.encode({"sub": "u", "exp": datetime.now(UTC) + timedelta(days=1)}, "other-secret", algorithm="HS256")
+    forged = pyjwt.encode(
+        {"sub": "u", "exp": datetime.now(UTC) + timedelta(days=1)},
+        "other-secret" * 4,
+        algorithm="HS256",
+    )
     with pytest.raises(HTTPException):
         decode_access_token(forged)
 
@@ -100,12 +109,25 @@ def test_register_and_login_flow() -> None:
     password = _rand_password()
     with SessionLocal() as session:
         result = register_user(session, username, password)
-    assert result["user_id"] == username
-    assert decode_access_token(result["access_token"]) == username
+    account_id = str(result["user_id"])
+    assert account_id.startswith("acct_")
+    assert account_id != username
+    assert decode_access_token(str(result["access_token"])) == account_id
 
     with SessionLocal() as session:
         login = authenticate_user(session, username, password)
-    assert login["user_id"] == username
+    assert login["user_id"] == account_id
+
+
+def test_legacy_username_account_keeps_existing_user_id() -> None:
+    username = _rand_username()
+    password = _rand_password()
+    with SessionLocal() as session:
+        session.add(User(id=username))
+        session.add(UserCredential(user_id=username, username=username, password_hash=hash_password(password)))
+        session.commit()
+        result = authenticate_user(session, username, password)
+    assert result["user_id"] == username
 
 
 def test_register_rejects_duplicate() -> None:
@@ -181,12 +203,12 @@ def test_auth_enabled_binds_user_id_to_token_sub(monkeypatch) -> None:
     get_settings.cache_clear()
     try:
         username = f"bt{int(time.time())}"
-        token = client.post("/v1/auth/register", json={"username": username, "password": _rand_password()}).json()[
-            "access_token"
-        ]
+        registered = client.post("/v1/auth/register", json={"username": username, "password": _rand_password()}).json()
+        token = registered["access_token"]
+        account_id = registered["user_id"]
         headers = {"Authorization": f"Bearer {token}"}
         # 本人数据：放行（空历史 200）
-        assert client.get("/v1/checkins", params={"user_id": username}, headers=headers).status_code == 200
+        assert client.get("/v1/checkins", params={"user_id": account_id}, headers=headers).status_code == 200
         # 他人 user_id：403（区别于 401——身份有效但越权）
         resp = client.get("/v1/checkins", params={"user_id": "victim-user"}, headers=headers)
         assert resp.status_code == 403
@@ -205,3 +227,227 @@ def test_auth_routes_always_open() -> None:
         resp = client.post("/v1/auth/register", json={"username": _rand_username(), "password": _rand_password()})
         assert resp.status_code == 200
     get_settings.cache_clear()
+
+
+def test_refresh_cookie_rotates_and_replay_is_rejected() -> None:
+    client.cookies.clear()
+    response = client.post(
+        "/v1/auth/register",
+        json={"username": _rand_username(), "password": _rand_password()},
+    )
+    assert response.status_code == 200
+    assert "HttpOnly" in response.headers.get("set-cookie", "")
+    assert "refresh_token" not in response.json()
+    old_refresh = client.cookies.get("psb_refresh")
+    old_csrf = client.cookies.get("psb_csrf")
+    assert old_refresh and old_csrf
+
+    refreshed = client.post("/v1/auth/refresh", headers={"X-CSRF-Token": old_csrf})
+    assert refreshed.status_code == 200
+    assert refreshed.json()["user_id"] == response.json()["user_id"]
+    assert client.cookies.get("psb_refresh") != old_refresh
+
+    client.cookies.set("psb_refresh", old_refresh, path="/v1/auth")
+    client.cookies.set("psb_csrf", old_csrf, path="/v1/auth")
+    replay = client.post("/v1/auth/refresh", headers={"X-CSRF-Token": old_csrf})
+    assert replay.status_code == 401
+
+
+def test_logout_revokes_refresh_session_and_clears_cookie() -> None:
+    client.cookies.clear()
+    response = client.post(
+        "/v1/auth/register",
+        json={"username": _rand_username(), "password": _rand_password()},
+    )
+    csrf = client.cookies.get("psb_csrf")
+    assert response.status_code == 200 and csrf
+    logout = client.post("/v1/auth/logout", headers={"X-CSRF-Token": csrf})
+    assert logout.status_code == 204
+    assert client.cookies.get("psb_refresh") is None
+    with SessionLocal() as session:
+        assert session.query(AuthSession).filter(AuthSession.user_id == response.json()["user_id"]).one().revoked_at
+
+
+def test_native_session_returns_rotating_refresh_token_without_cookie() -> None:
+    client.cookies.clear()
+    registered = client.post(
+        "/v1/auth/register",
+        json={
+            "username": _rand_username(),
+            "password": _rand_password(),
+            "session_transport": "native",
+        },
+    )
+    assert registered.status_code == 200
+    first_refresh = registered.json()["refresh_token"]
+    assert first_refresh
+    assert client.cookies.get("psb_refresh") is None
+
+    refreshed = client.post("/v1/auth/native/refresh", json={"refresh_token": first_refresh})
+    assert refreshed.status_code == 200
+    second_refresh = refreshed.json()["refresh_token"]
+    assert second_refresh != first_refresh
+    assert client.post("/v1/auth/native/refresh", json={"refresh_token": first_refresh}).status_code == 401
+    assert client.post("/v1/auth/native/logout", json={"refresh_token": second_refresh}).status_code == 204
+    assert client.post("/v1/auth/native/refresh", json={"refresh_token": second_refresh}).status_code == 401
+
+
+def test_logout_all_revokes_sessions_and_current_access_token() -> None:
+    registered = client.post(
+        "/v1/auth/register",
+        json={
+            "username": _rand_username(),
+            "password": _rand_password(),
+            "session_transport": "native",
+        },
+    ).json()
+    response = client.post(
+        "/v1/auth/logout-all",
+        headers={"Authorization": "Bearer " + registered["access_token"]},
+    )
+    assert response.status_code == 200
+    assert response.json()["revoked_sessions"] == 1
+    with pytest.raises(HTTPException):
+        validate_account_token(registered["access_token"])
+    assert (
+        client.post(
+            "/v1/auth/native/refresh",
+            json={"refresh_token": registered["refresh_token"]},
+        ).status_code
+        == 401
+    )
+
+
+def test_verified_identity_links_by_provider_issuer_and_subject() -> None:
+    first = _rand_username()
+    second = _rand_username()
+    with SessionLocal() as session:
+        first_id = str(register_user(session, first, _rand_password())["user_id"])
+        second_id = str(register_user(session, second, _rand_password())["user_id"])
+        identity = VerifiedIdentity(provider="google", issuer="https://accounts.google.com", subject="provider-user-1")
+        linked = link_verified_identity(session, first_id, identity)
+        session.commit()
+        assert linked.subject_hash != identity.subject
+        assert find_identity(session, identity).user_id == first_id
+        with pytest.raises(HTTPException) as exc:
+            link_verified_identity(session, second_id, identity)
+        assert exc.value.status_code == 409
+
+
+def test_oidc_provider_stays_disabled_without_client_ids(monkeypatch) -> None:
+    get_settings.cache_clear()
+    monkeypatch.setenv("AUTH_GOOGLE_CLIENT_IDS", "")
+    get_settings.cache_clear()
+    try:
+        response = client.post("/v1/auth/oidc/challenge", json={"provider": "google"})
+        assert response.status_code == 503
+    finally:
+        get_settings.cache_clear()
+
+
+def test_production_auth_requires_independent_stable_keys(monkeypatch) -> None:
+    monkeypatch.setenv("ENVIRONMENT", "production")
+    monkeypatch.setenv("AUTH_ENABLED", "true")
+    monkeypatch.setenv("JWT_SECRET_KEY", "jwt-key-" * 8)
+    monkeypatch.setenv("AUTH_IDENTITY_HASH_KEY", "")
+    with pytest.raises(ValidationError, match="AUTH_IDENTITY_HASH_KEY"):
+        Settings(_env_file=None)
+
+    monkeypatch.setenv("AUTH_IDENTITY_HASH_KEY", "jwt-key-" * 8)
+    with pytest.raises(ValidationError, match="must be independent"):
+        Settings(_env_file=None)
+
+
+def test_auth_capabilities_only_advertise_fully_configured_methods(monkeypatch) -> None:
+    monkeypatch.setenv("AUTH_GOOGLE_CLIENT_IDS", "web-client,ios-client")
+    monkeypatch.setenv("AUTH_APPLE_CLIENT_IDS", "")
+    monkeypatch.setenv("AUTH_HUAWEI_CLIENT_IDS", "huawei-client")
+    monkeypatch.setenv("AUTH_PASSKEY_RP_ID", "example.com")
+    monkeypatch.setenv("AUTH_PASSKEY_ORIGINS", "https://auth.example.com")
+    get_settings.cache_clear()
+    try:
+        result = client.get("/v1/auth/capabilities")
+        assert result.status_code == 200
+        assert result.json() == {
+            "password": True,
+            "oidc_providers": ["google", "huawei"],
+            "passkey": True,
+        }
+    finally:
+        get_settings.cache_clear()
+
+
+def test_oidc_exchange_uses_nonce_once_and_reuses_internal_account(monkeypatch) -> None:
+    from psych_support_bot.domain.auth import oidc
+
+    client.cookies.clear()
+    get_settings.cache_clear()
+    monkeypatch.setenv("AUTH_GOOGLE_CLIENT_IDS", "web-client,ios-client")
+    get_settings.cache_clear()
+    active_nonce = {"value": ""}
+
+    class FakeJwksClient:
+        def __init__(self, url: str):
+            assert url == "https://www.googleapis.com/oauth2/v3/certs"
+
+        def get_signing_key_from_jwt(self, token: str):
+            assert len(token) >= 32
+            return SimpleNamespace(key="verified-public-key")
+
+    def fake_decode(*_args, **kwargs):
+        assert "web-client" in kwargs["audience"]
+        assert "https://accounts.google.com" in kwargs["issuer"]
+        return {
+            "iss": "https://accounts.google.com",
+            "sub": "stable-provider-subject",
+            "aud": "web-client",
+            "iat": int(datetime.now(UTC).timestamp()),
+            "exp": int((datetime.now(UTC) + timedelta(minutes=5)).timestamp()),
+            "nonce": active_nonce["value"],
+        }
+
+    monkeypatch.setattr(oidc.pyjwt, "PyJWKClient", FakeJwksClient)
+    monkeypatch.setattr(oidc.pyjwt, "decode", fake_decode)
+    oidc._jwks_client.cache_clear()
+    try:
+        challenge = client.post("/v1/auth/oidc/challenge", json={"provider": "google"}).json()
+        active_nonce["value"] = challenge["nonce"]
+        body = {
+            "provider": "google",
+            "challenge_id": challenge["challenge_id"],
+            "nonce": challenge["nonce"],
+            "id_token": "signed-id-token-placeholder-value-1234567890",
+        }
+        first = client.post("/v1/auth/oidc/exchange", json=body)
+        assert first.status_code == 200
+        account_id = first.json()["user_id"]
+        assert account_id.startswith("acct_")
+        assert client.post("/v1/auth/oidc/exchange", json=body).status_code == 401
+
+        challenge = client.post("/v1/auth/oidc/challenge", json={"provider": "google"}).json()
+        active_nonce["value"] = challenge["nonce"]
+        body.update(challenge_id=challenge["challenge_id"], nonce=challenge["nonce"])
+        second = client.post("/v1/auth/oidc/exchange", json=body)
+        assert second.status_code == 200
+        assert second.json()["user_id"] == account_id
+    finally:
+        oidc._jwks_client.cache_clear()
+        get_settings.cache_clear()
+
+
+def test_jwks_client_refuses_origins_outside_provider_allowlist():
+    """出站 JWKS 拉取只允许 https + 固定供应商主机（SSRF 纵深防御）。"""
+    from psych_support_bot.domain.auth import oidc
+
+    for bad in (
+        "http://www.googleapis.com/oauth2/v3/certs",  # 明文协议
+        "https://localhost/oauth2/v3/certs",
+        "https://127.0.0.1/oauth2/v3/certs",
+        "https://169.254.169.254/latest/meta-data",  # 云元数据
+        "https://10.0.0.8/certs",  # 私有段
+        "https://www.googleapis.com.evil.example/oauth2/v3/certs",  # 后缀伪装
+        "file:///etc/passwd",
+    ):
+        with pytest.raises(ValueError):
+            oidc._jwks_client(bad)
+    oidc._jwks_client.cache_clear()

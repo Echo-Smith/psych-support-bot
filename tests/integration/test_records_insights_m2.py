@@ -8,7 +8,7 @@
 5. 幂等 upsert：同日重复提交合并为一条；checkin_date 补传本地历史；拒绝未来日期。
 """
 
-from datetime import UTC, date, datetime, timedelta
+from datetime import date, timedelta
 from types import SimpleNamespace
 from uuid import uuid4
 
@@ -198,7 +198,10 @@ def test_checkin_upsert_same_day_overwrites() -> None:
 
 
 def _today() -> date:
-    return datetime.now(tz=UTC).date()
+    # 本地日历（与路由 date.today() 校验同参照钟）：打卡日期是用户本地日
+    # 的概念。曾用 UTC 派生日期，在 UTC+8 的 0-8 点窗口"UTC 明天"恰为
+    # 本地今天，future 拒收用例会误判放行（200）。
+    return date.today()  # noqa: DTZ011 — 有意取本地钟，路由侧同款 noqa
 
 
 def test_checkin_backfill_with_explicit_date() -> None:

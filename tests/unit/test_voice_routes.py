@@ -361,6 +361,20 @@ def test_tts_live_pcm_protocol(client, monkeypatch):
             {"event": "task_finished", "base_resp": {"status_code": 0}},
         ]
     )
+    original_recv = fake.recv
+
+    async def receive_after_request():
+        import asyncio
+
+        if fake._script and fake._script[0].get("data", {}).get("audio"):
+            while not any(f.get("event") == "task_continue" for f in fake.sent):
+                await asyncio.sleep(0)
+        if fake._script and fake._script[0].get("event") == "task_finished":
+            while not any(f.get("event") == "task_finish" for f in fake.sent):
+                await asyncio.sleep(0)
+        return await original_recv()
+
+    fake.recv = receive_after_request
     monkeypatch.setattr(websockets, "connect", lambda url, **kw: fake)
 
     with client.websocket_connect("/v1/voice/tts/live") as ws:
@@ -370,6 +384,7 @@ def test_tts_live_pcm_protocol(client, monkeypatch):
         assert ready["audio"]["sample_rate"] == 32000
         ws.send_json({"type": "say", "text": "你好呀"})
         ws.send_json({"type": "end"})
+        assert ws.receive_json()["type"] == "sentence_start"
         assert ws.receive_bytes() == pcm  # 二进制帧 = 裸 PCM，非 base64 JSON
         assert ws.receive_json()["type"] == "sentence_end"
         assert ws.receive_json()["type"] == "round_end"
@@ -453,6 +468,7 @@ def test_tts_live_mimo_protocol(client, monkeypatch):
         assert ready["audio"] == {"format": "pcm", "sample_rate": 24000}
         ws.send_json({"type": "say", "text": "你好"})
         ws.send_json({"type": "end"})
+        assert ws.receive_json()["type"] == "sentence_start"
         # 每个 SSE delta 一条 WS 二进制帧（前端 WebAudio 逐块入队）
         assert ws.receive_bytes() == b"\x01\x02"
         assert ws.receive_bytes() == b"\x03\x04"

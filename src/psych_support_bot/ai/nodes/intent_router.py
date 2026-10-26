@@ -1,5 +1,5 @@
 from psych_support_bot.ai.practice_flow import detect_practice_intent
-from psych_support_bot.ai.routers.intent import REFUSAL_KEYWORDS, detect_mode
+from psych_support_bot.ai.routers.intent import REFUSAL_KEYWORDS, detect_conversation_intent, detect_mode
 from psych_support_bot.ai.schemas.state import GraphState
 from psych_support_bot.ai.utils.text_matching import _contains_keyword, _normalize_text
 from psych_support_bot.infra.telemetry.tracing import trace_span, update_span_output
@@ -25,10 +25,15 @@ def route_intent(state: GraphState) -> GraphState:
         "node.intent_router",
         input={"user_message": state["user_message"], "current_mode": state.get("mode", "")},
     ) as obs:
+        state["conversation_intent"] = detect_conversation_intent(
+            state["user_message"], state.get("slice_context") or state.get("recent_history") or []
+        )
         if state.get("mode") == "crisis":
             # 危机短路：mode 已由 risk_classifier 改写，任何练习/会话状态
             # 都不劫持本轮（进行中的练习由服务层在图结束后暂停）。
-            update_span_output(obs, {"mode": "crisis", "skipped": True})
+            update_span_output(
+                obs, {"mode": "crisis", "conversation_intent": state["conversation_intent"], "skipped": True}
+            )
             return state
 
         # 图内引导练习分支：用户在练习中 / 请求练习 / 确认开始。
@@ -41,7 +46,11 @@ def route_intent(state: GraphState) -> GraphState:
             state["mode"] = "intervention"
             update_span_output(
                 obs,
-                {"mode": state["mode"], "practice_route": practice_route},
+                {
+                    "mode": state["mode"],
+                    "conversation_intent": state["conversation_intent"],
+                    "practice_route": practice_route,
+                },
             )
             return state
 
@@ -63,6 +72,7 @@ def route_intent(state: GraphState) -> GraphState:
             obs,
             {
                 "mode": state["mode"],
+                "conversation_intent": state["conversation_intent"],
                 "refusal_detected": has_refusal,
                 "refusal_history": state.get("refusal_history", []),
             },

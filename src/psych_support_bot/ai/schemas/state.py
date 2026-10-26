@@ -57,6 +57,11 @@ class GraphState(TypedDict):
     # 裁决仍 ≤ elevated 时 response_generator 直接采用，跳过自己的 LLM 调用；
     # 升级 high/critical 则丢弃走危机路径。投机失败为 None。
     speculative_reply: str | None
+    # K2 质询闭环：待验证画像假设（L4 且 confidence ≥ 质询水位）的友善标签，
+    # 图启动前由服务层从 DB 载入（图谱内不持 DB 会话）。consultation_planner
+    # 在 no_question_mode 关闭且非危机时，把至多一条经 loop_hint 注入，
+    # 让本轮提问自然完成一次 belief 验证。空列表 = 本轮无质询候选。
+    profile_question_candidates: list[str]
     # LLM 语义层输出的情绪读数（一句话，用户此刻的情绪状态；""=不可用）。
     # 生成端经 build_boundary_prompt 注入，让回复直接镜像当前情绪而非只看
     # risk_level 代理值。关键词层无此通道。
@@ -69,6 +74,8 @@ class GraphState(TypedDict):
     # API 格式追加在消息列表末尾——「换个方向吧」这类上下文依赖型消息
     # 此前因模型看不到逐字近史而被误读（Langfuse 2026-09-06 实证）。
     recent_history: list[dict[str, str]]
+    # Relationship between the latest message and the available conversation history.
+    conversation_intent: str
     # 图内引导练习（对话式 54321）：服务层预注入 {"tag", "current_step",
     # "step_responses", "transcript"}（practice_sessions 表，每轮从 DB 重建
     # 的状态由此进图）；无练习会话时为 None。practice_responder 据此路由。
@@ -84,3 +91,11 @@ class GraphState(TypedDict):
     # get_stream_writer 逐块吐 token，供 /respond/stream SSE 消费。
     # 仅影响是否推流式事件，不改变最终 state 文本（safety_reviewer/持久化不变）。
     stream_tokens: bool
+    # ===== Context Slicing (Phase 3) =====
+    # 当前对话切片 ID（conversation_slices 表主键）
+    slice_id: str
+    # 切片上下文：当前切片内的完整对话历史（替代 recent_history 作为主上下文）
+    # 格式：[{"role": "user"|"assistant", "content": str}]，时间正序
+    slice_context: list[dict[str, str]]
+    # 切片元信息：{"is_new_slice": bool, "boundary_reason": str, "primary_topic": str}
+    slice_metadata: dict[str, Any]

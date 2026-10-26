@@ -219,6 +219,21 @@ def test_get_recent_user_messages_user_role_only() -> None:
     assert messages == ["今天撑不住了", "我觉得很绝望"]  # 倒序，无 Bot 侧文本
 
 
+def test_get_recent_user_messages_breaks_timestamp_ties_by_insertion_order() -> None:
+    user_id = f"mm-tie-{uuid4().hex[:8]}"
+    now = datetime.now(UTC)
+    with _fresh_session() as db:
+        conv = ConversationSession(id=str(uuid4()), user_id=user_id, mode="support", risk_level="low")
+        db.add(conv)
+        db.flush()
+        for role, text in [("user", "先发"), ("assistant", "机器人"), ("user", "后发")]:
+            db.add(Message(session_id=conv.id, role=role, content=text, created_at=now))
+            db.flush()
+        db.commit()
+        assert get_recent_user_messages(db, user_id, limit=1) == ["后发"]
+        assert get_recent_user_messages(db, user_id) == ["后发", "先发"]
+
+
 def test_build_user_history_text_excludes_record_layers() -> None:
     """情绪扫描通道 = 会话摘要 + 用户原话；记录层/其他用户不含临床词汇。"""
     user_id = f"mm-hist-{uuid4().hex[:8]}"

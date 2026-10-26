@@ -32,6 +32,9 @@ client = TestClient(app)
 
 def _seed_session(session_id: str, owner: str, content: str = "我今天很累。") -> None:
     with SessionLocal() as db:
+        from psych_support_bot.infra.db.repositories import ensure_user
+
+        ensure_user(db, owner)
         db.add(ConversationSession(id=session_id, user_id=owner, mode="support", risk_level="low"))
         db.add(Message(session_id=session_id, role="user", content=content))
         db.commit()

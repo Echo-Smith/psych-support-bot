@@ -140,11 +140,13 @@ def _generate_normal_reply(state: GraphState, risk_level: str, no_question_mode:
                 loop_hint="Prioritize safety, validation, and gentle redirection to support resources.",
                 expected_language=state.get("expected_language", ""),
                 emotional_state=state.get("emotional_state", ""),
-                history=[dict(turn) for turn in (state.get("recent_history") or [])],
+                conversation_intent=state.get("conversation_intent", "new_request"),
+                # Phase 3: 使用切片上下文或 recent_history
+                history=[dict(turn) for turn in (state.get("slice_context") or state.get("recent_history") or [])],
             )
             state["consultation_opinions"] = []
-        except Exception:
-            logger.exception("LLM generation failed for high-risk; using crisis template fallback.")
+        except Exception:  # noqa: BLE001 - crisis path must always return a safe response
+            logger.warning("LLM generation failed for high-risk; using crisis template fallback")
             state["fallback_used"] = True
             reply_text = build_crisis_reply(
                 state["risk_result"],
@@ -172,10 +174,155 @@ def _generate_normal_reply(state: GraphState, risk_level: str, no_question_mode:
                 expected_language=state.get("expected_language", ""),
                 no_question_mode=no_question_mode,
                 emotional_state=state.get("emotional_state", ""),
+                conversation_intent=state.get("conversation_intent", "new_request"),
                 on_token=on_token,
+                history=[dict(turn) for turn in (state.get("slice_context") or state.get("recent_history") or [])],
             )
             state["consultation_opinions"] = opinions
         else:
+            # Phase 3: 如果是新切片，在 loop_hint 中添加边界提示
+            base_loop_hint = state.get("loop_hint", "Start broad, reflect, then narrow.")
+            slice_metadata = state.get("slice_metadata", {})
+            if slice_metadata.get("is_new_slice"):
+                boundary_reason = slice_metadata.get("boundary_reason", "")
+                if boundary_reason == "explicit_switch":
+                    slice_hint = "Note: User just switched topics explicitly. Focus on the new topic and don't reference the previous conversation unless the user asks."
+                elif boundary_reason == "sleep_boundary":
+                    slice_hint = "Note: This is a new conversation after sleep. Start fresh; treat it as a new session."
+                elif boundary_reason.startswith("time_gap"):
+                    slice_hint = "Note: User returned after a time gap. Acknowledge continuity if needed, but focus on the current message."
+                else:
+                    slice_hint = ""
+
+                loop_hint_with_slice = f"{slice_hint}\n\n{base_loop_hint}" if slice_hint else base_loop_hint
+            else:
+                loop_hint_with_slice = base_loop_hint
+
+            # 第一层接出：D6 表达偏好→语气指令注入 turn context。
+            try:
+                from psych_support_bot.ai.profile.renderer import d6_tone_directives
+                from psych_support_bot.infra.db.session import SessionLocal
+
+                with SessionLocal() as _s:
+                    d6_hint = d6_tone_directives(_s, state["user_id"], state.get("expected_language", ""))
+                if d6_hint:
+                    loop_hint_with_slice = f"{loop_hint_with_slice}\n\nTone guidance: {d6_hint}"
+            except Exception:  # noqa: BLE001
+                pass
+
+            # 第二层接出：D2 严重度→干预强度（不告诉用户，只调整内部行为）。
+            try:
+                from psych_support_bot.infra.db.profile_repositories import list_active_beliefs
+                from psych_support_bot.infra.db.session import SessionLocal as _SL
+
+                with _SL() as _s:
+                    d2_beliefs = list_active_beliefs(_s, state["user_id"], dimensions=("D2",), limit=5)
+                high_severity = any(
+                    b.confidence >= 0.7
+                    and any(k in (b.key or "") for k in ("severity.", "checkin_mood", "checkin_anxiety"))
+                    for b in d2_beliefs
+                )
+                if high_severity:
+                    loop_hint_with_slice = (
+                        "The user's recent profile suggests elevated distress. "
+                        "Prioritize validation, support, and gentle pacing. "
+                        "Avoid direct challenges or pushing for action steps.\n\n" + loop_hint_with_slice
+                    )
+            except Exception:  # noqa: BLE001
+                pass
+
+            # 好奇心注入：不确定时自然提问 + 新话题探索 + 行为信号异常时主动关心。
+            try:
+                from psych_support_bot.ai.profile.behavioral import detect_behavioral_signals
+                from psych_support_bot.ai.profile.renderer import curiosity_signal_with_topics
+                from psych_support_bot.infra.db.session import SessionLocal as _CS
+
+                current_topics = list(state.get("topics") or [])
+                with _CS() as _s:
+                    cue = curiosity_signal_with_topics(
+                        _s, state["user_id"], current_topics, state.get("expected_language", "")
+                    )
+
+                # 行为信号检测（从 graph state 中提取时间戳）。
+                bot_ts = state.get("bot_message_timestamp")
+                user_ts = state.get("user_message_timestamp")
+                recent_lens = state.get("recent_message_lengths") or []
+                session_hour = user_ts.hour if user_ts and hasattr(user_ts, "hour") else -1
+
+                # 读取用户的睡眠窗口（来自 UserTimeProfile 打卡行为推断）。
+                sleep_win = None
+                try:
+                    from psych_support_bot.infra.db.repositories import get_user_time_profile
+
+                    with _CS() as _s:
+                        tp = get_user_time_profile(_s, state["user_id"])
+                    if tp and tp.sleep_start_hour is not None and tp.sleep_end_hour is not None:
+                        sleep_win = (tp.sleep_start_hour, tp.sleep_end_hour)
+                except Exception:  # noqa: BLE001
+                    pass
+
+                beh_signals = detect_behavioral_signals(
+                    user_message=state["user_message"],
+                    bot_message_timestamp=bot_ts,
+                    user_message_timestamp=user_ts,
+                    recent_message_lengths=recent_lens,
+                    session_hour=session_hour,
+                    vad_metadata=state.get("vad_metadata") or None,
+                    sleep_window=sleep_win,
+                )
+
+                is_en = state.get("expected_language", "") != "zh"
+                hint_parts: list[str] = []
+                if cue:
+                    hint_parts.append(cue)
+                for sig in beh_signals:
+                    hint_parts.append(sig.get("question_en" if is_en else "question_zh", ""))
+                if hint_parts:
+                    loop_hint_with_slice = f"{loop_hint_with_slice}\n\nCuriosity: {' '.join(hint_parts)}"
+            except Exception:  # noqa: BLE001
+                pass
+
+            # 工作单元 E：从画像快照读取支持策略，注入 turn context。
+            # profile_policy_enabled=False 时跳过（影子模式/紧急回退）。
+            try:
+                from psych_support_bot.infra.config.settings import get_settings as _gs
+
+                if _gs().profile_policy_enabled:
+                    from psych_support_bot.infra.db.models import ProfileSnapshot
+                    from psych_support_bot.infra.db.profile_repositories import is_profile_memory_enabled
+                    from psych_support_bot.infra.db.session import SessionLocal as _PS
+
+                    snapshot = None
+                    with _PS() as _s:
+                        # 用户暂停或清除画像后，不读取快照。
+                        if is_profile_memory_enabled(_s, state["user_id"]):
+                            snapshot = (
+                                _s.query(ProfileSnapshot)
+                                .filter(
+                                    ProfileSnapshot.user_id == state["user_id"],
+                                    ProfileSnapshot.status.in_(("active", "shadow")),
+                                )
+                                .order_by(ProfileSnapshot.version.desc())
+                                .limit(1)
+                                .first()
+                            )
+                    if snapshot and snapshot.support_policy_json:
+                        import json as _json
+
+                        policy = _json.loads(snapshot.support_policy_json)
+                        policy_parts = []
+                        if policy.get("response_length") == "brief":
+                            policy_parts.append("Keep responses brief and direct.")
+                        if policy.get("pacing") == "validate_before_suggestions":
+                            policy_parts.append("Validate the user's experience before offering suggestions.")
+                        paths = policy.get("preferred_knowledge_paths", [])
+                        if paths:
+                            policy_parts.append(f"Prefer knowledge from: {', '.join(paths)}.")
+                        if policy_parts:
+                            loop_hint_with_slice = f"{loop_hint_with_slice}\n\nSupport policy: {' '.join(policy_parts)}"
+            except Exception:  # noqa: BLE001
+                pass
+
             gen_kwargs = {
                 "user_message": state["user_message"],
                 "mode": state["mode"],
@@ -188,14 +335,16 @@ def _generate_normal_reply(state: GraphState, risk_level: str, no_question_mode:
                 "interview_stage": state.get("interview_stage", "engagement"),
                 "question_strategy": state.get("question_strategy", "open"),
                 "challenge_allowed": bool(state.get("challenge_allowed", False)),
-                "loop_hint": state.get("loop_hint", "Start broad, reflect, then narrow."),
+                "loop_hint": loop_hint_with_slice,  # Phase 3: 注入切片提示
                 "expected_language": state.get("expected_language", ""),
                 "no_question_mode": no_question_mode,
                 # 复读事故（Langfuse 2026-09-02 c4fd09cc）的第二道防线：
                 # 生成时就明确告知上一轮已交付过内容，不要复述。
                 "anti_repeat_note": _anti_repeat_note(),
                 "emotional_state": state.get("emotional_state", ""),
-                "history": [dict(turn) for turn in (state.get("recent_history") or [])],
+                "conversation_intent": state.get("conversation_intent", "new_request"),
+                # Phase 3: 优先使用切片上下文（更完整的话题边界）
+                "history": [dict(turn) for turn in (state.get("slice_context") or state.get("recent_history") or [])],
             }
             if state.get("stream_tokens"):
                 # 句子级流式：普通 LLM 路径逐块经 get_stream_writer 推 token，
@@ -210,8 +359,8 @@ def _generate_normal_reply(state: GraphState, risk_level: str, no_question_mode:
             else:
                 reply_text = generate_clinically_bounded_reply(**gen_kwargs)
             state["consultation_opinions"] = []
-    except Exception:
-        logger.exception("LLM generation failed; using template fallback.")
+    except Exception:  # noqa: BLE001 - response path must always return a safe response
+        logger.warning("LLM generation failed; using template fallback")
         state["fallback_used"] = True
         is_zh = state.get("expected_language", "") == "zh" or (
             not state.get("expected_language")

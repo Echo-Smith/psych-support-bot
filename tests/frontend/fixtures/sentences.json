@@ -1,5 +1,5 @@
 {
-  "_comment": "分句双端一致性 fixture。golden=两端必须逐字一致（纯句末标点文本）；server=服务端 services/conversation.py:_split_complete_sentences（first=true/false 两口径）；client=前端 static/js/voice/sentences.js:splitIntoSentences（HTTP 句队列回退的朗读粒度）。两端差异是有意的：服务端为首响速度用更低的首句软切阈值(14)/后续句(56)，客户端统一 40；半角冒号仅服务端视为软标点（客户端软标点集='，、：, '）。任何一端改分句语义必须同步本文件与另一端实现，对端测试会红。",
+  "_comment": "分句服务端语义 fixture。golden/server 各节钉住服务端 services/conversation.py:_split_complete_sentences 的切分语义（首句软切阈值 14 / 后续句 56 / 半角冒号是软标点）。历史说明：本 fixture 原为前后端双端一致性而设——客户端朗读分句 splitIntoSentences 已随 HTTP 句队列退役（对话朗读二选一收敛到 WS live，见 VOICE_DECISIONS.md D6），golden 节与 client_only 节保留作语义存档，不再有前端消费方。",
   "golden_both_agree": [
     { "name": "hard_end_basic", "input": "你好。我很焦虑。", "expected": ["你好。", "我很焦虑。"] },
     { "name": "hard_end_multi", "input": "第一句！第二句？第三句；", "expected": ["第一句！", "第二句？", "第三句；"] },

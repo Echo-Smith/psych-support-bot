@@ -487,6 +487,25 @@ class QuestionnaireFlow:
         # comparison refers to the prior attempt, not the current.
         previous = get_latest_assessment(session, completed.user_id, assessment_type)
         save_assessment(session, completed.user_id, result)
+
+        # 通路1：测评完成时自动创建 D2 严重度画像信念。
+        try:
+            from psych_support_bot.ai.profile.extractor import d2_assessment_claim
+            from psych_support_bot.infra.db.profile_repositories import record_claim
+
+            prev_severity = previous.severity_band if previous else ""
+            claim = d2_assessment_claim(
+                assessment_type,
+                result.severity_band,
+                result.score,
+                prev_score=previous.score if previous else None,
+                prev_severity=prev_severity,
+            )
+            if claim:
+                record_claim(session, completed.user_id, claim)
+        except Exception:  # noqa: BLE001 — profile extraction must not block assessment
+            pass
+
         risk_level = "elevated" if result.interpretation.needs_safety_followup else "low"
         risk_reason = (
             "Assessment safety follow-up recommended."
@@ -505,6 +524,9 @@ class QuestionnaireFlow:
                 prev_score=previous.score,
                 days_since=_days_since(previous.created_at),
                 new_score=result.score,
+                assessment_type=assessment_type,
+                prev_severity=previous.severity_band or "",
+                new_severity=result.severity_band,
             )
         return self._build_response(
             session_id=completed.id,

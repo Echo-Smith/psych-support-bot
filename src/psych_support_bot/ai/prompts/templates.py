@@ -279,8 +279,13 @@ def build_process_state_prompt(
     challenge_allowed: bool,
     loop_hint: str,
     no_question_mode: bool = False,
+    conversation_intent: str = "new_request",
 ) -> str:
-    """过程框架的每轮状态部分：stage/strategy/challenge/loop 均为 per-turn 变量。"""
+    """过程框架的每轮状态部分：只注入可解释的流程状态。
+
+    conversation_intent 保留在签名中用于兼容调用方和日志，但不再把
+    关键词分类结果写入生成 Prompt；连续性由逐字 history 交给模型判断。
+    """
     if no_question_mode:
         return (
             "Clinical process frame: the user has asked to be left in peace — do not probe, "
@@ -298,6 +303,46 @@ def build_process_state_prompt(
         f"Loop guidance: {loop_hint} "
         f"{challenge_rule}"
     )
+
+
+def build_turn_context_prompt(
+    *,
+    risk_level: str,
+    emotional_state: str = "",
+    mode: str,
+    no_question_mode: bool,
+    interview_stage: str,
+    question_strategy: str,
+    challenge_allowed: bool,
+    loop_hint: str,
+    anti_repeat_note: str = "",
+    diagnosis_refusal: str = "",
+) -> str:
+    """合并所有每轮动态上下文为一个纯文本块。
+
+    缓存优化（2026-09-15）：这些字段每轮变化，放在 SystemMessage 会截断
+    静态前缀的缓存命中。合并后作为 HumanMessage 头部，SystemMessage 只
+    保留完全稳定的静态前缀。
+    """
+    sections = [
+        "## Turn context",
+        build_boundary_state_prompt(risk_level=risk_level, emotional_state=emotional_state),
+        "## Reply shape",
+        build_mode_shape_prompt(mode, risk_level, no_question_mode=no_question_mode),
+        "## Process frame",
+        build_process_state_prompt(
+            interview_stage=interview_stage,
+            question_strategy=question_strategy,
+            challenge_allowed=challenge_allowed,
+            loop_hint=loop_hint,
+            no_question_mode=no_question_mode,
+        ),
+    ]
+    if anti_repeat_note:
+        sections.append(anti_repeat_note)
+    if diagnosis_refusal:
+        sections.append(diagnosis_refusal)
+    return "\n\n".join(sections)
 
 
 def build_static_prefix(expected_language: str) -> str:
@@ -330,6 +375,7 @@ def build_consultation_agent_prompt(
     question_strategy: str,
     challenge_allowed: bool,
     loop_hint: str,
+    conversation_intent: str = "new_request",
 ) -> str:
     """会诊 agent 视角 prompt（Phase 5 分层装配）。
 
@@ -380,6 +426,7 @@ def build_consultation_synthesis_prompt(
     expected_language: str = "",
     no_question_mode: bool = False,
     emotional_state: str = "",
+    conversation_intent: str = "new_request",
 ) -> str:
     if not expected_language and user_message:
         expected_language = "zh" if any("\u4e00" <= char <= "\u9fff" for char in user_message) else "en"
@@ -400,6 +447,7 @@ def build_consultation_synthesis_prompt(
             challenge_allowed=challenge_allowed,
             loop_hint=loop_hint,
             no_question_mode=no_question_mode,
+            conversation_intent=conversation_intent,
         ),
         build_mode_shape_prompt(mode, risk_level, no_question_mode=no_question_mode),
         build_memory_block_prompt(memory_summary),

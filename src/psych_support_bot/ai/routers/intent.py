@@ -182,3 +182,63 @@ def detect_mode(text: str) -> ConversationMode:
     if any(_contains_keyword(normalized, compact, keyword) for keyword in HELP_KEYWORDS):
         return "support"
     return "support"
+
+
+CONTEXT_REFERENCE_MARKERS = (
+    "continue with that",
+    "continue with the previous",
+    "go on with that",
+    "follow up on that",
+    "the previous one",
+    "接着说",
+    "继续刚才的",
+    "继续上一个",
+    "刚说的那个",
+    "刚说的那个练习",
+    "上一条",
+    "上一个",
+    "还是刚才那个",
+    "为什么还是",
+)
+CONSTRAINT_MARKERS = (
+    "more formal",
+    "make it formal",
+    "shorter",
+    "正式一点",
+    "改正式一点",
+    "简短一点",
+    "不能编造",
+    "面向客服",
+    "语气正式",
+    "语气简洁",
+)
+TOPIC_SWITCH_MARKERS = (
+    "another question",
+    "new topic",
+    "change the topic",
+    "换个话题",
+    "换个问题",
+    "另外一个问题",
+)
+
+
+def detect_conversation_intent(
+    text: str,
+    recent_history: list[dict[str, str]] | None = None,
+) -> str:
+    """Classify how the latest message relates to available conversation history."""
+    normalized, compact = _normalize_text(text)
+    has_history = bool(recent_history)
+
+    # Without actual history there is nothing reliable to continue. Let the
+    # normal reply path handle the message as a new request.
+    if not has_history:
+        return "new_request"
+
+    if any(_contains_keyword(normalized, compact, marker) for marker in TOPIC_SWITCH_MARKERS):
+        return "topic_switch"
+    if any(_contains_keyword(normalized, compact, marker) for marker in CONSTRAINT_MARKERS):
+        return "add_constraint"
+    if any(_contains_keyword(normalized, compact, marker) for marker in CONTEXT_REFERENCE_MARKERS):
+        return "follow_up"
+    return "new_request"

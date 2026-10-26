@@ -10,9 +10,8 @@ and creates the questionnaire_sessions table. Both are already defined
 in the ORM models but were missing from the Alembic migration chain.
 """
 
-from alembic import op
 import sqlalchemy as sa
-
+from alembic import op
 
 revision = "20260820_0001"
 down_revision = "20260410_0002"

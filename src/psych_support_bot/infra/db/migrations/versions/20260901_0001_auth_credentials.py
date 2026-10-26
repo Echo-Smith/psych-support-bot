@@ -8,9 +8,8 @@ Create Date: 2026-09-01 00:00:01
 （username 唯一索引 + pbkdf2 哈希），为 JWT 签发提供存储。
 """
 
-from alembic import op
 import sqlalchemy as sa
-
+from alembic import op
 
 revision = "20260901_0001"
 down_revision = "20260831_0002"

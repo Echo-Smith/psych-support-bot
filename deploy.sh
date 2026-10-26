@@ -82,7 +82,7 @@ open_firewall() {
     if command -v ufw &>/dev/null; then
         sudo ufw allow 8000/tcp 2>/dev/null && info "已开放防火墙端口 8000 (ufw)" || true
     elif command -v firewall-cmd &>/dev/null; then
-        sudo firewall-cmd --permanent --add-port=8000/tcp 2>/dev/null && sudo firewall-cmd --reload 2>/dev/null && info "已开放防火墙端口 8000 (firewalld)" || true
+        sudo firewall-cmd --permanent --add-port=8000/tcp 2>/dev/null && sudo firewall-cmd --reload && info "已开放防火墙端口 8000 (firewalld)" || true
     elif command -v iptables &>/dev/null; then
         sudo iptables -I INPUT -p tcp --dport 8000 -j ACCEPT 2>/dev/null && info "已开放防火墙端口 8000 (iptables)" || true
     fi

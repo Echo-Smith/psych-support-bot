@@ -194,7 +194,7 @@ def list_all_exercises() -> dict[str, list[str]]:
 # 关键词只映射练习库真实存在的 tag；识别不了返回 None——
 # 宁可漏记一条，也不把没做过的练习记到用户名下。
 _EXERCISE_TAG_KEYWORDS: list[tuple[str, tuple[str, ...]]] = [
-    ("cbt_thought_record", ("想法记录", "thought record")),
+    ("cbt_thought_record", ("想法记录", "思维记录", "thought record")),
     ("cbt_behavioral_activation", ("行为激活", "behavioral activation")),
     ("act_defusion", ("认知解离", "解离练习", "defusion")),
     ("act_values_clari", ("价值观澄清", "values clarification")),
@@ -208,13 +208,18 @@ _EXERCISE_COMPLETION_PHRASES = (
     "做完了",
     "完成了",
     "试过了",
+    "试了",
     "练完了",
     "做了一遍",
     "做完了一遍",
+    "做了几轮",
+    "做了几次",
+    "照着写了",
     "finished the",
     "completed the",
     "did the exercise",
     "tried the exercise",
+    "tried the",
 )
 
 

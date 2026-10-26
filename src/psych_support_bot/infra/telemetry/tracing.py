@@ -1,4 +1,7 @@
+import hashlib
+import hmac
 import logging
+import re
 from collections.abc import Callable
 from contextlib import contextmanager
 from time import perf_counter
@@ -7,6 +10,72 @@ from typing import TypedDict
 from psych_support_bot.infra.config.settings import get_settings
 
 logger = logging.getLogger(__name__)
+
+# Deny by default: numeric scores, arbitrary nested metadata, identity and free
+# text are not operational telemetry. Only these measured counters leave here.
+_METRIC_KEYS = frozenset(
+    {
+        "elapsed_ms",
+        "latency_ms",
+        "prompt_tokens",
+        "completion_tokens",
+        "input",
+        "output",
+        "total",
+        "input_cached",
+        "fallback_used",
+        "failed",
+    }
+)
+
+_CONTENT_LIMIT = 4000
+_REDACTIONS = (
+    (re.compile(r"(?i)\b[\w.+-]+@[\w.-]+\.[a-z]{2,}\b"), "[已隐藏邮箱]"),
+    (re.compile(r"(?<!\d)(?:\+?86[- ]?)?1[3-9]\d{9}(?!\d)"), "[已隐藏手机号]"),
+    (re.compile(r"(?<!\d)\d{17}[\dXx](?!\d)"), "[已隐藏证件号]"),
+    (re.compile(r"(?<!\d)(?:\d{1,3}\.){3}\d{1,3}(?!\d)"), "[已隐藏IP地址]"),
+    (re.compile(r"(?i)https?://\S+"), "[已隐藏链接]"),
+    (
+        re.compile(r"(?i)\b(api[_ -]?key|access[_ -]?token|password|secret)\s*[:=]\s*\S+"),
+        "[已隐藏凭据]",
+    ),
+)
+
+
+def metrics_only(*, data: object, **_) -> dict:
+    if not isinstance(data, dict):
+        return {}
+    return {key: value for key, value in data.items() if key in _METRIC_KEYS and type(value) in (bool, int, float)}
+
+
+def anonymize_text(value: str) -> str:
+    """Best-effort local redaction before conversational text leaves the app.
+
+    Free text can still identify a person through context, so the consent copy
+    describes this as de-identification/pseudonymisation rather than promising
+    irreversible anonymity.
+    """
+    cleaned = "".join(char for char in value if char in "\n\t" or ord(char) >= 32)
+    for pattern, replacement in _REDACTIONS:
+        cleaned = pattern.sub(replacement, cleaned)
+    return cleaned[:_CONTENT_LIMIT]
+
+
+def langfuse_mask(*, data: object, **_) -> object:
+    """Deny arbitrary fields; permit redacted text and allowlisted metrics."""
+    if isinstance(data, str):
+        return anonymize_text(data)
+    return metrics_only(data=data)
+
+
+def telemetry_subject_id(kind: str, value: str) -> str:
+    """Stable keyed pseudonym used solely for grouping and erasure lookup."""
+    if kind not in {"user", "session"}:
+        raise ValueError("Unsupported telemetry subject kind")
+    settings = get_settings()
+    secret = (settings.langfuse_pseudonym_key or settings.jwt_secret_key).encode()
+    digest = hmac.new(secret, f"langfuse:{kind}:{value}".encode(), hashlib.sha256).hexdigest()[:32]
+    return f"anon_{kind}_{digest}"
 
 
 class TraceEvent(TypedDict):
@@ -67,6 +136,12 @@ def get_langfuse():
             host=settings.langfuse_host,
             environment=settings.langfuse_environment,
             timeout=30,
+            mask=langfuse_mask,
+            # The installed SDK supports this export filter. Do not forward
+            # automatic third-party HTTP/LLM spans with their own payloads.
+            should_export_span=lambda span: (
+                getattr(getattr(span, "instrumentation_scope", None), "name", "") == "langfuse-sdk"
+            ),
         )
         logger.info(
             "Langfuse client initialised → %s (env=%s)",
@@ -74,7 +149,7 @@ def get_langfuse():
             settings.langfuse_environment,
         )
     except Exception:
-        logger.exception("Failed to initialise Langfuse client")
+        logger.warning("Failed to initialise Langfuse client")
         _langfuse_client = None
     return _langfuse_client
 
@@ -84,6 +159,7 @@ def trace_span(
     name: str,
     *,
     input: object | None = None,
+    content_input: str | None = None,
     metadata: dict[str, object] | None = None,
     as_type: str = "span",
     session_id: str | None = None,
@@ -99,23 +175,41 @@ def trace_span(
         yield None
         return
 
-    cm = client.start_as_current_observation(
-        name=name,
-        as_type=as_type,  # type: ignore[arg-type]
-        input=input,
-        metadata=metadata,
-    )
-    started = perf_counter()
-    try:
-        obs = cm.__enter__()
-        _attach_trace_fields(obs, session_id=session_id, user_id=user_id)
-        yield obs
-    except Exception as exc:
-        cm.__exit__(type(exc), exc, exc.__traceback__)
-        raise
-    else:
-        _record_span_elapsed(obs, metadata, (perf_counter() - started) * 1000)
-        cm.__exit__(None, None, None)
+    from contextlib import nullcontext
+
+    propagation = nullcontext()
+    if user_id or session_id:
+        from langfuse import propagate_attributes
+
+        propagation = propagate_attributes(
+            user_id=telemetry_subject_id("user", user_id) if user_id else None,
+            session_id=telemetry_subject_id("session", session_id) if session_id else None,
+        )
+    with propagation:
+        cm = client.start_as_current_observation(
+            name=name,
+            as_type=as_type,  # type: ignore[arg-type]
+            input=(
+                anonymize_text(content_input)
+                if content_input is not None and get_settings().langfuse_content_analytics
+                else None
+            ),
+            metadata=metrics_only(data=metadata),
+        )
+        started = perf_counter()
+        obs = None
+        try:
+            obs = cm.__enter__()
+            yield obs
+        except Exception:
+            # Never hand provider exceptions (which may echo prompts) to OTel.
+            if obs is not None:
+                obs.update(metadata={"failed": True})
+            cm.__exit__(None, None, None)
+            raise
+        else:
+            _record_span_elapsed(obs, metadata, (perf_counter() - started) * 1000)
+            cm.__exit__(None, None, None)
 
 
 def _record_span_elapsed(obs, metadata: dict[str, object] | None, elapsed_ms: float) -> None:
@@ -124,44 +218,24 @@ def _record_span_elapsed(obs, metadata: dict[str, object] | None, elapsed_ms: fl
     if obs is None:
         return
     try:
-        merged = dict(metadata or {})
+        merged = metrics_only(data=metadata)
         merged.setdefault("elapsed_ms", round(elapsed_ms, 2))
         obs.update(metadata=merged)
     except Exception:
-        logger.debug("Failed to record span elapsed_ms", exc_info=True)
+        logger.debug("Failed to record span elapsed_ms")
 
 
-def _attach_trace_fields(obs, *, session_id: str | None, user_id: str | None) -> None:
-    """Best-effort mapping of session/user onto the parent trace so the UI
-    groups conversations correctly.
-
-    Langfuse v4 reads these from OTel span attributes (keys ``session.id``
-    and ``user.id``); ``update_trace`` no longer exists on spans there.
-    """
-    if obs is None or not (session_id or user_id):
-        return
-    otel_span = getattr(obs, "_otel_span", None)
-    is_recording = getattr(otel_span, "is_recording", None)
-    if otel_span is None or not (callable(is_recording) and is_recording()):
-        logger.debug("Langfuse span has no recording otel span; skipping trace fields")
-        return
-    try:
-        if session_id:
-            otel_span.set_attribute("session.id", session_id)
-        if user_id:
-            otel_span.set_attribute("user.id", user_id)
-    except Exception:
-        logger.debug("Failed to set Langfuse trace session/user attributes", exc_info=True)
-
-
-def update_span_output(obs, output: object) -> None:
-    """Best-effort update of a span's output."""
+def update_span_output(obs, output: object, *, include_content: bool = False) -> None:
+    """Update metrics, or explicitly approved redacted conversational output."""
     if obs is None:
         return
     try:
-        obs.update(output=output)
+        if include_content and isinstance(output, str) and get_settings().langfuse_content_analytics:
+            obs.update(output=anonymize_text(output))
+        else:
+            obs.update(metadata=metrics_only(data=output))
     except Exception:
-        logger.debug("Failed to update Langfuse span output", exc_info=True)
+        logger.debug("Failed to update Langfuse span output")
 
 
 def update_span_usage(obs, usage: dict[str, int]) -> None:
@@ -173,9 +247,9 @@ def update_span_usage(obs, usage: dict[str, int]) -> None:
     if obs is None:
         return
     try:
-        obs.update(usage_details=usage)
+        obs.update(usage_details=metrics_only(data=usage))
     except Exception:
-        logger.debug("Failed to update Langfuse span usage", exc_info=True)
+        logger.debug("Failed to update Langfuse span usage")
 
 
 def flush_langfuse() -> None:
@@ -186,4 +260,4 @@ def flush_langfuse() -> None:
     try:
         client.flush()
     except Exception:
-        logger.debug("Failed to flush Langfuse", exc_info=True)
+        logger.debug("Failed to flush Langfuse")

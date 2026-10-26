@@ -403,8 +403,8 @@ def generate_step_reply(
             mode="intervention",
             fallback=deterministic_fallback,
         )
-    except Exception:
-        logger.warning("Practice step LLM failed; deterministic fallback served.", exc_info=True)
+    except Exception:  # noqa: BLE001 - practice path has a deterministic fallback
+        logger.warning("Practice step LLM failed; deterministic fallback served")
         return deterministic_fallback()
 
 
@@ -441,8 +441,8 @@ def generate_completion_reply(state: GraphState, *, expected_language: str) -> s
             mode="intervention",
             fallback=deterministic_fallback,
         )
-    except Exception:
-        logger.warning("Practice completion LLM failed; deterministic fallback served.", exc_info=True)
+    except Exception:  # noqa: BLE001 - practice path has a deterministic fallback
+        logger.warning("Practice completion LLM failed; deterministic fallback served")
         return deterministic_fallback()
 
 

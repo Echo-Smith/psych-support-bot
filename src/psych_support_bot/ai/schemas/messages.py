@@ -11,6 +11,7 @@ class ConversationRequest(BaseModel):
     message: str = Field(..., min_length=1, max_length=2000)
     session_id: str | None = None
     memory_summary: str | None = None
+    vad_metadata: dict | None = None
 
 
 class RiskResult(BaseModel):

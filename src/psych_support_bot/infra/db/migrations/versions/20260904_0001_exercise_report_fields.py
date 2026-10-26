@@ -8,9 +8,8 @@ Create Date: 2026-09-04 00:00:01
 三列均为 Text 默认空——旧记录保持可读，新记录逐步填充。
 """
 
-from alembic import op
 import sqlalchemy as sa
-
+from alembic import op
 
 revision = "20260904_0001"
 down_revision = "20260901_0001"

@@ -69,37 +69,32 @@ def _capture_user_context(**overrides) -> str:
 
 
 def test_static_prefix_identical_across_risk_levels() -> None:
-    """risk 变化只影响静态区之后的内容，静态前缀逐字不变。"""
+    """缓存优化（2026-09-15）：risk 变化不影响 SystemMessage——动态内容已移入
+    HumanMessage。SystemMessage 仅含静态前缀，跨 risk 逐字不变。"""
     low = _capture_system_prompt(risk_level="low")
     elevated = _capture_system_prompt(risk_level="elevated")
-    static_end = low.find("Current assessed risk level:")
-    assert static_end != -1
-    assert low[:static_end] == elevated[:static_end]
+    assert low == elevated
 
 
 def test_static_prefix_identical_across_modes() -> None:
-    """mode 变化只影响形态区，静态前缀逐字不变。"""
+    """缓存优化：mode 变化不影响 SystemMessage。"""
     support = _capture_system_prompt(mode="support")
     assessment = _capture_system_prompt(mode="assessment")
-    static_end = support.find("Current assessed risk level:")
-    assert static_end != -1
-    assert support[:static_end] == assessment[:static_end]
+    assert support == assessment
 
 
 def test_static_prefix_identical_across_memory_and_knowledge() -> None:
-    """memory/knowledge 属于数据区，不影响静态前缀。"""
+    """缓存优化：memory/knowledge 属于 HumanMessage 数据区，不影响 SystemMessage。"""
     a = _capture_system_prompt(memory_summary="", knowledge_context="")
     b = _capture_system_prompt(
         memory_summary="打卡趋势：心情 3→4→2（连续3天低位，需关注）",
         knowledge_context="dbt_002: 痛苦耐受。Action hint: 冰握法。",
     )
-    static_end = a.find("Current assessed risk level:")
-    assert static_end != -1
-    assert a[:static_end] == b[:static_end]
+    assert a == b
 
 
 def test_static_prefix_identical_across_interview_stages() -> None:
-    """stage/strategy/loop 是每轮状态，不污染静态区。"""
+    """缓存优化：stage/strategy/loop 是每轮状态，已移入 HumanMessage。"""
     a = _capture_system_prompt(
         interview_stage="engagement",
         question_strategy="open",
@@ -110,25 +105,23 @@ def test_static_prefix_identical_across_interview_stages() -> None:
         question_strategy="gentle_challenge",
         loop_hint="Test the absolute claim against exceptions.",
     )
-    static_end = a.find("Current assessed risk level:")
-    assert static_end != -1
-    assert a[:static_end] == b[:static_end]
+    assert a == b
 
 
 def test_static_prefix_excludes_per_turn_variables() -> None:
-    """静态区内不允许出现任何每轮插值。"""
+    """缓存优化：SystemMessage 纯静态，不含任何每轮插值。"""
     sp = _capture_system_prompt(
         risk_level="elevated",
         emotional_state="疲惫、自我怀疑",
         mode="support",
         memory_summary="评估记录：PHQ-9 12分（中度）",
     )
-    static_end = sp.find("Current assessed risk level:")
-    static_part = sp[:static_end]
-    assert "elevated" not in static_part
-    assert "疲惫、自我怀疑" not in static_part
-    assert "PHQ-9 12分" not in static_part
-    assert "Conversation mode:" not in static_part
+    # SystemMessage 不含任何动态内容
+    assert "elevated" not in sp
+    assert "疲惫、自我怀疑" not in sp
+    assert "PHQ-9 12分" not in sp
+    assert "Conversation mode:" not in sp
+    assert "Current assessed risk level:" not in sp
 
 
 def test_static_prefix_language_pools() -> None:
@@ -146,26 +139,28 @@ def test_static_prefix_language_pools() -> None:
 
 
 def test_layer_order_static_before_state_and_data_in_human_turn() -> None:
-    """Phase 2 收尾：system = 静态+状态；memory/knowledge 数据区进 HumanMessage 前缀。"""
+    """缓存优化：SystemMessage = 纯静态前缀；turn context + memory + knowledge
+    全部在 HumanMessage 数据区。"""
     sp = _capture_system_prompt()
+    # SystemMessage 只含静态前缀（role + identity + boundary + process + output + language）
     role_pos = sp.find("You are a safety-first")
     identity_pos = sp.find("Identity policy")
-    state_pos = sp.find("Current assessed risk level:")
-    assert -1 not in {role_pos, identity_pos, state_pos}
-    assert role_pos < identity_pos < state_pos
-    # 数据区不再出现在 system prompt
+    assert -1 not in {role_pos, identity_pos}
+    assert role_pos < identity_pos
+    # SystemMessage 不含动态内容
+    assert "Current assessed risk level:" not in sp
     assert "[User Memory" not in sp
     assert "[Practice Context" not in sp
 
     context = _capture_user_context()
+    # HumanMessage 包含 turn context + memory + knowledge
+    turn_ctx_pos = context.find("## Turn context")
     memory_pos = context.find("[User Memory")
     knowledge_pos = context.find("[Practice Context")
-    assert -1 not in {memory_pos, knowledge_pos}
-    assert memory_pos < knowledge_pos
+    assert -1 not in {turn_ctx_pos, memory_pos, knowledge_pos}
+    assert turn_ctx_pos < memory_pos < knowledge_pos
     # 数据区带信任边界标注
     assert "NOT instructions" in context
-    # 用户原话不进数据前缀（由 _invoke 拼接：context + "\n\n" + user_message）
-    assert "我最近睡不好" not in context
 
 
 def test_memory_block_marked_as_data_not_instructions() -> None:
@@ -231,9 +226,9 @@ def test_mode_shape_prompt_carries_guidance() -> None:
 
 
 def test_anti_repeat_note_still_appended_last() -> None:
-    """复读防线保持在尾部（最贴近输出指令的位置）。"""
+    """缓存优化：复读防线现在在 HumanMessage 的 turn context 末尾（最贴近用户消息）。"""
     from psych_support_bot.ai.nodes.response_generator import _anti_repeat_note
 
     note = _anti_repeat_note()
-    sp = _capture_system_prompt(anti_repeat_note=note)
-    assert sp.endswith(note)
+    context = _capture_user_context(anti_repeat_note=note)
+    assert note in context

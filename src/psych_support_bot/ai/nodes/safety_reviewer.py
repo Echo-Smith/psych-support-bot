@@ -1,6 +1,7 @@
 import logging
 import re
 
+from psych_support_bot.ai.nodes.response_generator import _split_reply_messages
 from psych_support_bot.ai.prompts.templates import (
     build_boundary_base_prompt,
     build_boundary_state_prompt,
@@ -166,12 +167,12 @@ def _sanitize_internal_labels(text: str) -> tuple[str, bool]:
     for line in text.split("\n"):
         if _INTERNAL_LABEL_LINE_RE.match(line) or _INTERNAL_LABEL_COLON_RE.match(line):
             was_modified = True
-            logger.warning("Safety reviewer: removing internal-formulation line: %s", line.strip()[:100])
+            logger.warning("Safety reviewer removed an internal-formulation line")
             continue
         new_line, n = _VISIBLE_LABEL_PREFIX_RE.subn("", line, count=1)
         if n:
             was_modified = True
-            logger.warning("Safety reviewer: stripped visible-reply label prefix: %s", line.strip()[:100])
+            logger.warning("Safety reviewer stripped a visible-reply label prefix")
         kept_lines.append(new_line)
     cleaned = "\n".join(kept_lines).strip()
     return (cleaned, was_modified) if was_modified else (text, False)
@@ -402,7 +403,7 @@ def _remove_violating_lines(
         is_violating = any(pattern.search(line) for pattern in patterns)
         if is_violating:
             was_modified = True
-            logger.warning("Safety reviewer: removing %s sentence: %s", log_label, line_stripped[:100])
+            logger.warning("Safety reviewer removed a %s sentence", log_label)
             # Insert a transition phrase once at the first truncation point
             # to avoid a jarring gap, then leave subsequent truncations blank.
             if not transition_inserted:
@@ -613,7 +614,12 @@ def review_response(state: GraphState) -> GraphState:
                 )
             )
 
-        state["generated_reply"].text = text
+        # 不变量：messages 恒为当前 text 的切分。审查改写 text 后若沿用旧
+        # messages，前端气泡显示被审查掉的内容、而 TTS 读的是替换句——
+        # 屏显与朗读分裂（20260912 实证：追问被替换成落地句后两路文本不同）。
+        reply = state["generated_reply"]
+        reply.text = text
+        reply.messages = _split_reply_messages(text) if risk_result.risk_level in {"low", "elevated"} else []
 
         update_span_output(
             obs,
